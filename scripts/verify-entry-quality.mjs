@@ -22,7 +22,8 @@ const SRC = join(OUT, 'migrated', 'lattice.db')
 const DB = join(OUT, 'entry-quality.db')
 const MODEL = 'Xenova/bge-small-zh-v1.5'
 
-if (!existsSync(SRC)) throw new Error('缺少迁移库：先跑 scripts/migrate-eternal.mjs')
+if (!existsSync(SRC))
+  throw new Error('缺少基准库：本脚本要与 .probe/migrated/lattice.db 做前后对比，先备好它')
 for (const s of ['', '-wal', '-shm']) rmSync(DB + s, { force: true })
 copyFileSync(SRC, DB)
 mkdirSync(OUT, { recursive: true })
