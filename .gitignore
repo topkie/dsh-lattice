@@ -7,3 +7,4 @@ coverage/
 test/_*.db
 test/_*.db-wal
 test/_*.db-shm
+.probe/

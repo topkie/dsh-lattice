@@ -45,9 +45,11 @@ export const Config = z.object({
   /** 模型缓存目录；留空用运行时默认位置 */
   encoderCacheDir: z.string().default(''),
   /** 并入阈值（余弦） */
-  tauJoin: z.number().min(0.6).max(0.95).default(0.75),
-  /** 并入所需的词面重叠（bigram-Jaccard） */
-  tauLex: z.number().min(0.05).max(0.5).default(0.12),
+  tauJoin: z.number().min(0.6).max(0.95).default(0.78),
+  /** 并入所需的词面重叠（bigram-Jaccard；实测标定依据见 pipeline/write.ts） */
+  tauLex: z.number().min(0.02).max(0.5).default(0.05),
+  /** 无向量（encoder 降级）时并入所需的词面重叠 */
+  tauLexOnly: z.number().min(0.02).max(0.6).default(0.1),
   /** 新建主题阈值 */
   tauNew: z.number().min(0.2).max(0.8).default(0.5),
   /** 注入字符预算 */
@@ -87,7 +89,12 @@ export function apply(ctx: any, config: any): void {
           version: VERSION,
           dataDir: cfg.dataDir || '(default)',
           encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
-          thresholds: { tauJoin: cfg.tauJoin, tauLex: cfg.tauLex, tauNew: cfg.tauNew },
+          thresholds: {
+            tauJoin: cfg.tauJoin,
+            tauLex: cfg.tauLex,
+            tauLexOnly: cfg.tauLexOnly,
+            tauNew: cfg.tauNew,
+          },
         })
       },
     }),

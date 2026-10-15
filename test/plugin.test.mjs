@@ -17,7 +17,7 @@ const baseConfig = {
   encoderEnabled: true,
   encoderModel: 'Xenova/bge-small-zh-v1.5',
   tauJoin: 0.75,
-  tauLex: 0.12,
+  tauLex: 0.05,
   tauNew: 0.38,
   viewBudget: 6000,
   topN: 24,
@@ -27,7 +27,9 @@ describe('插件契约', () => {
   it('导出宿主所需的四个入口', () => {
     assert.equal(name, 'lattice')
     assert.ok(inject.includes('tools'))
-    assert.ok(Object.keys(Config.shape).includes('enabled'))
+    // schemastery 把字段表放在 `dict`（早期版本里叫 shape），两种都认。
+    const fields = Config.dict ?? Config.shape
+    assert.ok(Object.keys(fields).includes('enabled'))
     assert.equal(typeof apply, 'function')
   })
 
