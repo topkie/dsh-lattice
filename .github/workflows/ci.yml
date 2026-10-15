@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # 对所有分支的 push 都跑 —— 只跑 main 会让任务分支在合并前毫无门禁，
+    # 等合进 main 才发现红，分支策略的核心价值就没了。
+    branches: ['**']
   pull_request:
 
 jobs:
@@ -18,7 +20,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm format:check
-      - run: pnpm test
+      # 直接跑脚本而不是 `pnpm <script>`：实测 `pnpm run` 会因 pnpm 自身的
+      # 依赖预检查而失败，换成显式命令可以绕开这一类不确定性。
+      - run: node node_modules/typescript/bin/tsc --noEmit
+      - run: node node_modules/eslint/bin/eslint.js .
+      - run: node node_modules/prettier/bin/prettier.cjs --check "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" "docs/*.md" "*.md" ".github/**/*.yml"
+      - run: node test/run.mjs
+
+      # 真实模型验证不进 CI：要下载模型、耗时数十秒，且必须是网络可用时才跑。
+      # 它们由维护者在合并前手动执行（详见 docs/DEVELOPMENT.md）。

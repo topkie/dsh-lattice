@@ -5,11 +5,37 @@
 ## 开始之前
 
 - 较大的改动请先开 Issue 讨论，避免做完才发现方向不一致
-- 提交前请确保 `pnpm run check`（类型检查 + 代码检查 + 测试）全部通过
+- 改动走任务分支，提交前确保 `node scripts/check-all.mjs` 全绿（见下方「分支与合并」）
 
 ## 开发环境
 
 见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+
+## 分支与合并
+
+main 永远可发布。**不要在 main 上直接提交**，所有改动走任务分支：
+
+| 分支 | 用途 | 命名 |
+|---|---|---|
+| `feat/<slug>` | 新功能 | `feat/t7-view-assembly` |
+| `fix/<slug>` | 缺陷修复 | `fix/recall-empty-result` |
+| `docs/<slug>` | 仅文档 | `docs/constant-table` |
+
+在分支上可以自由提交（允许中间态与试错提交）。合并前把分支压成一条干净提交：
+
+```bash
+git checkout main
+git merge --squash feat/<slug>
+git commit -m "feat: <摘要>"
+```
+
+### 合并门禁（顺序不能反）
+
+1. `node scripts/check-all.mjs` 全绿 —— 类型检查、代码检查、格式检查、单元测试，一条命令跑完；
+2. 涉及编码或召回的改动，再手动跑一次 `scripts/verify-*.mjs`（真实模型，需联网，因此不进 CI）；
+3. 两项都过了才合并。
+
+CI 对**所有分支**的 push 都会跑第 1 项。
 
 ## 提交信息
 

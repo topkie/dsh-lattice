@@ -11,12 +11,22 @@
 ## 常用命令
 
 ```bash
-pnpm install            # 安装依赖
-pnpm run build          # 类型检查并编译到 dist/
-pnpm run typecheck      # 只做类型检查
-pnpm test               # 运行测试
-pnpm run check          # 类型检查 + 代码检查 + 测试（提交前跑这个）
+pnpm install                    # 安装依赖
+
+# 以下是推荐入口：直接调脚本，不经过包管理器
+node scripts/check-all.mjs      # 合并门禁：类型检查 + 代码检查 + 格式检查 + 单元测试
+node test/run.mjs               # 只跑测试
+
+# 各步骤也可以单独跑（在项目根目录）
+node node_modules/typescript/bin/tsc --noEmit
+node node_modules/eslint/bin/eslint.js .
+node node_modules/prettier/bin/prettier.cjs --write "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" "docs/*.md"
+node scripts/verify-encoder.mjs # 真实模型验证（需联网，不进 CI）
 ```
+
+**为什么推荐 `node scripts/...` 而不是 `pnpm run ...`**：某些环境下 `pnpm run` 会因为
+pnpm 自身的依赖预检查而失败（报 pnpm 不是命令）。直接调用脚本入口可以绕开这一类不确定性，
+而且与 CI 用的是同一条命令。
 
 ## 模块划分
 

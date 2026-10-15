@@ -23,10 +23,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/*.mjs\" \"docs/*.md\" \"*.md\" \".github/**/*.yml\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/*.mjs\" \"docs/*.md\" \"*.md\" \".github/**/*.yml\"",
     "test": "node --import ./test/stubs/register.mjs test/run.mjs",
-    "check": "pnpm typecheck && pnpm lint && pnpm test"
+    "check": "node scripts/check-all.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
