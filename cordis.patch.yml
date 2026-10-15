@@ -1,0 +1,13 @@
+# dsh-lattice bundle 补丁层。
+# 安装后由 package.json 的 dsh.bundle.patch 自动生效；profile 自己的
+# cordis.patch.yml 可按 id 覆盖或禁用它（后层优先）。
+#
+# 阈值默认值见 src/index.ts 的 Config 注释；改这里即可对全部
+# 会话生效；单次覆盖也可以直接改 profile 层。
+
+- insert:
+    - id: lattice
+      name: dsh-lattice
+      config:
+        enabled: true
+        encoderEnabled: true

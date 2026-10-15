@@ -1,0 +1,9 @@
+node_modules/
+.cache/
+*.log
+dist/
+coverage/
+.npmrc
+test/_*.db
+test/_*.db-wal
+test/_*.db-shm

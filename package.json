@@ -1,0 +1,98 @@
+{
+  "name": "dsh-lattice",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "面向 DeepSeek Harness 的本地记忆插件：结构化、可检索、可重建的知识存储。",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --import ./test/stubs/register.mjs test/run.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript-eslint": "^8.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "marketplace": {
+      "profiles": [
+        "web",
+        "desktop"
+      ],
+      "requiresBuildApproval": false,
+      "requiresRestart": true,
+      "manualSteps": false
+    },
+    "permissions": {
+      "level": "medium",
+      "files": "read-write",
+      "network": "none",
+      "commands": "node",
+      "credentials": [],
+      "externalServices": [],
+      "notes": "Read/write under the lattice data directory only. No outbound network at runtime (models are placed offline)."
+    },
+    "compatibility": {
+      "dsh": ">=0.1.5-alpha.2 <0.3.0-0",
+      "node": ">=22",
+      "profiles": [
+        "web",
+        "desktop"
+      ]
+    }
+  },
+  "license": "MIT",
+  "author": "topkie <topkie@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topkie/dsh-lattice.git"
+  },
+  "homepage": "https://github.com/topkie/dsh-lattice#readme",
+  "bugs": {
+    "url": "https://github.com/topkie/dsh-lattice/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis-plugin",
+    "memory",
+    "sqlite",
+    "embeddings",
+    "rag"
+  ],
+  "dependencies": {},
+  "optionalDependencies": {
+    "@huggingface/transformers": "^3.0.0"
+  }
+}
