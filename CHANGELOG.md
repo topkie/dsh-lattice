@@ -15,7 +15,9 @@
   （declared / extracted / learned）
 - 召回管线：四路融合（向量 / 入口 / 正文 / 图）+ 归属加权，三段式注入组装
   （锚 / 入口 / 路）与按顺序降级的裁剪
-- 宿主工具：`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand`
+- 宿主工具：`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand` / `lattice_list`
+- `lattice_list`：列目录（id / 类型 / 摘要 / 所有权 / scope / 主题 / 取回次数），分页并可按
+  条件过滤 —— 补上「库里有什么」这个此前无法被回答的问题
 - 迁移与评测脚本：现有卡片迁移、等 token 召回对比、多组真实模型验证
 - 存储层：单库 SQLite schema，含 atom / topic / entry / edge 等表与两层检索索引
   （正文 trigram + 入口 bigram）

@@ -73,13 +73,19 @@ afterEach(() => {
 })
 
 describe('工具注册', () => {
-  it('注册了 ping 与三个业务工具', () => {
+  it('注册了 ping 与四个业务工具', () => {
     const names = tools.map((t) => t.name).sort()
-    assert.deepEqual(names, ['lattice_expand', 'lattice_ping', 'lattice_recall', 'lattice_write'])
+    assert.deepEqual(names, [
+      'lattice_expand',
+      'lattice_list',
+      'lattice_ping',
+      'lattice_recall',
+      'lattice_write',
+    ])
   })
 
   it('每个业务工具都有 description / parameters / execute', () => {
-    for (const n of ['lattice_write', 'lattice_recall', 'lattice_expand']) {
+    for (const n of ['lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list']) {
       const t = tool(n)
       assert.equal(typeof t.execute, 'function', n + ' 缺少 execute')
       assert.ok(String(t.description).length > 20, n + ' 的 description 太短，模型无法判断何时用')
@@ -258,6 +264,12 @@ describe('lattice_ping', () => {
     const j = JSON.parse(out)
     assert.equal(j.ok, true)
     assert.equal(j.dataDir, dir, '应当报出真实数据目录')
-    assert.deepEqual(j.tools, ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand'])
+    assert.deepEqual(j.tools, [
+      'lattice_ping',
+      'lattice_write',
+      'lattice_recall',
+      'lattice_expand',
+      'lattice_list',
+    ])
   })
 })

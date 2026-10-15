@@ -33,11 +33,17 @@ describe('插件契约', () => {
     assert.equal(typeof apply, 'function')
   })
 
-  it('激活时注册四个工具', () => {
+  it('激活时注册四个业务工具与一个健康检查', () => {
     const ctx = fakeCtx()
     apply(ctx, baseConfig)
     const names = ctx.registered.map((t) => t.name).sort()
-    assert.deepEqual(names, ['lattice_expand', 'lattice_ping', 'lattice_recall', 'lattice_write'])
+    assert.deepEqual(names, [
+      'lattice_expand',
+      'lattice_list',
+      'lattice_ping',
+      'lattice_recall',
+      'lattice_write',
+    ])
     for (const t of ctx.registered) assert.equal(typeof t.output.render, 'function')
   })
 

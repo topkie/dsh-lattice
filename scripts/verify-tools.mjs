@@ -94,6 +94,26 @@ const rel = await tool('lattice_expand').execute({ atom_id: ids[0], mode: 'relat
 console.log('  兄弟:', rel.split(String.fromCharCode(10))[0].slice(0, 50))
 
 console.log('')
+console.log('=== lattice_list ===')
+// 顺带验一次所有权：用户口述的这条要能被 origin 过滤出来。
+const userOut = await tool('lattice_write').execute({
+  text: '提交信息要写清为什么，而不是只写做了什么。',
+  origin: 'user',
+})
+const userId = Number(/#(\d+)/.exec(userOut)[1])
+const page1 = await tool('lattice_list').execute({ limit: 3 })
+const pl = page1.split(String.fromCharCode(10))
+console.log('  ' + pl[1])
+console.log('  首行: ' + pl[2])
+console.log('  翻页提示: ' + (page1.includes('下一页') ? '有' : '无'))
+const onlyUser = await tool('lattice_list').execute({ origin: 'user' })
+console.log('  只看用户说的: ' + onlyUser.split(String.fromCharCode(10))[1])
+console.log('  命中 #' + userId + ': ' + String(onlyUser.includes('#' + userId)))
+const byKind = await tool('lattice_list').execute({ kind: '结论', limit: 2 })
+console.log('  按 kind 过滤: ' + byKind.split(String.fromCharCode(10))[1])
+const byTopic = await tool('lattice_list').execute({ topic: 1 })
+console.log('  按主题过滤: ' + byTopic.split(String.fromCharCode(10))[1])
+console.log('')
 console.log('=== lattice_ping ===')
 const ping = JSON.parse(await tool('lattice_ping').execute({}))
 console.log('  dataDir:', ping.dataDir === dir ? '正确' : ping.dataDir)

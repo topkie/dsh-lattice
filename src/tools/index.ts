@@ -1,14 +1,16 @@
-// 暴露给宿主的三个工具。
+// 暴露给宿主的四个工具。
 //
 // 只有工具，没有 hook —— 这是设计决定：禁用 LLM 后「轮次结束自动沉淀」那条路必然
 // 要调 LLM 做结构化，与本插件的定位冲突。写入与召回都必须是**显式动作**。
 //
-// 三个工具对应记忆的三个动作：
+// 四个工具对应记忆的四个动作：
 //   lattice_write   记住一件事
 //   lattice_recall  按需取回（返回组装好的三段式文本，不是裸数组）
 //   lattice_expand  展开某条记忆的全文或它的兄弟
+//   lattice_list    列目录（「库里有什么」，只读、分页、可过滤）
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { assembleView } from '../pipeline/view.js'
 import { writeAtom } from '../pipeline/write.js'
@@ -54,6 +56,32 @@ export const LOW_RELEVANCE_HINT = 0.68
 export function isWeakMatch(meta: RecallMeta): boolean {
   if (meta.vectorMissing) return false // 纯词面模式没有余弦可依，不做判断
   return meta.topCosine < LOW_RELEVANCE_HINT
+}
+
+/** 所有权的可读说法。目录里给的是给人看的词，不是字段值。 */
+function originLabel(o: string): string {
+  if (o === 'user') return '用户'
+  if (o === 'import') return '导入'
+  return '模型'
+}
+
+/**
+ * 目录的一行。
+ *
+ * 只给摘要不给正文：列目录是为了定位到某几条再展开；把正文一起递出去，分页就白做了。
+ */
+function formatListRow(r: ListRow): string {
+  const marks: string[] = [originLabel(r.origin)]
+  if (r.supersededBy !== null) marks.push('已被 #' + r.supersededBy + ' 取代')
+  if (r.recallHits > 0) marks.push('取回 ' + r.recallHits + ' 次')
+  const scopeMark = r.scope === 'global' ? '' : ' {' + r.scope + '}'
+  return [
+    '#' + r.id,
+    ' [' + r.kind + '·' + marks.join('·') + ']',
+    scopeMark,
+    ' 主题 #' + (r.topicId === null ? '-' : r.topicId),
+    '  ' + r.summary,
+  ].join('')
 }
 
 /** 入参收敛：类型不对就给默认，不让 undefined 往下游跑。 */
@@ -253,5 +281,54 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     },
   })
 
-  return [writeTool, recallTool, expandTool]
+  const listTool = defineTool({
+    name: 'lattice_list',
+    description:
+      '列出库里有哪些记忆（目录视图，不是搜索）。用户问「你记得哪些关于 X 的事」「库里有什么」时，' +
+      '先用它看清楚有什么，再决定要不要 recall 或 expand。分页返回，按写入顺序倒序（最近写的在前）。',
+    parameters: {
+      kind: { type: 'string', description: '只看某一类：结论 / 坑 / 步骤 / 参数' },
+      origin: {
+        type: 'string',
+        description: '只看某一来源：user（用户说的）/ model（你推断的）/ import（导入的）',
+      },
+      scope: { type: 'string', description: '项目键；给定时连同全局记忆一起列出' },
+      topic: { type: 'number', description: '只看某个主题下的记忆' },
+      limit: { type: 'number', description: '本页条数，默认 20，上限 50' },
+      offset: { type: 'number', description: '从第几条开始，用于翻页' },
+    },
+    output: textOutput(),
+    async execute(args: Record<string, unknown>) {
+      const rt = getRuntime(cfg)
+      const kind = str(args?.kind)
+      const origin = str(args?.origin)
+      const scope = str(args?.scope)
+      const topic = typeof args?.topic === 'number' ? args.topic : undefined
+      const r = listAtoms(rt.db, {
+        kind,
+        origin,
+        scope,
+        topicId: topic,
+        limit: num(args?.limit, LIST_DEFAULT_LIMIT),
+        offset: num(args?.offset, 0),
+      })
+      const lines: string[] = [libraryLine(rt)]
+      const filters: string[] = []
+      if (kind !== '') filters.push('kind=' + kind)
+      if (origin !== '') filters.push('origin=' + origin)
+      if (scope !== '') filters.push('scope=' + scope)
+      if (topic !== undefined) filters.push('topic=' + topic)
+      const head = filters.length > 0 ? '筛选：' + filters.join(' ') + ' ｜ ' : ''
+      lines.push(head + '共 ' + r.total + ' 条')
+      if (r.rows.length === 0) return lines.join('\n') + '\n\n没有符合条件的记忆。'
+      for (const row of r.rows) lines.push(formatListRow(row))
+      const shown = r.offset + r.rows.length
+      if (shown < r.total) {
+        lines.push('（还有 ' + (r.total - shown) + ' 条，下一页用 offset=' + shown + '）')
+      }
+      return lines.join('\n')
+    },
+  })
+
+  return [writeTool, recallTool, expandTool, listTool]
 }

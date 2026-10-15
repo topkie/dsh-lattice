@@ -104,6 +104,7 @@ node scripts/build-baseline.mjs --source <cards.json> --label <名字> [--out .p
 | `lattice_write` | 记住一件事 | 内容值得跨会话复用时才调用；`refs` 是显式入口词 |
 | `lattice_recall` | 按需取回 | 返回组装好的三段式文本，不是裸数组 |
 | `lattice_expand` | 展开全文 / 列兄弟 | 召回只给了摘要或截断正文时用 |
+| `lattice_list` | 列目录 | 「库里有什么」；只读、按写入顺序倒序、**总是分页**（上限 50），可按 kind / origin / scope / topic 过滤 |
 | `lattice_ping` | 健康检查 | 报出解析后的数据目录、资源参数与工具清单 |
 
 ### parameters 的形状（踩过）

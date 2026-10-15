@@ -134,7 +134,7 @@ export function apply(ctx: any, config: any): void {
           version: VERSION,
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
-          tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand'],
+          tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list'],
           encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
           thresholds: {
             tauJoin: cfg.tauJoin,
