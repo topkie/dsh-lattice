@@ -379,15 +379,18 @@ describe('写入管线：入口生成', () => {
     assert.equal(byTerm.get('索引').weight, 1)
   })
 
-  it('泛词（df/N > 0.5）被动态丢弃', async () => {
-    const ctx = createWriteCtx(db, {}, { encode: async (t) => hashVec(t) })
-    for (let i = 0; i < 4; i++) {
-      await writeAtom(ctx, { text: `坐标变换第 ${i} 号记录，涉及旋转矩阵与平移。` })
-    }
-    const vocab = buildVocabIndex(db)
-    assert.ok(vocab.df('坐标') / vocab.total() > 0.5, '前置条件：坐标 已成为泛词')
-    const recs = extractedEntries('坐标变换的补充说明。', vocab)
-    assert.ok(!recs.some((r) => r.term === '坐标'), '泛词必须被丢弃')
+  it('泛词（df/N > 0.5）被动态丢弃 —— 但语料够规模才生效', async () => {
+    const text = '坐标变换的补充说明。'
+    // 过滤阈值是 MIN_VOCAB_FOR_DF(12)：小库上「出现一次」就等于半数，判据不成立。
+    // 这里直接构造词表来验判据本身，不走写库（写 16 条才有规模）。
+    const sparse = { df: (t) => (t === '坐标' ? 5 : 0), total: () => 5 }
+    assert.ok(
+      extractedEntries(text, sparse).some((r) => r.term === '坐标'),
+      '语料不足时不得把词误判成泛词 —— 否则新库会写成一座空索引',
+    )
+
+    const dense = { df: (t) => (t === '坐标' ? 40 : 0), total: () => 40 }
+    assert.ok(!extractedEntries(text, dense).some((r) => r.term === '坐标'), '语料够大时泛词必须被丢弃')
   })
 
   it('invalidateVocab 后重建索引能看见新写入的入口', async () => {

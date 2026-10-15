@@ -35,8 +35,19 @@ export const ENTRY_WEIGHT: Readonly<Record<EntryOrigin, number>> = {
   learned: 0.3,
 }
 
-/** 默认抽取数。少于这个数，长记忆的召回面会明显变窄。 */
-export const DEFAULT_MAX_EXTRACTED = 8
+/**
+ * 默认抽取数。
+ *
+ * **这个值是实测调上来的**：原设计取 8，理由是「每 atom 8 条入口，索引体积可忽略」。
+ * 但中文没有词边界，一段 25 字的记忆会切出约 17 个 bigram，取前 8 等于丢掉一半候选 ——
+ * 实测「大文件下载要走代理，但回环地址不能走代理」这条，两次出现的「代理」都被挤出
+ * 前 8，只剩「走代」，于是查「代理」时它一无所获。
+ *
+ * 放宽到 16 后同一批查询全部命中。代价是入口行数翻倍，但入口索引只占 trigram 正文层
+ * 的百分之几，而**召回不到是功能损失、索引变大只是存储成本**，两者不对等。
+ * 真实记忆通常 40~180 字，16 个槽位基本覆盖得住。
+ */
+export const DEFAULT_MAX_EXTRACTED = 16
 
 /**
  * 虚字表：含这些字的二字组几乎不携带主题信息。
@@ -54,6 +65,15 @@ const STOP_CHARS = new Set(
     '原因方法步骤参数结论注意建议补充说明实现设计开发测试运行验证观察记录选择决定'
   ).split(''),
 )
+
+/**
+ * 泛词过滤（df/N > 0.5）生效所需的最小语料规模。
+ *
+ * 低于这个规模，「出现在半数 atom 里」不携带任何信息：库里 2 条记忆时出现一次就是
+ * 半数，于是两个词都会被当作泛词丢掉。英文语料上这个问题不明显（词表大），
+ * 中文 bigram 候选密集，小库上会被放得很大。
+ */
+const MIN_VOCAB_FOR_DF = 12
 
 /** 入口词元的长度区间（按码点）。 */
 const MIN_TERM = 2
@@ -123,12 +143,17 @@ export function extractedEntries(
 ): EntryRecord[] {
   const candidates = bigramTerms(text)
   const scored: Array<{ term: string; score: number }> = []
-  const N = vocab.total()
+  // 分母要把**正在写入的这一条**算进去：词表是在落库前建的，不含它。
+  // 不加这个 1，库里只有一条 atom 时 df/N = 1/1，眼下这条记忆会被自己压成泛词。
+  const N = vocab.total() + 1
+  // 泛词过滤要等到语料有规模才成立：N 小的时候「出现在半数 atom 里」不构成任何证据
+  //（N=2 时出现一次就是半数）。样本不足时宁可多留入口，也不要把新库写成一座空索引。
+  const dfFilterActive = N >= MIN_VOCAB_FOR_DF
   for (const term of candidates) {
     if (!isUsableTerm(term)) continue
     const df = vocab.df(term)
     // 泛词直接丢弃：出现在半数以上 atom 里的词元区分度为 0（等同停用词）。
-    if (df / N > 0.5) continue
+    if (dfFilterActive && df / N > 0.5) continue
     scored.push({ term, score: Math.log((N - df + 0.5) / (df + 0.5) + 1) })
   }
   scored.sort((a, b) => b.score - a.score || (a.term < b.term ? -1 : 1))

@@ -64,6 +64,7 @@ src/
 | `scripts/verify-encoder.mjs` | 模型可用性：维度、归一化、同义改写的相似度是否高于跨域 |
 | `scripts/probe-threshold.mjs` | 落位阈值的可分性：同主题对与跨主题对的余弦/词面分布 |
 | `scripts/verify-write.mjs` | 写入闭环：同义改写能并入、异质记忆不被误并 |
+| `scripts/verify-recall.mjs` | 召回闭环：已知查询能否命中它该命中的那条记忆 |
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 
 调整落位阈值时，先跑 `probe-threshold.mjs` 拿到分布，再改 `DEFAULT_THRESHOLDS`，

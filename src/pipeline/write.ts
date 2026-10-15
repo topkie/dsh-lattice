@@ -96,6 +96,7 @@ export interface WriteCtx {
   encoderOn?: boolean
   /** 编码函数。缺省表示无 encoder，走纯词面路径。 */
   encode?: (text: string) => Promise<Float32Array | null>
+  /** 已废弃：词表不再缓存（每次现算）。保留字段以免破坏既有调用点。 */
   vocab?: VocabIndex | null
   /** 落位候选上限。 */
   topN?: number
@@ -134,15 +135,24 @@ const LEX_CANDIDATES = 8
 const WORD_ONLY_CANDIDATES = 64
 const DEFAULT_TOP_N = 24
 
-/** 词表索引缓存：首次用到时才建，之后复用。 */
+/**
+ * 取词表索引（DF）。**每次调用都重建，不做缓存。**
+ *
+ * 这里踩过一个坑，值得留在这里给后来者：原本把词表缓存在 ctx 上，靠写入后调用来失效。
+ * 表面看没问题，实际会让**第二条写入的空入口率飙升** —— 缓存一旦失效，第二次构建时
+ * 库里还只有 1 个 atom，于是每个词元的 df/N 都成了 1/1 = 1，全部超过 0.5 的泛词线，
+ * 结果整条记忆一个入口都生成不出来：不报错、不警告，只是这条记忆永远查不到。
+ *
+ * 代价是一次全表扫（万级毫秒量级），换来的是「词表永远与库一致」这个不需要论证的性质。
+ * 真要优化，正确做法是加 term_df 汇总表并由写入维护，而不是加一层会静默失准的缓存。
+ */
 function vocabOf(ctx: WriteCtx): VocabIndex {
-  if (ctx.vocab === undefined || ctx.vocab === null) ctx.vocab = buildVocabIndex(ctx.db)
-  return ctx.vocab
+  return buildVocabIndex(ctx.db)
 }
 
-/** 丢弃词表缓存——入口集合变化后（批量导入、learned 反哺）必须调用。 */
-export function invalidateVocab(ctx: WriteCtx): void {
-  ctx.vocab = null
+/** 兼容旧调用点：现在词表不做缓存，此函数无需再做任何事。 */
+export function invalidateVocab(_ctx: WriteCtx): void {
+  // 保留空实现以免破坏调用点；语义上「已经不需要失效了」。
 }
 
 /**
