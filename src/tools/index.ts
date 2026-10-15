@@ -12,7 +12,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
-import { assembleView } from '../pipeline/view.js'
+import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
 import { writeAtom } from '../pipeline/write.js'
 import { getRuntime, runtimeEncode, type Runtime, type RuntimeConfig } from '../state.js'
 
@@ -44,7 +44,14 @@ function textOutput() {
  * 也不要把噪声当真结论喂给模型，后者会导致基于无关记忆的错误推理。
  */
 /** 低于这个值就在结果上标一句「可能不相关」。**只是提示，不拦截** —— 见下。 */
-export const LOW_RELEVANCE_HINT = 0.68
+/**
+ * 取值与「摘录档」的下界同源（view.ts 的 TIER_BRIEF_MIN）：两者回答的是同一个问题
+ * ——「这次的匹配算不算相关」。分头定两个数，只会让它们慢慢分叉。
+ *
+ * 原值是 0.68，实测**永不触发**：gold 集的 top1 中位数就有 0.683。一个永不触发的
+ * 提示与没有提示是一回事，却看起来还在工作 —— 那比没有更糟。
+ */
+export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
 
 /**
  * 这次召回的结果值不值得给模型看。

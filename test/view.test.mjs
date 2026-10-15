@@ -9,7 +9,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
-import { assembleView, MIN_ANCHORS, TRIM_ORDER } from '../dist/pipeline/view.js'
+import {
+  MIN_ANCHORS,
+  TIER_BRIEF_MIN,
+  TIER_FULL_MIN,
+  TRIM_ORDER,
+  assembleView,
+  tierOf,
+} from '../dist/pipeline/view.js'
 
 let dbFile = ''
 let db = null
@@ -94,6 +101,43 @@ function recallOf(hits, topics) {
 function hit(id, topicId, summary, score) {
   return { id, score, final: score, topicId, fit: 0.8, summary, ranks: { entry: 1 }, affiliation: 1 }
 }
+
+describe('注入组装：档位', () => {
+  it('tierOf 的边界是闭区间下界', () => {
+    assert.equal(tierOf(TIER_FULL_MIN), 'full')
+    assert.equal(tierOf(TIER_FULL_MIN - 0.01), 'brief')
+    assert.equal(tierOf(TIER_BRIEF_MIN), 'brief')
+    assert.equal(tierOf(TIER_BRIEF_MIN - 0.01), 'excerpt')
+  })
+
+  it('档位越低给得越少；无向量时不降档', () => {
+    const ids = []
+    for (let i = 0; i < 12; i++) {
+      ids.push(
+        seedAnim(db, 1, '构建', '第' + i + '条足够长的正文内容，用来把三个档位的输出规模撑开。', ['词' + i]),
+      )
+    }
+    const hits = ids.map((id, i) => ({ ...hit(id, 1, '摘要' + i, 1 - i * 0.01), origin: 'model' }))
+    const topics = [{ topicId: 1, label: '构建', hits: 12 }]
+    const at = (cos) => {
+      const r = recallOf(hits, topics)
+      r.meta.vectorMissing = false
+      r.meta.topCosine = cos
+      return assembleView(db, r, {})
+    }
+    const full = at(0.8)
+    const brief = at(0.5)
+    const excerpt = at(0.2)
+    assert.equal(full.tier, 'full')
+    assert.equal(brief.tier, 'brief')
+    assert.equal(excerpt.tier, 'excerpt')
+    assert.ok(full.text.length > brief.text.length, '精简档该比完整档少')
+    assert.ok(brief.text.length > excerpt.text.length, '摘录档该最省')
+    assert.ok(excerpt.anchors <= MIN_ANCHORS, '摘录档的锚不超过保底条数')
+    // 无向量（纯词面）没有余弦可依：不降档。宁可多给，也不要因为测不出来而少给。
+    assert.equal(assembleView(db, recallOf(hits, topics), {}).tier, 'full')
+  })
+})
 
 describe('注入组装：状态标记', () => {
   it('用户说的与导入的会标记，模型写的且未被取代的不标', () => {

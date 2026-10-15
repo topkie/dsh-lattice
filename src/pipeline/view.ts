@@ -31,6 +31,11 @@ export type TrimStep = (typeof TRIM_ORDER)[number]
 export interface ViewOptions {
   /** 总字符预算。 */
   budget?: number
+  /**
+   * 注入档位。省略时按召回结果的最高余弦自动判定（无向量时一律 full）。
+   * 显式传值只用于测试与对照，正常调用方不该覆盖它。
+   */
+  tier?: ViewTier
   /** 锚段每条最多给多少字符（全文很长时截断，避免一条吃掉整段）。 */
   anchorMaxChars?: number
   /** 每个主题最多给几条入口。 */
@@ -42,6 +47,8 @@ export interface ViewOptions {
 }
 
 export interface ViewResult {
+  /** 本次用的档位。写进结果是为了能观测，不是调用方需要读它。 */
+  tier: ViewTier
   /** 完整文本，直接注入。 */
   text: string
   anchors: number
@@ -62,6 +69,43 @@ const DEFAULT_ANCHOR_MAX = 1200
 const DEFAULT_ENTRIES_PER_TOPIC = 8
 const DEFAULT_ENTRY_LINE_MAX = 160
 const DEFAULT_PATH_LINES = 15
+
+/**
+ * 注入档位：按匹配质量决定这次给多少。
+ *
+ * 为什么是分档而不是门槛：边界判错时，分档最坏只是相邻档位的效率损失；门槛判错
+ * 要么全给要么全不给 —— 而「全不给」正是最坏的那种（模型什么也没看到，却以为自己查过了）。
+ *
+ * 阈值来自实测（279 条基准库、20 条 gold 查询 + 4 条无关查询）：
+ *   相关 top1  min 0.524 / p50 0.683 ｜ 无关 top1  max 0.398
+ * 两者之间是空的，所以取值本身不敏感；取空隙中间是为了容错，不是为了拟合。
+ */
+export type ViewTier = 'full' | 'brief' | 'excerpt'
+
+/** 完整档的下界。 */
+export const TIER_FULL_MIN = 0.55
+/** 精简档的下界；低于它落到摘录档。 */
+export const TIER_BRIEF_MIN = 0.45
+
+export function tierOf(topCosine: number): ViewTier {
+  if (topCosine >= TIER_FULL_MIN) return 'full'
+  if (topCosine >= TIER_BRIEF_MIN) return 'brief'
+  return 'excerpt'
+}
+
+/** 各档的锚条数上限。full 不设上限，交给预算去管。 */
+const TIER_ANCHOR_CAP: Readonly<Record<ViewTier, number>> = {
+  full: Number.POSITIVE_INFINITY,
+  brief: 8,
+  excerpt: MIN_ANCHORS,
+}
+/** 各档每个主题给几条入口。低相关时入口段是主角，但也要收窄。 */
+const TIER_ENTRIES: Readonly<Record<ViewTier, number>> = {
+  full: DEFAULT_ENTRIES_PER_TOPIC,
+  brief: DEFAULT_ENTRIES_PER_TOPIC,
+  excerpt: 4,
+}
+
 /** 一条锚的正文，按需从库里取。 */
 function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
   const out = new Map<number, string>()
@@ -154,6 +198,17 @@ function stateMark(h: { origin?: string; supersededBy?: number | null }): string
   return parts.length === 0 ? '' : '·' + parts.join('·')
 }
 
+/**
+ * 按召回结果推断档位。
+ *
+ * 纯词面模式（无查询向量）没有余弦可依，**不降档** —— 宁可多给几条，也不要因为
+ * 「测不出来」而少给：降档是真的丢信息，多给只是多花一点预算。
+ */
+function inferTier(recalled: RecallResult): ViewTier {
+  if (recalled.meta.vectorMissing) return 'full'
+  return tierOf(recalled.meta.topCosine)
+}
+
 export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: ViewOptions = {}): ViewResult {
   const budget = opts.budget ?? DEFAULT_BUDGET
   const anchorMax = opts.anchorMaxChars ?? DEFAULT_ANCHOR_MAX
@@ -162,12 +217,16 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
 
   // 裁剪状态机：每执行一步就重新渲染并检查，直到装得下。
   // 逐步降级而不是一次算到位 —— 每一步的效果都要看真实字符数，预算是字符而非条数。
+  //
+  // 档位只改**初值**：超预算时仍然按 TRIM_ORDER 依次降级，「锚不为其他段让路」
+  // 那条行为契约不因分档而改变，只是起点不同。
+  const tier = opts.tier ?? inferTier(recalled)
   const st = {
     pathLimit,
-    perTopic: opts.entriesPerTopic ?? DEFAULT_ENTRIES_PER_TOPIC,
-    anchorToSummary: false,
-    pathsOff: false,
-    anchorCap: Number.POSITIVE_INFINITY,
+    perTopic: opts.entriesPerTopic ?? TIER_ENTRIES[tier],
+    anchorToSummary: tier === 'excerpt',
+    pathsOff: tier !== 'full',
+    anchorCap: TIER_ANCHOR_CAP[tier],
   }
 
   const fullTexts = loadTexts(
@@ -298,6 +357,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   }
 
   return {
+    tier,
     text: b.text,
     anchors: b.anchorLines.length,
     entryTopics: b.entryLines.length,

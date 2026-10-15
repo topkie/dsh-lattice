@@ -199,8 +199,16 @@ describe('低相关提示', () => {
   })
 
   it('低于阈值判为弱相关（会提示）', () => {
-    assert.equal(isWeakMatch(meta(0.5)), true)
+    // 0.4 是实测的「无关查询」上界（4 条无关问法 max 0.398）。
+    assert.equal(isWeakMatch(meta(0.4)), true)
     assert.equal(isWeakMatch(meta(LOW_RELEVANCE_HINT - 0.01)), true)
+  })
+
+  it('阈值必须落在实测的两端之间', () => {
+    // 实测（279 条基准库）：相关 gold 20 条 top1 最低 0.524；无关 4 条最高 0.398。
+    // 这条断言是为了防止阈值被随手改动 —— 它挪出空隙就没有依据了。
+    assert.ok(LOW_RELEVANCE_HINT > 0.398, '必须高于无关查询的上界')
+    assert.ok(LOW_RELEVANCE_HINT < 0.524, '必须低于相关查询的下界')
   })
 
   it('达到阈值不提示', () => {
