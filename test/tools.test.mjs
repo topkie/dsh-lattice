@@ -83,6 +83,7 @@ describe('工具注册', () => {
       const t = tool(n)
       assert.equal(typeof t.execute, 'function', n + ' 缺少 execute')
       assert.ok(String(t.description).length > 20, n + ' 的 description 太短，模型无法判断何时用')
+      // 替身会把「属性映射」转成 JSON Schema（与真实宿主一致），这里验的是转换后的契约
       assert.equal(t.parameters.type, 'object')
       assert.ok(t.parameters.properties, n + ' 缺少 parameters.properties')
     }

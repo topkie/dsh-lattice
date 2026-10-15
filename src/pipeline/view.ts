@@ -184,7 +184,8 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
       const full = st.anchorToSummary ? h.summary : (fullTexts.get(h.id) ?? h.summary)
       const isSummary = st.anchorToSummary || full === h.summary
       const body = clip(full, st.anchorToSummary ? 64 : anchorMax)
-      const line = '- ' + body
+      // 带 atom id：它是 lattice_expand 的入参；id 自增，也就等于天然的写入顺序。
+      const line = '- [' + h.id + '] ' + body
       const cost = line.length + 1
       // 前 MIN_ANCHORS 条无论如何都要留下（保底），之后才看配额。
       if (anchorLines.length < MIN_ANCHORS || anchorsUsed + cost <= anchorQuota) {
@@ -193,7 +194,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
         anchorsUsed += cost
         if (isSummary) demoted++
       } else if (!st.anchorToSummary) {
-        const short = '- ' + clip(h.summary, 60)
+        const short = '- [' + h.id + '] ' + clip(h.summary, 60)
         const sc = short.length + 1
         if (anchorsUsed + sc <= anchorQuota) {
           anchorLines.push(short)

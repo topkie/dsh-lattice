@@ -79,11 +79,16 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         description: '记忆正文。一句话讲清一个结论，不要塞进多个主题。',
         required: true,
       },
-      kind: { type: 'string', description: '结论 / 坑 / 步骤 / 参数，默认 结论' },
+      kind: {
+        type: 'string',
+        description: '只能是：结论 / 坑 / 步骤 / 参数。默认 结论。填别的值无效。',
+      },
       refs: {
         type: 'array',
         items: { type: 'string' },
-        description: '显式入口词（别名、关键术语）。写入方知道的说法一律写上。',
+        description:
+          '用户以后可能用哪些说法找它？同义词、俗称、报错原文都写上。' +
+          '例：正文讲 nodeLinker=hoisted，refs 写 ["pnpm 依赖装不上", "符号链接失败"]。',
       },
       topic_hint: { type: 'number', description: '已知归属主题 id 时直接指定，跳过几何定位' },
       scope: { type: 'string', description: 'global 或项目键，默认 global' },
@@ -121,8 +126,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const recallTool = defineTool({
     name: 'lattice_recall',
     description:
-      '按需取回记忆。返回组装好的三段式文本：【锚】是记忆正文，【入口】是相关说法，' +
-      '【路】是关联线索。做任何需要历史结论、约定或踩过的坑的任务前，先调用它。',
+      '按需取回记忆。返回组装好的三段式文本：【锚】是记忆正文（每条带 atom id），' +
+      '【入口】是相关说法，【路】是关联线索。' +
+      '需要历史结论、既有约定或踩过的坑时调用；纯粹的常识问答与临时任务不要调，一次召回不便宜。',
     parameters: {
       query: {
         type: 'string',
@@ -160,7 +166,11 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       '展开某条记忆的全文，或列出同主题的兄弟记忆。召回只给了摘要或截断正文时用它。' +
       'mode=related 可以看到该主题下还有哪些相关记忆，用于判断是否有互相矛盾的说法。',
     parameters: {
-      atom_id: { type: 'number', description: '要展开的 atom id', required: true },
+      atom_id: {
+        type: 'number',
+        description: '要展开的 atom id，从召回文本【锚】段的 [id] 取',
+        required: true,
+      },
       mode: { type: 'string', description: 'full（默认）或 related' },
     },
     output: textOutput(),
