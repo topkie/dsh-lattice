@@ -79,15 +79,28 @@ const MIN_VOCAB_FOR_DF = 12
 const MIN_TERM = 2
 const MAX_TERM = 8
 
-/** 该词元是否值得作为入口。 */
+/**
+ * 该词元是否值得作为入口。
+ *
+ * 三条判据，全部是**候选资格**（进不进候选池），不是打分——因为在小库上打分并不工作：
+ * 库里词元大多只出现一次时，IDF 给出的权重几乎相同（df=0 与 df=1 只差约 3%），
+ * 排序实际上退化为「候选顺序 + 字典序」。此时唯一有效的手段是别让噪声进候选池。
+ *
+ * 判据三（必须纯字母或汉字）来自实测：入口段里混进的 `u4e00`、`0x1c`、`9_`、`v1`、
+ * `0335` 全部含数字或符号。它们在库里「绝无仅有」，因此 IDF 反而给最高分，
+ * 会挤占每个主题只展示 8 条的窗口。代价是 `x86` 这类纯字母数字组合的专有词会
+ * 被一并剔除——实测全库只有 1 个 atom 受影响，而这些词本可以写进 declared 入口。
+ */
 function isUsableTerm(term: string): boolean {
   const t = term
   if (t.length < MIN_TERM || t.length > MAX_TERM) return false
-  if (/s/.test(t)) return false
+  if (/\s/.test(t)) return false
   const cps = Array.from(t)
   if (cps.length === 2) {
     for (const cp of cps) if (STOP_CHARS.has(cp)) return false
   }
+  // 纯字母或汉字：数字、下划线、其他符号一律不作入口。
+  if (!/^[A-Za-z\u4e00-\u9fff]+$/.test(t)) return false
   return true
 }
 
