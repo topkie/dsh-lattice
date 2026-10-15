@@ -10,8 +10,11 @@ import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { ensureMeta, META_BUILDER, META_ENTRY_RULE, META_SCHEMA_VERSION } from './db/meta.js'
 import { openVault } from './db/open.js'
+import { SCHEMA_VERSION } from './db/schema.js'
 import { encode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
+import { ENTRY_RULE_ID } from './pipeline/entries.js'
 import { createWriteCtx, type WriteCtx, type WriteThresholds } from './pipeline/write.js'
 
 /** 插件传给运行时的配置（已解析默认值的形状）。 */
@@ -59,6 +62,7 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'lattice.db')
   const { db } = openVault(file, { resources: cfg.resources })
+  stampVault(db)
   const encoderOpts: EncoderOptions = {
     model: cfg.encoderModel,
     remoteHost: cfg.encoderMirror || undefined,
@@ -69,6 +73,18 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
   })
   current = { db, write, cfg, file }
   return current
+}
+
+/**
+ * 补上库的自描述，**已存在的一律不动**。
+ *
+ * 为什么是 ensure 而不是 set：库若是另一套入口规则生成的，覆盖元数据只会把
+ * 「不一致」这个事实抹掉 —— 而它恰恰是需要被看见的东西（由 checkEntryRule 报告）。
+ */
+function stampVault(db: DatabaseSync): void {
+  ensureMeta(db, META_SCHEMA_VERSION, String(SCHEMA_VERSION))
+  ensureMeta(db, META_ENTRY_RULE, ENTRY_RULE_ID)
+  ensureMeta(db, META_BUILDER, 'runtime')
 }
 
 /** 编码器是否可用（供工具决定是否走纯词面路径）。 */

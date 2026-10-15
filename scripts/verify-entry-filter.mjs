@@ -1,6 +1,11 @@
 // 定向对照：只剔除「含数字或下划线」的入口，看召回是否依赖它们。
 // 与 verify-entry-quality.mjs 的分工：那个验「新规则重建后整体不劣化」，
 // 这个隔离出「过滤本身」的净效应（不做任何重排）。
+//
+// 关于基准库：本脚本的「改动前」取自基准库现有的入口，而基准库已按当前规则重建
+//（见 scripts/build-baseline.mjs），所以它现在的期望结果是「无变化」——即回归检查。
+// 将来再改入口规则时，要么另留一份旧规则快照库，要么改用「按两套规则各算一遍」的对照脚本，
+// 不要拿新库当旧规则的替身：那会让差值看起来是零，而零正是最像「没问题」的假象。
 
 import { copyFileSync, existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,10 +15,11 @@ import { recall } from '../dist/pipeline/search.js'
 import { assembleView } from '../dist/pipeline/view.js'
 
 const OUT = '.probe'
-const SRC = join(OUT, 'migrated', 'lattice.db')
+const SRC = join(OUT, 'baseline', 'lattice.db')
 const DB = join(OUT, 'entry-filter-only.db')
 const MODEL = 'Xenova/bge-small-zh-v1.5'
-if (!existsSync(SRC)) throw new Error('缺少迁移库')
+if (!existsSync(SRC))
+  throw new Error('缺少基准库 .probe/baseline/lattice.db：先跑 scripts/build-baseline.mjs')
 mkdirSync(OUT, { recursive: true })
 for (const s of ['', '-wal', '-shm']) rmSync(DB + s, { force: true })
 copyFileSync(SRC, DB)

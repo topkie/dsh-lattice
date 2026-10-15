@@ -8,7 +8,7 @@
 import { statSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { deriveResourceParams, type ResourceOverrides } from '../util/memory.js'
-import { DDL, pragmas, SCHEMA_VERSION } from './schema.js'
+import { MIGRATIONS, pragmas, SCHEMA_VERSION } from './schema.js'
 
 export interface OpenOptions {
   /** 只读打开（排查与分析用），此时不写 PRAGMA。 */
@@ -80,8 +80,16 @@ export function migrate(db: DatabaseSync): MigrateResult {
     throw new Error(`库的 schema 版本为 ${from}，高于本插件支持的 ${SCHEMA_VERSION}；拒绝降级，请升级插件`)
   }
   db.exec('BEGIN')
+  let applied = 0
   try {
-    for (const stmt of DDL) db.exec(stmt)
+    // 只跑缺的那几步。v1 的库重跑 v1 的建表语句会因为表已存在而失败，
+    // 所以这里按版本递进，而不是「一律执行全部 DDL」。
+    for (let v = from; v < SCHEMA_VERSION; v++) {
+      for (const stmt of MIGRATIONS[v] ?? []) {
+        db.exec(stmt)
+        applied++
+      }
+    }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
     db.exec('COMMIT')
   } catch (err) {
@@ -92,7 +100,7 @@ export function migrate(db: DatabaseSync): MigrateResult {
     }
     throw err
   }
-  return { from, to: SCHEMA_VERSION, applied: DDL.length }
+  return { from, to: SCHEMA_VERSION, applied }
 }
 
 /** 便捷入口：打开 + 迁移 + 返回连接。 */

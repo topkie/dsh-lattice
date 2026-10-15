@@ -3,7 +3,10 @@ import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
+import { META_ENTRY_RULE, checkEntryRule, ensureMeta, getMeta, readMeta, setMeta } from '../dist/db/meta.js'
 import { listObjects, migrate, openDb, openVault, schemaVersion } from '../dist/db/open.js'
+import { MIGRATIONS, SCHEMA_VERSION } from '../dist/db/schema.js'
+import { ENTRY_RULE_ID } from '../dist/pipeline/entries.js'
 
 let dbFile = ''
 
@@ -81,6 +84,76 @@ describe('两层检索索引', () => {
       1,
       'Entry 层应兜住短词',
     )
+    db.close()
+  })
+})
+
+describe('schema 迁移', () => {
+  it('v1 的库只跑增量就能升到最新版', () => {
+    const db = openDb(dbFile)
+    // 手工造一个 v1 的库：只执行 v1 那一步，并把版本号停在那里。
+    db.exec('BEGIN')
+    for (const stmt of MIGRATIONS[0]) db.exec(stmt)
+    db.exec('PRAGMA user_version = 1')
+    db.exec('COMMIT')
+    assert.equal(schemaVersion(db), 1)
+    assert.throws(() => db.prepare('SELECT * FROM meta').get(), '升级前不该有 meta 表')
+
+    const r = migrate(db)
+    assert.equal(r.from, 1)
+    assert.equal(r.to, SCHEMA_VERSION)
+    assert.ok(r.applied > 0, '只跑增量也必须真的执行了语句')
+    assert.equal(schemaVersion(db), SCHEMA_VERSION)
+    assert.doesNotThrow(() => db.prepare('SELECT * FROM meta').get())
+    db.close()
+  })
+
+  it('迁移步骤表覆盖每一个版本跨度', () => {
+    assert.equal(MIGRATIONS.length, SCHEMA_VERSION)
+  })
+})
+
+describe('库自描述', () => {
+  it('setMeta 覆盖，ensureMeta 保持原值', () => {
+    const { db } = openVault(dbFile)
+    setMeta(db, META_ENTRY_RULE, 'a')
+    assert.equal(getMeta(db, META_ENTRY_RULE), 'a')
+    setMeta(db, META_ENTRY_RULE, 'b')
+    assert.equal(getMeta(db, META_ENTRY_RULE), 'b')
+    assert.equal(ensureMeta(db, META_ENTRY_RULE, 'c'), false)
+    assert.equal(getMeta(db, META_ENTRY_RULE), 'b')
+    assert.equal(ensureMeta(db, 'fresh', 'x'), true)
+    assert.equal(getMeta(db, 'fresh'), 'x')
+    assert.equal(getMeta(db, 'never-written'), undefined)
+    db.close()
+  })
+
+  it('readMeta 按键排序返回全部', () => {
+    const { db } = openVault(dbFile)
+    setMeta(db, 'b', '2')
+    setMeta(db, 'a', '1')
+    assert.deepEqual(Object.keys(readMeta(db)), ['a', 'b'])
+    db.close()
+  })
+
+  it('规则比对：一致才算 ok，缺自描述与不一致都不算', () => {
+    const { db } = openVault(dbFile)
+    setMeta(db, META_ENTRY_RULE, ENTRY_RULE_ID)
+    assert.deepEqual(checkEntryRule(db, ENTRY_RULE_ID), {
+      ok: true,
+      stored: ENTRY_RULE_ID,
+      current: ENTRY_RULE_ID,
+    })
+
+    const other = checkEntryRule(db, 'bigram-idf-v1')
+    assert.equal(other.ok, false)
+    assert.equal(other.stored, ENTRY_RULE_ID)
+
+    // 没有自描述的库（v1 建的）必须报「不可比」，不能静默当作一致。
+    db.exec("DELETE FROM meta WHERE key = '" + META_ENTRY_RULE + "'")
+    const none = checkEntryRule(db, ENTRY_RULE_ID)
+    assert.equal(none.ok, false)
+    assert.equal(none.stored, null)
     db.close()
   })
 })

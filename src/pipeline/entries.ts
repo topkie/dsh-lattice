@@ -50,6 +50,18 @@ export const ENTRY_WEIGHT: Readonly<Record<EntryOrigin, number>> = {
 export const DEFAULT_MAX_EXTRACTED = 16
 
 /**
+ * 入口抽取规则标识。
+ *
+ * **任何会改变抽取结果的改动都必须改这个值**：库会把它记进 meta 表，验证脚本据此
+ * 判断基准库与当前代码是不是同一套规则。漏改的后果很隐蔽 —— 跨规则对比得出的差值
+ * 会被当成那次改动的效果，而它其实只是规则差异。
+ *
+ * v1：候选只过滤长度、空白与虚字。
+ * v2：候选必须是纯字母或汉字（`u4e00`、`0x1c`、`9_`、`v1` 这类残片出局）。
+ */
+export const ENTRY_RULE_ID = 'bigram-idf-v2'
+
+/**
  * 虚字表：含这些字的二字组几乎不携带主题信息。
  *
  * 它只做**粗过滤**，真正的泛词治理靠 DF 动态阈值（见 vocabIndex 的注释）。

@@ -12,8 +12,13 @@
 
 import type { ResourceParams } from '../util/memory.js'
 
-/** schema 版本；用 PRAGMA user_version 持久化。结构变更必须 +1 并补迁移分支。 */
-export const SCHEMA_VERSION = 1
+/**
+ * schema 版本；用 PRAGMA user_version 持久化。
+ *
+ * 结构变更必须 +1，并在 MIGRATIONS 末尾追加「把上一版升到这一版」的语句。
+ * **历史步骤不可修改、不可删除**——已经发出去的库要靠它一路升上来。
+ */
+export const SCHEMA_VERSION = 2
 
 /**
  * 连接建立时按序执行的 PRAGMA（不能放在事务里）。
@@ -35,8 +40,13 @@ export function pragmas(res: ResourceParams): readonly string[] {
   ]
 }
 
-/** 建库语句，按依赖顺序排列；migrate() 在单个事务内依次执行。 */
-export const DDL: readonly string[] = [
+/**
+ * v1 建库语句，按依赖顺序排列。
+ *
+ * 之所以保留成独立的一份而不直接改这个数组：新建的库要从 v0 一路走到最新版，
+ * 而已经存在的 v1 库只需要跑增量。两件事共用一份语句会互相牵制。
+ */
+const DDL_V1: readonly string[] = [
   // ── 域：派生，topic 的上层聚类 ─────────────────────────────
   `CREATE TABLE domain (
     id          INTEGER PRIMARY KEY,
@@ -163,3 +173,28 @@ export const DDL: readonly string[] = [
     INSERT INTO atom_fts(rowid, body) VALUES (new.id, new.body);
   END`,
 ]
+
+/**
+ * v2 新增：库自描述元数据。
+ *
+ * 为什么要有这张表：标准验证库必须能自己说清「我是用哪套规则生成的」。
+ * 入口抽取规则一改，旧库与新代码产出的库就不是同一套规则，跨规则比较会得出错误结论；
+ * 而库文件会被复制、移动、归档，随附一份说明文件最先丢。放进库里最可靠。
+ */
+const DDL_V2: readonly string[] = [
+  `CREATE TABLE meta (
+    key        TEXT PRIMARY KEY,
+    value      TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) WITHOUT ROWID`,
+]
+
+/**
+ * 迁移步骤表：MIGRATIONS[i] 把库从版本 i 升到版本 i+1。
+ *
+ * 顺序即语义，不得重排 —— 旧库缺哪几步就跑哪几步（见 open.ts 的 migrate）。
+ */
+export const MIGRATIONS: readonly (readonly string[])[] = [DDL_V1, DDL_V2]
+
+/** 全部 DDL 的扁平视图，供建库校验比对 schema 对象是否齐全。 */
+export const DDL: readonly string[] = MIGRATIONS.flat()
