@@ -180,6 +180,7 @@ src/
 | `scripts/verify-view.mjs` | 注入组装：各段实际字符占比与裁剪是否按顺序触发 |
 | `scripts/verify-tools.mjs` | 工具端到端：注册、写入、召回、展开、健康检查（真实模型） |
 | `scripts/migrate-eternal.mjs` | 迁移现有卡片：导出 → 切分 → 编码 → 落库 → 校验定位性 |
+| `scripts/eval-recall.mjs` | 评测：与 memory-eternal 做等 token 的 Recall@5 对比 |
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 
 调整落位阈值时，先跑 `probe-threshold.mjs` 拿到分布，再改 `DEFAULT_THRESHOLDS`，
