@@ -2,7 +2,7 @@
 //
 // 为什么不用 `pnpm run check`：本环境下 `pnpm run` 会因为 pnpm 自身的依赖预检查而失败
 //（报 pnpm 不是命令）。这里直接用当前 node 执行具体的 CLI 入口，绕开包管理器，
-// 于是同一条命令在当前环境与 CI 上行为一致。
+// 于是同一条命令在本机与 CI 上行为一致。
 //
 // 用法：node scripts/check-all.mjs
 //

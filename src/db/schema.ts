@@ -10,19 +10,30 @@
 //   3. **主题不落库中心向量**：topic 只存 sum_vec 与 n_atoms，归一化中心在查询时现算。
 //      这样增量加减与全量重算逐位等价，不会被浮点漂移破坏上面第 1 条不变量。
 
+import type { ResourceParams } from '../util/memory.js'
+
 /** schema 版本；用 PRAGMA user_version 持久化。结构变更必须 +1 并补迁移分支。 */
 export const SCHEMA_VERSION = 1
 
-/** 连接建立时按序执行的 PRAGMA（不能放在事务里）。 */
-export const PRAGMAS: readonly string[] = [
-  'PRAGMA journal_mode = WAL',
-  'PRAGMA synchronous = NORMAL',
-  'PRAGMA foreign_keys = ON',
-  'PRAGMA busy_timeout = 5000',
-  'PRAGMA mmap_size = 268435456',
-  'PRAGMA cache_size = -65536',
-  'PRAGMA wal_autocheckpoint = 1000',
-]
+/**
+ * 连接建立时按序执行的 PRAGMA（不能放在事务里）。
+ *
+ * 其中三个参数与**机器**相关，不再写死：mmap_size / cache_size 由可用内存与库大小推导，
+ * busy_timeout 由实测的写入耗时推导（见 util/memory.ts 的推导规则）。
+ * 其余四个是语义性设置，与机器无关，保持常量。
+ */
+export function pragmas(res: ResourceParams): readonly string[] {
+  return [
+    'PRAGMA journal_mode = WAL',
+    'PRAGMA synchronous = NORMAL',
+    'PRAGMA foreign_keys = ON',
+    // cache_size 用负值表示「单位是 KiB」；这里统一以字节换算。
+    'PRAGMA busy_timeout = ' + res.busyTimeout,
+    'PRAGMA mmap_size = ' + res.mmapSize,
+    'PRAGMA cache_size = -' + Math.round(res.cacheSize / 1024),
+    'PRAGMA wal_autocheckpoint = 1000',
+  ]
+}
 
 /** 建库语句，按依赖顺序排列；migrate() 在单个事务内依次执行。 */
 export const DDL: readonly string[] = [

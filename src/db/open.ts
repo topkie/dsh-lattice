@@ -5,12 +5,19 @@
 //   2. 迁移必须幂等，靠 PRAGMA user_version 判定；
 //   3. 本模块是 db 层唯一允许 import node:sqlite 的地方之一，其余模块只拿 DatabaseSync。
 
+import { statSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { DDL, PRAGMAS, SCHEMA_VERSION } from './schema.js'
+import { deriveResourceParams, type ResourceOverrides } from '../util/memory.js'
+import { DDL, pragmas, SCHEMA_VERSION } from './schema.js'
 
 export interface OpenOptions {
   /** 只读打开（排查与分析用），此时不写 PRAGMA。 */
   readOnly?: boolean
+  /**
+   * 资源参数覆盖。省略时按机器内存与库大小推导；
+   * 显式传入可以让「健康检查报出来的值」与「实际使用的值」永远是同一个。
+   */
+  resources?: ResourceOverrides
 }
 
 export interface MigrateResult {
@@ -26,14 +33,22 @@ export interface SchemaObject {
   table: string
 }
 
-/** 打开（必要时创建）库文件并设置 PRAGMA。 */
+/** 打开（必要时创建）库文件并设置 PRAGMA。返回连接与本次实际使用的资源参数。 */
 export function openDb(file: string, opts: OpenOptions = {}): DatabaseSync {
   const db = new DatabaseSync(file, opts.readOnly ? { readOnly: true } : {})
   if (opts.readOnly) {
-    db.exec('PRAGMA busy_timeout = 5000')
-  } else {
-    for (const p of PRAGMAS) db.exec(p)
+    // 只读连接不写 PRAGMA（会失败），但仍需要一个等待上限，避免读被写者饿死。
+    db.exec('PRAGMA busy_timeout = ' + deriveResourceParams(0, opts.resources).busyTimeout)
+    return db
   }
+  // 库大小参与推导：mmap 窗口的大小要和库文件相称，库还没建时按 0 处理。
+  let size = 0
+  try {
+    size = statSync(file).size
+  } catch {
+    /* 文件还不存在：首次建库 */
+  }
+  for (const p of pragmas(deriveResourceParams(size, opts.resources))) db.exec(p)
   return db
 }
 
@@ -81,8 +96,11 @@ export function migrate(db: DatabaseSync): MigrateResult {
 }
 
 /** 便捷入口：打开 + 迁移 + 返回连接。 */
-export function openVault(file: string): { db: DatabaseSync; migration: MigrateResult } {
-  const db = openDb(file)
+export function openVault(
+  file: string,
+  opts: OpenOptions = {},
+): { db: DatabaseSync; migration: MigrateResult } {
+  const db = openDb(file, opts)
   const migration = migrate(db)
   return { db, migration }
 }

@@ -20,7 +20,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # 直接跑脚本而不是 `pnpm <script>`：实测 `pnpm run` 会因 pnpm 自身的
+      # 直接跑脚本而不是 `pnpm <script>`：本机实测 `pnpm run` 会因 pnpm 自身的
       # 依赖预检查而失败，换成显式命令可以绕开这一类不确定性。
       - run: node node_modules/typescript/bin/tsc --noEmit
       - run: node node_modules/eslint/bin/eslint.js .

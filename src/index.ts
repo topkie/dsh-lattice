@@ -6,6 +6,7 @@
 // 真正的 lattice_write / lattice_recall / lattice_expand 在 T5/T8 落地。
 
 import { readFileSync } from 'node:fs'
+import { deriveResourceParams } from './util/memory.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -56,6 +57,16 @@ export const Config = z.object({
   viewBudget: z.number().min(1000).max(20000).default(6000),
   /** 交注入层的候选数 */
   topN: z.number().min(5).max(50).default(24),
+  /**
+   * 下面三项与**机器**相关，留 0 表示按机器内存与库大小自动推导（见 util/memory.ts）。
+   * 之所以做成可选覆盖而不是固定默认值：合理取值取决于内存与磁盘，写死必然在别的机器上不合适。
+   */
+  /** SQLite mmap 窗口字节数；0 = 自动 */
+  mmapSize: z.number().min(0).default(0),
+  /** SQLite 页缓存字节数；0 = 自动 */
+  cacheSize: z.number().min(0).default(0),
+  /** 写锁等待上限毫秒；0 = 自动 */
+  busyTimeout: z.number().min(0).default(0),
 })
 
 /**
@@ -83,6 +94,12 @@ export function apply(ctx: any, config: any): void {
         },
       },
       async execute() {
+        // 报告**实际会使用的**资源参数，而不是配置里的 0 —— 否则健康检查看不出真实取值。
+        const res = deriveResourceParams(0, {
+          mmapSize: cfg.mmapSize > 0 ? cfg.mmapSize : undefined,
+          cacheSize: cfg.cacheSize > 0 ? cfg.cacheSize : undefined,
+          busyTimeout: cfg.busyTimeout > 0 ? cfg.busyTimeout : undefined,
+        })
         return JSON.stringify({
           ok: true,
           plugin: name,
@@ -94,6 +111,13 @@ export function apply(ctx: any, config: any): void {
             tauLex: cfg.tauLex,
             tauLexOnly: cfg.tauLexOnly,
             tauNew: cfg.tauNew,
+          },
+          // 机器相关的资源参数：报出来才能核对「实际用了多少」，否则只能靠读代码猜。
+          resources: {
+            detectedMemoryMB: Math.round(res.detectedMemory / 1024 / 1024),
+            mmapSizeMB: Math.round(res.mmapSize / 1024 / 1024),
+            cacheSizeMB: Math.round(res.cacheSize / 1024 / 1024),
+            busyTimeoutMs: res.busyTimeout,
           },
         })
       },

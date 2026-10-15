@@ -417,7 +417,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
     upsertSearch.run(atomId, body)
     if (!row.newTopic) {
       // 读—改—写，而不是让 SQL 直接赋值 BLOB：UPDATE 里绑定 2 KB 的 BLOB 参数在
-      // 当前环境 sqlite 上表现为"静默不生效"（列值不变、changes 却报 1），而
+      // 本机 sqlite 上表现为"静默不生效"（列值不变、changes 却报 1），而
       // atom 的 INSERT 绑同一个值却完全正常。避开这条不可靠路径，
       // 顺带把精度问题收敛到一处可测的代码里。
       {
