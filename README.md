@@ -68,6 +68,7 @@ dsh plugin --profile <profile> add dsh-lattice
 
 | 文档 | 内容 |
 |---|---|
+| [**设计原则**](docs/PRINCIPLES.md) | **根本约束：职责边界、行为边界、数据边界**。与之冲突的改动一律不做 |
 | [架构](docs/ARCHITECTURE.md) | 记忆模型、存储布局、检索与写入流程 |
 | [开发指南](docs/DEVELOPMENT.md) | 环境、命令、模块划分、关键约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交流程与代码约定 |

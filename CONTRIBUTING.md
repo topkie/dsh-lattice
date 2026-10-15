@@ -4,6 +4,7 @@
 
 ## 开始之前
 
+- **先读 [docs/PRINCIPLES.md](docs/PRINCIPLES.md)**——它是根本约束，与之冲突的改动会被直接拒绝
 - 较大的改动请先开 Issue 讨论，避免做完才发现方向不一致
 - 改动走任务分支，提交前确保 `node scripts/check-all.mjs` 全绿（见下方「分支与合并」）
 
