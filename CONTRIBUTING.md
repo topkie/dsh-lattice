@@ -35,6 +35,15 @@ git commit -m "feat: <摘要>"
 2. 涉及编码或召回的改动，再手动跑一次 `scripts/verify-*.mjs`（真实模型，需联网，因此不进 CI）；
 3. 两项都过了才合并。
 
+门禁会把当前分支名打在第一行，在 `main` 上跑时会多一句提醒 —— 它本应在任务分支上跑。
+分支名通过环境变量传入，这样脚本自己不需要调 git（受限环境下子进程可能起不来）：
+
+```bash
+GIT_BRANCH=$(git branch --show-current) node scripts/check-all.mjs
+```
+
+**只提示不阻断**：合并后回 main 复验是合法操作，强行失败只会让人绕过这个脚本。
+
 CI 对**所有分支**的 push 都会跑第 1 项。
 
 ## 提交信息
