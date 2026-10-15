@@ -58,8 +58,11 @@ export const DEFAULT_MAX_EXTRACTED = 16
  *
  * v1：候选只过滤长度、空白与虚字。
  * v2：候选必须是纯字母或汉字（`u4e00`、`0x1c`、`9_`、`v1` 这类残片出局）。
+ * v3：词表改从正文统计（原先数的是「已被选中的词」，让 IDF 退化成字典序）；
+ *     边界自由度为零的候选降权；并列时按语料频次兜底而不是字典序；
+ *     整段中文（原文切片）限制在四字以内且不许含虚字。
  */
-export const ENTRY_RULE_ID = 'bigram-idf-v2'
+export const ENTRY_RULE_ID = 'bigram-idf-v3'
 
 /**
  * 虚字表：含这些字的二字组几乎不携带主题信息。
@@ -92,13 +95,43 @@ const MIN_TERM = 2
 const MAX_TERM = 8
 
 /**
+ * 整段中文作为入口时的长度上限。
+ *
+ * 切词把「连续汉字」整段当成一个词（见 util/text.ts），于是正文里的任意片段都会成为
+ * 候选：「全程没有建分支」「为什么会这样」「写在文档里」。它们只是原文的切片，不会被
+ * 任何查询命中，却实打实占着每 atom 只有十几个的槽位。
+ *
+ * 真词里超过四字的极少（尤其在「一句话讲一件事」的 atom 里），所以按四字封顶。
+ */
+const MAX_HAN_TERM = 4
+
+/** 单码点是否为汉字。 */
+const isHan = (ch: string): boolean => ch >= '\u4e00' && ch <= '\u9fff'
+
+/**
+ * 「边界自由度为零」的候选（疑似跨词边界碎片）的降权系数。
+ *
+ * 判据本身有数据支持：对每个二字组统计它左右两侧汉字邻居的种类数，碎片总有一侧恒定
+ * ——「位阈」永远左「位」右「值」，而真词两侧都多样。人工标注的 60 个样本上，
+ * 「两侧邻居都多于一种」把真词与碎片分开到 96.7%（AUC 0.973）。
+ *
+ * 但它**高精度、低召回**：判为碎片的那一组里仍有约三成是真词，硬过滤会连带扔掉它们。
+ * 所以只降权。系数取得足够小，让碎片落到「有真词可选」的槽位之外，又不至于在候选
+ * 不足时把槽位空出来 —— 空槽位比一个次优入口更糟。
+ */
+const FRAGMENT_PENALTY = 0.35
+
+/**
  * 该词元是否值得作为入口。
  *
- * 三条判据，全部是**候选资格**（进不进候选池），不是打分——因为在小库上打分并不工作：
- * 库里词元大多只出现一次时，IDF 给出的权重几乎相同（df=0 与 df=1 只差约 3%），
- * 排序实际上退化为「候选顺序 + 字典序」。此时唯一有效的手段是别让噪声进候选池。
+ * 判据全部是**候选资格**（进不进候选池），不是打分。
  *
- * 判据三（必须纯字母或汉字）来自实测：入口段里混进的 `u4e00`、`0x1c`、`9_`、`v1`、
+ * 这条边界当初是拿一个错误的前提划的：那时 df 从 entry 表统计，于是它的取值被压成
+ * 0~5 六个值、权重大量并列，看上去「打分在小库上不工作」。真正的原因在统计来源，
+ * 不在打分本身 —— 改成从正文统计后取值域展开，打分随即恢复工作（见 buildVocabIndex）。
+ * 候选资格过滤仍然值得保留：它管的是「明显不像词的东西」，那本来就不该由打分负责。
+ *
+ * 判据（必须纯字母或汉字）来自实测：入口段里混进的 `u4e00`、`0x1c`、`9_`、`v1`、
  * `0335` 全部含数字或符号。它们在库里「绝无仅有」，因此 IDF 反而给最高分，
  * 会挤占每个主题只展示 8 条的窗口。代价是 `x86` 这类纯字母数字组合的专有词会
  * 被一并剔除——实测全库只有 1 个 atom 受影响，而这些词本可以写进 declared 入口。
@@ -107,47 +140,132 @@ function isUsableTerm(term: string): boolean {
   const t = term
   if (t.length < MIN_TERM || t.length > MAX_TERM) return false
   if (/\s/.test(t)) return false
+  // 纯字母或汉字：数字、下划线、其他符号一律不作入口。
+  if (!/^[A-Za-z\u4e00-\u9fff]+$/.test(t)) return false
   const cps = Array.from(t)
+  // 三字以上的整段中文走的是「连续汉字不被分隔符切开」那条路，不是切出来的词，
+  // 因此多给它一条只在整段上才有意义的约束：长度封顶 + 不许含虚字。
+  // 二字组不走这条路 —— 单字虚字表用在二字组上会误杀真词（「记忆」含「记」、
+  // 「实测」含「测」、「目录」含「目」），这是另一处待处理的副作用，不在本次范围。
+  if (cps.length > 2 && cps.every(isHan)) {
+    if (cps.length > MAX_HAN_TERM) return false
+    for (const cp of cps) if (STOP_CHARS.has(cp)) return false
+    return true
+  }
+  // 二字组用单字虚词表过滤。**它确实有成片的误杀** ——「记忆」含「记」、「实测」含「测」、
+  // 「目录」含「目」，一次挡掉全部纯汉字二字型的 34%。这条判据是从「泛词表」拆字得来的，
+  // 把词级判断降格成了字级判断，量级上明显过头。
+  //
+  // 但**去掉它更糟**，这是实测过的（同库、同 gold 集，只改这一处）：去掉后窗口里的二字型
+  // 立刻被「一个 / 一步 / 不是 / 个就 / 为什 / 么会」这类跨词边界碎片填满，3-4 字真词反而
+  // 从 73 条掉到 25 条，排名分布也整体后移。误杀的代价是可度量的，放进来的噪声不可用。
+  // 正确的修法是换一条**词级**判据（而不是继续调这张字表），那需要别的证据，不在本次范围。
   if (cps.length === 2) {
     for (const cp of cps) if (STOP_CHARS.has(cp)) return false
   }
-  // 纯字母或汉字：数字、下划线、其他符号一律不作入口。
-  if (!/^[A-Za-z\u4e00-\u9fff]+$/.test(t)) return false
   return true
 }
 
+/** 一个词元在语料里的全部统计。 */
+export interface TermStat {
+  /** 出现在多少个 atom 里。 */
+  df: number
+  /** 在整个语料里出现的总次数。 */
+  tf: number
+  /** 左邻汉字是否不止一种。false 表示它总是紧跟在同一个字后面。 */
+  leftVaried: boolean
+  /** 右邻汉字是否不止一种。 */
+  rightVaried: boolean
+}
+
 /**
- * 词表索引：term → 使用该 term 的不同 atom 数。
+ * 词表索引：term → 它的语料统计。
  *
  * 为什么用 DF 动态阈值而不是把停用词表做大：**泛词是相对于语料定义的**，不是绝对属性。
  * 「代理」在代理配置占主导的库里是泛词，在别的库里是有效入口。用 df/N 判定，等于让
  * 语料自己决定哪些词该被丢掉——这条规则不需要维护，也不会随语料迁移而失效。
  *
- * 代价：每次写入都全量扫一遍 entry 表。样本量下（万级）是可接受的毫秒量级；
- * 库大到成为瓶颈时再引入 term_df 汇总表，届时不必改动本模块的对外接口。
+ * **统计来源必须是 atom 正文，不能是 entry 表。** 这一点当初搞错了，后果很隐蔽：
+ * 从 entry 表统计，数的是「已经被选为入口的词」，绝大多数候选的 df 恒为 0，取值域被
+ * 压成 0~5 这六个值。实测 279 条 atom 的库里 75.99% 的 atom 十六个权重**完全并列**，
+ * IDF 排序退化成字典序 —— 实际选出的是「候选里码点最小的 16 个」。高频真词因此被
+ * 系统性挤掉（「记忆」在 57 条 atom 里出现过，入选 0 次），一次性噪声反而被奖励。
+ *
+ * 代价：每次写入都全量扫一遍 atom 正文。样本量下是可接受的毫秒量级；
+ * 库大到成为瓶颈时再引入汇总表，届时不必改动本模块的对外接口。
  */
 export interface VocabIndex {
   /** 该 term 出现在多少个 atom 里。 */
   df(term: string): number
   /** 语料总 atom 数（至少为 1）。 */
   total(): number
+  /** 完整统计。手写的最小词表可以不提供，调用方必须容忍它缺席。 */
+  stat?(term: string): TermStat | undefined
 }
 
-/** 从 entry 表构建词表索引。 */
+/** 累积中的统计：只需保留前两个不同的邻居，就足以判断「是否只有一种」。 */
+interface MutableStat {
+  df: number
+  tf: number
+  left1: string
+  left2: string | null
+  right1: string
+  right2: string | null
+}
+
+function noteNeighbor(s: MutableStat, side: string, ch: string): void {
+  if (side === 'left') {
+    if (s.left1 === '') s.left1 = ch
+    else if (s.left1 !== ch && s.left2 === null) s.left2 = ch
+    return
+  }
+  if (s.right1 === '') s.right1 = ch
+  else if (s.right1 !== ch && s.right2 === null) s.right2 = ch
+}
+
+/** 把一条正文的二字组统计并进词表。按码点走，避免劈开代理对。 */
+function accumulate(text: string, into: Map<string, MutableStat>): void {
+  const cps = Array.from(text)
+  const seen = new Set<string>()
+  for (let i = 0; i + 1 < cps.length; i++) {
+    const term = String(cps[i]) + String(cps[i + 1])
+    let s = into.get(term)
+    if (s === undefined) {
+      s = { df: 0, tf: 0, left1: '', left2: null, right1: '', right2: null }
+      into.set(term, s)
+    }
+    s.tf++
+    if (!seen.has(term)) {
+      seen.add(term)
+      s.df++
+    }
+    // 邻居只认汉字：标点与空白虽然也是边界证据，但它们同时也是「词可以在此结束」的
+    // 证据，把它算进来会削弱判据的指向性。
+    const l = i > 0 ? String(cps[i - 1]) : ''
+    const r = i + 2 < cps.length ? String(cps[i + 2]) : ''
+    if (l !== '' && isHan(l)) noteNeighbor(s, 'left', l)
+    if (r !== '' && isHan(r)) noteNeighbor(s, 'right', r)
+  }
+}
+
+/** 从全部 atom 正文构建词表索引。 */
 export function buildVocabIndex(db: DatabaseSync): VocabIndex {
-  // DISTINCT 保证 df 数的是 atom 而不是入口行；同一 atom 的 declared 与 extracted
-  // 撞词时不会把它算成两个 atom。
-  const rows = db.prepare('SELECT DISTINCT term, atom_id FROM entry').all() as Array<{
-    term: string
-    atom_id: number | bigint
-  }>
-  const map = new Map<string, number>()
-  for (const r of rows) map.set(String(r.term), (map.get(String(r.term)) ?? 0) + 1)
-  const total = Math.max(1, new Set(rows.map((r) => String(r.atom_id))).size)
-  return { df: (t: string) => map.get(t) ?? 0, total: () => total }
+  const rows = db.prepare('SELECT text FROM atom').all() as Array<{ text: unknown }>
+  const map = new Map<string, MutableStat>()
+  for (const r of rows) accumulate(String(r.text), map)
+  const total = Math.max(1, rows.length)
+  return {
+    df: (t: string) => map.get(t)?.df ?? 0,
+    total: () => total,
+    stat: (t: string) => {
+      const s = map.get(t)
+      if (s === undefined) return undefined
+      return { df: s.df, tf: s.tf, leftVaried: s.left2 !== null, rightVaried: s.right2 !== null }
+    },
+  }
 }
 
-/** 空词表——用于首次写入（此时 entry 表为空，不必查库）。 */
+/** 空词表——用于首次写入（此时库里没有 atom，不必查库）。 */
 export const EMPTY_VOCAB: VocabIndex = { df: () => 0, total: () => 1 }
 
 /** 由入口词生成 bigram 检索串（entry_fts 的 unicode61 按空白切分）。 */
@@ -167,7 +285,7 @@ export function extractedEntries(
   max = DEFAULT_MAX_EXTRACTED,
 ): EntryRecord[] {
   const candidates = bigramTerms(text)
-  const scored: Array<{ term: string; score: number }> = []
+  const scored: Array<{ term: string; score: number; tf: number }> = []
   // 分母要把**正在写入的这一条**算进去：词表是在落库前建的，不含它。
   // 不加这个 1，库里只有一条 atom 时 df/N = 1/1，眼下这条记忆会被自己压成泛词。
   const N = vocab.total() + 1
@@ -179,9 +297,16 @@ export function extractedEntries(
     const df = vocab.df(term)
     // 泛词直接丢弃：出现在半数以上 atom 里的词元区分度为 0（等同停用词）。
     if (dfFilterActive && df / N > 0.5) continue
-    scored.push({ term, score: Math.log((N - df + 0.5) / (df + 0.5) + 1) })
+    const st = vocab.stat?.(term)
+    let score = Math.log((N - df + 0.5) / (df + 0.5) + 1)
+    // 边界自由度为零：左邻或右邻始终是同一个汉字，多半是「前一个词的尾字 + 后一个词的
+    // 首字」这种跨词边界碎片。降权而非剔除的理由见 FRAGMENT_PENALTY。
+    if (st !== undefined && (!st.leftVaried || !st.rightVaried)) score *= FRAGMENT_PENALTY
+    scored.push({ term, score, tf: st?.tf ?? 0 })
   }
-  scored.sort((a, b) => b.score - a.score || (a.term < b.term ? -1 : 1))
+  // 兜底用 tf 而不是字典序：权重并列时（小库上很常见），出现过更多次的更可能是个真词，
+  // 至少是一个与检索有关的量；字典序选出来的是「码点最小的那几个」，没有任何含义。
+  scored.sort((a, b) => b.score - a.score || b.tf - a.tf || (a.term < b.term ? -1 : 1))
   const top = scored.slice(0, Math.max(0, max))
   const maxScore = top.length > 0 ? top[0]!.score : 0
   return top.map((s) => ({

@@ -86,7 +86,7 @@ export interface WriteThresholds {
 /**
  * 实例级状态。
  *
- * vocab 是进程内缓存（entry 表的 DF 索引）。不缓存的话每次写入都要全量扫 entry 表，
+ * 词表（atom 正文的 DF / 频次 / 边界自由度索引）**每次现算，不做缓存** —— 理由见 vocabOf。
  * 库大之后会成为写入路径的第一个瓶颈；缓存失效靠写入侧在入口变化时显式 bump。
  */
 export interface WriteCtx {

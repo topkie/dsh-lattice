@@ -364,12 +364,23 @@ describe('落位判据（decidePlacement 边界表）', () => {
   })
 })
 describe('写入管线：入口生成', () => {
-  it('抽取入口会滤掉虚字构成的二字组', () => {
+  it('抽取入口会滤掉虚字构成的二字组，真词则保留', () => {
+    const recs = extractedEntries('系统代理配置与缓存索引的说明。', buildVocabIndex(db))
+    const terms = recs.map((r) => r.term)
+    assert.ok(terms.includes('代理'), '真词应当入选')
+    assert.ok(terms.includes('缓存'), '真词应当入选')
+    assert.ok(!terms.includes('的说'), '含虚字的二字组不该成为入口')
+    assert.ok(recs.every((r) => r.weight > 0 && r.weight <= 0.6))
+  })
+
+  it('整段中文（原文切片）不作为入口', () => {
+    // 切词把「连续汉字」整段当一个词，于是正文里的任意片段都会成为候选。
+    // 它们不会被任何查询命中，却占着每 atom 只有十几个的槽位。
     const recs = extractedEntries('这是一个用于测试的结论，因为所以但是因此。', buildVocabIndex(db))
     const terms = recs.map((r) => r.term)
-    assert.ok(!terms.includes('一个'), '含虚字的二字组不该成为入口')
-    assert.ok(terms.length > 0)
-    assert.ok(recs.every((r) => r.weight > 0 && r.weight <= 0.6))
+    assert.ok(!terms.includes('因为所以但是因此'), '超过四字的整段中文是原文切片')
+    assert.ok(!terms.includes('这是一个用于测试的结论'))
+    assert.ok(!terms.includes('用于测试的'), '三字以上、含虚字的片段同样出局')
   })
 
   it('declared 入口权重恒为 1.0，且同名入口不被 extracted 覆盖', () => {
