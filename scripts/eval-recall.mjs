@@ -1,13 +1,13 @@
-// T10 评测：dsh-lattice 与 memory-eternal 的等 token 召回对比。
+// 召回对比：dsh-lattice 与另一套在用的召回系统，在**等 token 预算**下的 Recall@5。
 //
 // 评测集构造（自动化，见下）：对每张卡，取其 H2 标题与标签构造「信息需求」，
 // 正确答案就是这张卡本身。这样得到 (query, 目标卡) 对，无需人工标注。
 //
 // 两条被测路径：
-//   eternal  走 memory-eternal 的 /search（现役系统）
+//   other    走对照系统的 /search 端点（需它在本机运行）
 //   lattice  走本插件的召回 + 三段式注入
 //
-// 比较的是**同一 token 预算下的 Recall@5**（M1 的硬门）。token 用同一个估算器，
+// 比较的是**同一 token 预算下的 Recall@5**。token 用同一个估算器，
 // 所以「谁更省」这半边是可比的；「谁更准」那半边依赖查询集的质量 —— 见报告里的局限说明。
 //
 // 用法：node scripts/eval-recall.mjs [--limit=100]

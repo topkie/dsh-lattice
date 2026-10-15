@@ -5,7 +5,7 @@
 // 三条纪律：
 //   1. **只读原库**：全程只调 GET 端点，不写 memory-eternal
 //   2. **导出可缓存**：`--export` 把卡片文本存成 JSON，之后离线跑，便于重试与复现
-//   3. **校验不靠人眼**：T9 的判据是「每个原 H2 小节都能定位」，脚本自己核
+//   3. **校验不靠人眼**：判据是「每个原 H2 小节都能定位」，脚本自己核
 //
 // 用法：
 //   node scripts/migrate-eternal.mjs --export           仅导出
@@ -186,7 +186,7 @@ async function main() {
 
 function report(v) {
   console.log('')
-  console.log('=== T9 判据 ===')
+  console.log('=== 定位性判据 ===')
   console.log('原 H2 小节:', v.h2, ' | 可定位:', v.located, ' | 缺失:', v.missing.length)
   if (v.missing.length > 0) {
     console.log('缺失清单（前 10）:')
