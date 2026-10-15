@@ -1,12 +1,16 @@
 // dsh-lattice（记忆晶格）— DSH 记忆插件：无 LLM 依赖，本地向量检索 + Atom 级结构化记忆。
 //
-// 当前阶段只做两件事：
-//   1. 导出符合 Cordis 契约的插件接口（name / inject / Config / apply）
-//   2. 注册一个 lattice_ping 工具，证明工具注册链路可用
-// 真正的 lattice_write / lattice_recall / lattice_expand 在 T5/T8 落地。
+// 插件只做两件事：
+//   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
+//   2. 注册四个工具：ping（健康检查）、write、recall、expand
+//
+// **只有工具，没有 hook**：禁用 LLM 后「轮次结束自动沉淀」必然要调 LLM 做结构化，
+// 与本插件的定位冲突。写入与召回都必须是显式动作。
 
 import { readFileSync } from 'node:fs'
 import { deriveResourceParams } from './util/memory.js'
+import { resolveDataDir, type RuntimeConfig } from './state.js'
+import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -82,6 +86,30 @@ export function apply(ctx: any, config: any): void {
   const tools = ctx?.get?.('tools')
   if (tools === undefined || tools === null) return
 
+  // 三个业务工具。注册只是挂上定义，真正的库连接与模型加载都等到第一次调用
+  // （见 state.ts 的 getRuntime / runtimeEncode）—— 注册路径上不做重活。
+  const runtimeCfg: RuntimeConfig = {
+    dataDir: String(cfg.dataDir ?? ''),
+    encoderEnabled: cfg.encoderEnabled !== false,
+    encoderModel: String(cfg.encoderModel ?? 'Xenova/bge-small-zh-v1.5'),
+    encoderMirror: String(cfg.encoderMirror ?? ''),
+    encoderCacheDir: String(cfg.encoderCacheDir ?? ''),
+    thresholds: {
+      tauJoin: Number(cfg.tauJoin ?? 0.78),
+      tauLex: Number(cfg.tauLex ?? 0.05),
+      tauLexOnly: Number(cfg.tauLexOnly ?? 0.1),
+      tauNew: Number(cfg.tauNew ?? 0.5),
+    },
+    viewBudget: Number(cfg.viewBudget ?? 6000),
+    topN: Number(cfg.topN ?? 24),
+    resources: {
+      mmapSize: cfg.mmapSize > 0 ? Number(cfg.mmapSize) : undefined,
+      cacheSize: cfg.cacheSize > 0 ? Number(cfg.cacheSize) : undefined,
+      busyTimeout: cfg.busyTimeout > 0 ? Number(cfg.busyTimeout) : undefined,
+    },
+  }
+  for (const t of buildTools(runtimeCfg)) tools.register(t)
+
   tools.register(
     defineTool({
       name: 'lattice_ping',
@@ -104,7 +132,9 @@ export function apply(ctx: any, config: any): void {
           ok: true,
           plugin: name,
           version: VERSION,
-          dataDir: cfg.dataDir || '(default)',
+          // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
+          dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
+          tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand'],
           encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
           thresholds: {
             tauJoin: cfg.tauJoin,

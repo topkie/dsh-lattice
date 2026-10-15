@@ -75,6 +75,14 @@ export interface RecallMeta {
   /** 主属命中数 / 次属命中数。 */
   primaryHits: number
   secondaryHits: number
+  /**
+   * 命中里最高的余弦相似度；无向量时为 0。
+   *
+   * 为什么需要它：召回**总会**返回 topN 条，不管相关性多低。调用方只看「有没有命中」
+   * 无法判断质量，会以为「完全不相关的问题」也命中了。把这个数报出来，调用方才有依据
+   * 决定是采纳还是忽略。
+   */
+  topCosine: number
   elapsedMs: number
 }
 
@@ -490,6 +498,16 @@ export function recall(
     })
   }
   hits.sort((a, b) => b.final - a.final)
+  // 最高余弦：只统计有向量的命中（词面命中也在列表里，但它们不带余弦）。
+  let topCosine = 0
+  if (queryVec !== null) {
+    for (const h of hits) {
+      const v = vecMap.get(h.id)
+      if (v === undefined) continue
+      const c = cosine(queryVec, v)
+      if (c > topCosine) topCosine = c
+    }
+  }
   const suppressed = suppressDuplicates(db, hits, vecMap)
   const kept = hits.slice(0, topN)
 
@@ -517,6 +535,7 @@ export function recall(
       shortTermMiss,
       vectorMissing: queryVec === null,
       suppressed,
+      topCosine,
       primaryHits,
       secondaryHits,
       elapsedMs: Date.now() - t0,

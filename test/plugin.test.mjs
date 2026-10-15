@@ -33,21 +33,23 @@ describe('插件契约', () => {
     assert.equal(typeof apply, 'function')
   })
 
-  it('激活时注册健康检查工具', () => {
+  it('激活时注册四个工具', () => {
     const ctx = fakeCtx()
     apply(ctx, baseConfig)
-    assert.equal(ctx.registered.length, 1)
-    assert.equal(ctx.registered[0].name, 'lattice_ping')
-    assert.equal(typeof ctx.registered[0].output.render, 'function')
+    const names = ctx.registered.map((t) => t.name).sort()
+    assert.deepEqual(names, ['lattice_expand', 'lattice_ping', 'lattice_recall', 'lattice_write'])
+    for (const t of ctx.registered) assert.equal(typeof t.output.render, 'function')
   })
 
   it('健康检查返回版本与配置摘要', async () => {
     const ctx = fakeCtx()
     apply(ctx, baseConfig)
-    const out = JSON.parse(await ctx.registered[0].execute({}, {}))
+    // 按名字取 ping，不依赖注册顺序 —— 顺序是实现细节，不该被测试绑住。
+    const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
+    const out = JSON.parse(await ping.execute({}, {}))
     assert.equal(out.ok, true)
     assert.equal(out.plugin, 'lattice')
-    assert.equal(out.thresholds.tauJoin, 0.75)
+    assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
   })
 
   it('enabled=false 时不注册任何工具', () => {

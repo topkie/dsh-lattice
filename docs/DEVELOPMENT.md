@@ -28,6 +28,40 @@ node scripts/verify-encoder.mjs # 真实模型验证（需联网，不进 CI）
 pnpm 自身的依赖预检查而失败（报 pnpm 不是命令）。直接调用脚本入口可以绕开这一类不确定性，
 而且与 CI 用的是同一条命令。
 
+## 宿主工具
+
+插件只提供工具，**没有 hook**：禁用 LLM 后「轮次结束自动沉淀」必然要调 LLM 做结构化，
+与定位冲突。写入与召回都必须是显式动作。
+
+| 工具 | 作用 | 关键点 |
+|---|---|---|
+| `lattice_write` | 记住一件事 | 内容值得跨会话复用时才调用；`refs` 是显式入口词 |
+| `lattice_recall` | 按需取回 | 返回组装好的三段式文本，不是裸数组 |
+| `lattice_expand` | 展开全文 / 列兄弟 | 召回只给了摘要或截断正文时用 |
+| `lattice_ping` | 健康检查 | 报出解析后的数据目录、资源参数与工具清单 |
+
+### parameters 的形状（踩过）
+
+`defineTool` 的 `parameters` 是**「属性名 → 值 schema」的映射**，不是 `{type, properties}`：
+
+```js
+parameters: {
+  text: { type: "string", description: "...", required: true },
+  refs: { type: "array", items: { type: "string" }, description: "..." },
+}
+```
+
+写成 JSON Schema 包装会在 `defineTool` 调用时抛 `JsonSchemaError` —— 而那是**插件加载路径**，
+结果是整个插件加载失败、四个工具全部不可用。改参数 schema 后务必跑一次工具测试。
+
+### 低相关的处理（实测教训）
+
+召回**总会**返回 topN 条，不管相关性。曾想设一个硬门槛（低于它就说「没找到」），
+但真实模型上一测就否掉了：相关查询的相似度在 **0.45~0.70**，而一条「完全不相关的问题」
+拿到 **0.50** —— 在这个尺度上区分不开，硬门槛会把真相关的查询判成没找到。
+
+现行做法是**只标注不拦截**：如实报出最高相似度，弱相关时明示「可能不相关」，把判断权
+交回调用方。阈值 `LOW_RELEVANCE_HINT` 只是提示线，**不是判据**，标定前不要拿它拦截。
 ## 注入预算
 
 注入文本固定三段，各段有配额（`SEGMENT_RATIO`）：**锚 55% / 入口 20% / 路 25%**。
@@ -110,6 +144,7 @@ src/
 | `scripts/verify-write.mjs` | 写入闭环：同义改写能并入、异质记忆不被误并 |
 | `scripts/verify-recall.mjs` | 召回闭环：已知查询能否命中它该命中的那条记忆 |
 | `scripts/verify-view.mjs` | 注入组装：各段实际字符占比与裁剪是否按顺序触发 |
+| `scripts/verify-tools.mjs` | 工具端到端：注册、写入、召回、展开、健康检查（真实模型） |
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 
 调整落位阈值时，先跑 `probe-threshold.mjs` 拿到分布，再改 `DEFAULT_THRESHOLDS`，

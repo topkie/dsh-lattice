@@ -29,6 +29,8 @@ let state: EncoderState = 'idle'
 let lastError: string | null = null
 let extractor: ((input: string | string[], options: unknown) => Promise<unknown>) | null = null
 let loading: Promise<boolean> | null = null
+/** 已加载的模型标识。切换模型时必须重新加载 —— 否则会静默沿用旧模型。 */
+let loadedModel: string | null = null
 
 /** 当前状态。 */
 export function encoderState(): EncoderState {
@@ -46,6 +48,7 @@ export function resetEncoder(): void {
   lastError = null
   extractor = null
   loading = null
+  loadedModel = null
 }
 
 /**
@@ -54,9 +57,14 @@ export function resetEncoder(): void {
  * 失败不抛错——只把状态置为 unavailable 并记录原因。
  */
 export async function ensureEncoder(opts: EncoderOptions): Promise<boolean> {
-  if (state === 'ready') return true
-  if (state === 'unavailable') return false
-  if (loading) return loading
+  // 已就绪但**请求的是另一个模型**时必须重新加载：
+  // 状态与 extractor 是模块级单例，早先写成「ready 就直接返回 true」，
+  // 于是切换模型（或测试里换了替身）会静默沿用旧模型 —— 结果看起来正常、
+  // 向量却来自别的模型，属于最难查的一类错。
+  if (state === 'ready' && loadedModel === opts.model) return true
+  if (state === 'unavailable' && loadedModel === opts.model) return false
+  if (loading !== null && loadedModel === opts.model) return loading
+  if (state === 'ready' || state === 'unavailable') resetEncoder()
 
   loading = (async () => {
     state = 'loading'
@@ -69,11 +77,13 @@ export async function ensureEncoder(opts: EncoderOptions): Promise<boolean> {
         dtype: opts.dtype ?? 'q8',
       })) as typeof extractor
       state = 'ready'
+      loadedModel = opts.model
       lastError = null
       return true
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)
       extractor = null
+      loadedModel = opts.model
       state = 'unavailable'
       return false
     } finally {

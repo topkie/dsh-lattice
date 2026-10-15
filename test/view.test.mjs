@@ -83,6 +83,7 @@ function recallOf(hits, topics) {
       shortTermMiss: false,
       vectorMissing: true,
       suppressed: 0,
+      topCosine: 0,
       primaryHits: hits.length,
       secondaryHits: 0,
       elapsedMs: 0,
