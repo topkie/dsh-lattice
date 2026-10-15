@@ -54,7 +54,7 @@ dsh plugin --profile <profile> add dsh-lattice
 | `enabled` | `true` | 总开关 |
 | `dataDir` | 空 | 数据目录；留空使用默认位置 |
 | `encoderEnabled` | `true` | 关掉即为纯词面模式 |
-| `encoderModel` | `BAAI/bge-small-zh-v1.5` | 向量模型 |
+| `encoderModel` | `Xenova/bge-small-zh-v1.5` | 向量模型 |
 | `tauJoin` | `0.75` | 并入已有主题所需的余弦阈值 |
 | `tauLex` | `0.12` | 并入所需的词面重叠阈值 |
 | `tauNew` | `0.38` | 新建主题的余弦阈值 |

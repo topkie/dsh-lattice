@@ -40,6 +40,10 @@ export const Config = z.object({
   /** 关掉即纯词面模式（降级路径） */
   encoderEnabled: z.boolean().default(true),
   encoderModel: z.string().default('Xenova/bge-small-zh-v1.5'),
+  /** 模型下载源；留空用官方源，网络受限环境可指向镜像 */
+  encoderMirror: z.string().default(''),
+  /** 模型缓存目录；留空用运行时默认位置 */
+  encoderCacheDir: z.string().default(''),
   /** 并入阈值（余弦） */
   tauJoin: z.number().min(0.6).max(0.95).default(0.75),
   /** 并入所需的词面重叠（bigram-Jaccard） */

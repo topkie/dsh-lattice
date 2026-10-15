@@ -15,7 +15,7 @@ const baseConfig = {
   enabled: true,
   dataDir: '',
   encoderEnabled: true,
-  encoderModel: 'BAAI/bge-small-zh-v1.5',
+  encoderModel: 'Xenova/bge-small-zh-v1.5',
   tauJoin: 0.75,
   tauLex: 0.12,
   tauNew: 0.38,

@@ -6,3 +6,4 @@
 import './plugin.test.mjs'
 import './db.test.mjs'
 import './util.test.mjs'
+import './encoder.test.mjs'
