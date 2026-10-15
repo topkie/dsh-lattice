@@ -135,6 +135,8 @@ async function main() {
       kind: d.kind ?? '知识',
       source: label,
       sourceRef: d.sourcePath,
+      // 从外部来源导入 —— 所有权维度上，这与「用户说的」「模型推断的」都不是一回事。
+      origin: 'import',
     })
     actions[r.action]++
   }

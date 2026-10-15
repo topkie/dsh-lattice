@@ -135,6 +135,25 @@ function clip(s: string, max: number): string {
  *
  * 只需 db + 召回结果：不读配置、不碰编码器，便于单测直接喂构造好的 RecallResult。
  */
+/**
+ * 锚段行里的状态标记。
+ *
+ * 默认（模型写的、未被取代的）**不加标记** —— 大多数记忆都是这一类，给它们各加两个字
+ * 只是白占预算。只标需要区分的：用户亲口说的、从别处导入的、已被取代的。
+ *
+ * 为什么标在锚段、而不是另起一段清单：这三件事都改变「这条记忆该不该信」，而模型读到
+ * 锚段的时刻，正是它要做这个判断的时刻。id 本身是自增的，也就等于天然的写入顺序。
+ */
+function stateMark(h: { origin?: string; supersededBy?: number | null }): string {
+  const parts: string[] = []
+  if (h.origin === 'user') parts.push('我')
+  else if (h.origin === 'import') parts.push('导入')
+  if (h.supersededBy !== null && h.supersededBy !== undefined) {
+    parts.push('已被 #' + h.supersededBy + ' 取代')
+  }
+  return parts.length === 0 ? '' : '·' + parts.join('·')
+}
+
 export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: ViewOptions = {}): ViewResult {
   const budget = opts.budget ?? DEFAULT_BUDGET
   const anchorMax = opts.anchorMaxChars ?? DEFAULT_ANCHOR_MAX
@@ -185,7 +204,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
       const isSummary = st.anchorToSummary || full === h.summary
       const body = clip(full, st.anchorToSummary ? 64 : anchorMax)
       // 带 atom id：它是 lattice_expand 的入参；id 自增，也就等于天然的写入顺序。
-      const line = '- [' + h.id + '] ' + body
+      const line = '- [' + h.id + stateMark(h) + '] ' + body
       const cost = line.length + 1
       // 前 MIN_ANCHORS 条无论如何都要留下（保底），之后才看配额。
       if (anchorLines.length < MIN_ANCHORS || anchorsUsed + cost <= anchorQuota) {
@@ -194,7 +213,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
         anchorsUsed += cost
         if (isSummary) demoted++
       } else if (!st.anchorToSummary) {
-        const short = '- [' + h.id + '] ' + clip(h.summary, 60)
+        const short = '- [' + h.id + stateMark(h) + '] ' + clip(h.summary, 60)
         const sc = short.length + 1
         if (anchorsUsed + sc <= anchorQuota) {
           anchorLines.push(short)

@@ -22,10 +22,14 @@
 - 文本工具：CJK bigram 切词、码点安全的摘要抽取、Markdown 清洗、词面 Jaccard
 - 向量工具：float32 BLOB 编解码、点积 / 范数 / 归一化 / 余弦
 - 插件骨架：可被宿主加载的插件契约与健康检查工具
+- 状态信号：`atom.origin`（用户 / 模型 / 导入）、`superseded_by` 的写入与展示、召回命中计数。
+  锚段行按需带状态标记；`lattice_write` 用 `origin` 与 `supersedes` 表达所有权与取代关系
 
 ### Changed
 
 - 存储层：schema 改为**版本化迁移**（`MIGRATIONS` 按版本递进），新增 `meta` 表承载库自描述
+- schema v3：`atom` 增加 `origin` / `recall_hits` / `last_recalled_at`。迁移按 `source` 推断
+  已有行的所有权归属（导入路径带 source，运行时写入不带），追溯不到的一律留在默认值
 - 标准验证库：基准库现在自带「我是用哪套规则生成的」，生成方式固定为
   `scripts/build-baseline.mjs`；入口规则的改动必须同步 `ENTRY_RULE_ID`
 - 新增 `scripts/verify-recall-baseline.mjs`：基准库上的召回回归，入口规则改动后必跑

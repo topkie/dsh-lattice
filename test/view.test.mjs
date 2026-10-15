@@ -95,6 +95,32 @@ function hit(id, topicId, summary, score) {
   return { id, score, final: score, topicId, fit: 0.8, summary, ranks: { entry: 1 }, affiliation: 1 }
 }
 
+describe('注入组装：状态标记', () => {
+  it('用户说的与导入的会标记，模型写的且未被取代的不标', () => {
+    const a1 = seedAnim(db, 1, '构建', '构建产物需要把环境变量注入到打包流程里。', ['构建'])
+    const a2 = seedAnim(db, 1, '构建', '打包流程要区分开发与生产两套变量。', ['打包'])
+    const a3 = seedAnim(db, 1, '构建', '构建脚本统一放在 scripts 目录下管理。', ['脚本'])
+    const a4 = seedAnim(db, 1, '构建', '发布前要跑一次完整门禁再合并。', ['发布'])
+    const v = assembleView(
+      db,
+      recallOf(
+        [
+          { ...hit(a1, 1, '构建产物', 1), origin: 'user' },
+          { ...hit(a2, 1, '打包流程', 0.9), origin: 'import' },
+          { ...hit(a3, 1, '脚本目录', 0.8), origin: 'model', supersededBy: 42 },
+          { ...hit(a4, 1, '发布门禁', 0.7), origin: 'model' },
+        ],
+        [{ topicId: 1, label: '构建', hits: 4 }],
+      ),
+      {},
+    )
+    assert.ok(v.text.includes('[' + a1 + '·我]'), '用户说的要标「我」')
+    assert.ok(v.text.includes('[' + a2 + '·导入]'), '导入的要标「导入」')
+    assert.ok(v.text.includes('已被 #42 取代'), '被取代的要带后继 id')
+    assert.ok(v.text.includes('[' + a4 + '] '), '模型写的且未被取代的不加标记')
+  })
+})
+
 describe('注入组装：基本结构', () => {
   it('空召回产出空文本，不做无意义的空段头', () => {
     const v = assembleView(db, recallOf([], []), {})

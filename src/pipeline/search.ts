@@ -58,6 +58,10 @@ export interface RecallHit {
   ranks: Partial<Record<Channel, number>>
   /** 归属因子，1.0 表示主属命中。 */
   affiliation: number
+  /** 所有权归属：user / model / import。见 db/schema.ts 的 AtomOrigin。 */
+  origin: string
+  /** 被哪条记忆取代（atom id）；未被取代时为 null。 */
+  supersededBy: number | null
 }
 
 /** 召回元数据。退化必须可观测，不允许静默失效。 */
@@ -105,6 +109,8 @@ interface AtomRow {
   topicId: number
   fit: number
   summary: string
+  origin: string
+  supersededBy: number | null
 }
 
 /**
@@ -401,13 +407,14 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
   if (ids.length === 0) return out
   const ph = ids.map(() => '?').join(', ')
   const rows = db
-    .prepare('SELECT id, topic_id, fit, summary FROM atom a WHERE a.id IN (' + ph + ')')
+    .prepare('SELECT id, topic_id, fit, summary, origin, superseded_by FROM atom WHERE id IN (' + ph + ')')
     .all(...ids) as Array<{
     id: number | bigint
     topic_id: number | bigint
     fit: number
     summary: string
-    body: string
+    origin: string
+    superseded_by: number | bigint | null
   }>
   for (const r of rows) {
     out.set(Number(r.id), {
@@ -415,6 +422,8 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
       topicId: Number(r.topic_id),
       fit: Number(r.fit),
       summary: String(r.summary),
+      origin: String(r.origin),
+      supersededBy: r.superseded_by === null ? null : Number(r.superseded_by),
     })
   }
   return out
@@ -437,6 +446,24 @@ function secondarySet(db: DatabaseSync, ids: number[]): Set<number> {
  *   - 查询向量由调用方传入：本模块不加载模型，便于单测注入假向量
  *   - 失败不留白：任何一路缺席都体现在 meta 里
  */
+/**
+ * 记一次召回命中。
+ *
+ * 「命中」在这里的含义严格地是**被召回并进入了注入**，不是「模型用了它」—— 后者需要
+ * 反馈信号，而本插件不对模型的心思做假设。名字与文档都要守住这个区别，否则这个计数
+ * 会被读成它没有的含义。
+ *
+ * 会写库，因此调用方必须确保连接可写（工具侧可以，只读的复盘脚本不可以）。
+ */
+export function recordRecall(db: DatabaseSync, ids: readonly number[], now = Date.now()): number {
+  if (ids.length === 0) return 0
+  const ph = ids.map(() => '?').join(', ')
+  const r = db
+    .prepare('UPDATE atom SET recall_hits = recall_hits + 1, last_recalled_at = ? WHERE id IN (' + ph + ')')
+    .run(now, ...ids)
+  return Number(r.changes)
+}
+
 export function recall(
   db: DatabaseSync,
   query: string,
@@ -493,6 +520,8 @@ export function recall(
       topicId: row.topicId,
       fit: row.fit,
       summary: row.summary,
+      origin: row.origin,
+      supersededBy: row.supersededBy,
       ranks: acc.ranks,
       affiliation: aff,
     })

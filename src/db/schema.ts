@@ -18,7 +18,7 @@ import type { ResourceParams } from '../util/memory.js'
  * 结构变更必须 +1，并在 MIGRATIONS 末尾追加「把上一版升到这一版」的语句。
  * **历史步骤不可修改、不可删除**——已经发出去的库要靠它一路升上来。
  */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 /**
  * 连接建立时按序执行的 PRAGMA（不能放在事务里）。
@@ -194,7 +194,40 @@ const DDL_V2: readonly string[] = [
  *
  * 顺序即语义，不得重排 —— 旧库缺哪几步就跑哪几步（见 open.ts 的 migrate）。
  */
-export const MIGRATIONS: readonly (readonly string[])[] = [DDL_V1, DDL_V2]
+/**
+ * v3 新增：所有权与生命周期状态。
+ *
+ * `origin` 记「这条记忆是谁写的」，是**所有权维度**：用户说的、模型推断的、从别处导入的，
+ * 在「该不该信、该不该删」上不是一回事。原 schema 里只有 entry 与 atom_topic 有 origin，
+ * 那说的是「入口 / 归属是怎么来的」，atom 自己没有。
+ *
+ * 迁移时按 source 推断已有行：v1/v2 期间只有导入路径会带 source，运行时写入不带。
+ * 追溯不到的一律留在默认值 model —— 猜错所有权比留空更糟。
+ */
+const DDL_V3: readonly string[] = [
+  `ALTER TABLE atom ADD COLUMN origin TEXT NOT NULL DEFAULT 'model'`,
+  `UPDATE atom SET origin = 'import' WHERE source IS NOT NULL`,
+  `ALTER TABLE atom ADD COLUMN recall_hits INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE atom ADD COLUMN last_recalled_at INTEGER`,
+  `CREATE INDEX idx_atom_origin ON atom(origin)`,
+]
+
+/**
+ * 记忆的所有权归属。默认 model —— 写入方不声明时，按「模型写的」记。
+ *
+ * 为什么默认不是 user：判错的代价不对称。模型把用户的话记成 model，最坏是漏标；反过来
+ * 把模型的推断标成 user，用户会以为那是自己说过的 —— 而审计正是这个字段存在的理由。
+ */
+export type AtomOrigin = 'user' | 'model' | 'import'
+export const ATOM_ORIGINS: readonly AtomOrigin[] = ['user', 'model', 'import']
+
+/** 收敛写入方给的 origin：不认识的值退回 fallback，不让脏值进库。 */
+export function normalizeOrigin(v: unknown, fallback: AtomOrigin = 'model'): AtomOrigin {
+  const s = String(v ?? '')
+  return (ATOM_ORIGINS as readonly string[]).includes(s) ? (s as AtomOrigin) : fallback
+}
+
+export const MIGRATIONS: readonly (readonly string[])[] = [DDL_V1, DDL_V2, DDL_V3]
 
 /** 全部 DDL 的扁平视图，供建库校验比对 schema 对象是否齐全。 */
 export const DDL: readonly string[] = MIGRATIONS.flat()

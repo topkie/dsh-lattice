@@ -9,7 +9,7 @@
 //   lattice_expand  展开某条记忆的全文或它的兄弟
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { recall, type RecallMeta } from '../pipeline/search.js'
+import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { assembleView } from '../pipeline/view.js'
 import { writeAtom } from '../pipeline/write.js'
 import { getRuntime, runtimeEncode, type Runtime, type RuntimeConfig } from '../state.js'
@@ -92,6 +92,16 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       },
       topic_hint: { type: 'number', description: '已知归属主题 id 时直接指定，跳过几何定位' },
       scope: { type: 'string', description: 'global 或项目键，默认 global' },
+      origin: {
+        type: 'string',
+        description:
+          '这条记忆是谁说的：user（用户明确说过的）/ model（你推断或总结的，默认）/ import。' +
+          '用户亲口讲的事实、偏好、决定必须标 user —— 用户要凭这个字段分清「我说的」与「你推断的」。',
+      },
+      supersedes: {
+        type: 'number',
+        description: '本条取代哪条旧记忆的 atom id（改口、修订时用）。旧条只被标记，不会删除。',
+      },
     },
     output: textOutput(),
     async execute(args: Record<string, unknown>) {
@@ -100,12 +110,15 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (text === '') return '写入失败：text 不能为空。'
       const refs = Array.isArray(args?.refs) ? (args.refs as unknown[]).map((x) => String(x)) : []
       const hint = typeof args?.topic_hint === 'number' ? args.topic_hint : undefined
+      const sup =
+        typeof args?.supersedes === 'number' && Number.isFinite(args.supersedes) ? args.supersedes : undefined
       const r = await writeAtom(rt.write, {
         text,
         kind: str(args?.kind, '结论'),
         scope: str(args?.scope, 'global'),
         refs,
         topicHint: hint,
+        origin: str(args?.origin, 'model'),
       })
       const action = r.action === 'joined' ? '并入已有主题' : '新建主题'
       const reason = r.created === 'ambiguous' ? '（两个候选接近，已标记待定）' : ''
@@ -119,6 +132,18 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (r.hintMiss !== undefined) {
         lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按几何定位处理。')
       }
+      // 取代关系只落在这里：写入侧的事务内固定 O(1) 行数，多一条 UPDATE 就多一份
+      // 写锁持有时间，而这不是热路径。
+      if (sup !== undefined) {
+        const u = rt.db
+          .prepare('UPDATE atom SET superseded_by = ?, updated_at = ? WHERE id = ? AND id <> ?')
+          .run(r.atomId, Date.now(), sup, r.atomId)
+        lines.push(
+          Number(u.changes) === 0
+            ? '注意：要取代的记忆 #' + sup + ' 不存在，未建立取代关系。'
+            : '已把 #' + sup + ' 标记为被本条取代（旧条不会删除）。',
+        )
+      }
       return lines.join('\n')
     },
   })
@@ -126,8 +151,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const recallTool = defineTool({
     name: 'lattice_recall',
     description:
-      '按需取回记忆。返回组装好的三段式文本：【锚】是记忆正文（每条带 atom id），' +
-      '【入口】是相关说法，【路】是关联线索。' +
+      '按需取回记忆。返回组装好的三段式文本：【锚】是记忆正文（每条带 atom id，' +
+      'id 自增即写入先后；标「我」的是用户说过的、「导入」的是外部来源的、' +
+      '「已被 #N 取代」的是后来被修订掉的），【入口】是相关说法，【路】是关联线索。' +
       '需要历史结论、既有约定或踩过的坑时调用；纯粹的常识问答与临时任务不要调，一次召回不便宜。',
     parameters: {
       query: {
@@ -155,6 +181,16 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         const level = c >= 0.78 ? '高' : c >= 0.6 ? '中' : '低'
         notes.push('（最高相似度 ' + c.toFixed(2) + '，相关度' + level + '）')
       }
+      // 记一次命中。召回本身是只读语义，这一步失败不该让召回失败 —— 但也绝不假装成功：
+      // 库里的命中计数会因此偏低，这是刻意选的失败方向。
+      try {
+        recordRecall(
+          rt.db,
+          recalled.hits.map((h) => h.id),
+        )
+      } catch {
+        /* 只读连接等场景下记不了，不影响召回结果 */
+      }
       if (recalled.hits.length === 0) return notes.join('\n') + '\n\n没有找到相关记忆。'
       return notes.join('\n') + '\n\n' + view.text
     },
@@ -178,8 +214,18 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const rt = getRuntime(cfg)
       const id = typeof args?.atom_id === 'number' ? args.atom_id : NaN
       if (!Number.isFinite(id)) return '缺少 atom_id。'
-      const row = rt.db.prepare('SELECT id, kind, text, topic_id FROM atom WHERE id = ?').get(id) as
-        { id: number | bigint; kind: string; text: string; topic_id: number | bigint } | undefined
+      const row = rt.db
+        .prepare('SELECT id, kind, text, topic_id, origin, superseded_by FROM atom WHERE id = ?')
+        .get(id) as
+        | {
+            id: number | bigint
+            kind: string
+            text: string
+            topic_id: number | bigint
+            origin: string
+            superseded_by: number | bigint | null
+          }
+        | undefined
       if (row === undefined) return '没有 id 为 ' + id + ' 的记忆。'
       if (str(args?.mode, 'full') === 'related') {
         const rows = rt.db
@@ -189,8 +235,18 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         if (rows.length === 0) return head + '（无）'
         return [head, ...rows.map((r) => '- #' + Number(r.id) + ' ' + String(r.summary))].join('\n')
       }
+      const meta: string[] = []
+      if (String(row.origin) === 'user') meta.push('用户说的')
+      else if (String(row.origin) === 'import') meta.push('导入的')
+      if (row.superseded_by !== null) meta.push('已被 #' + Number(row.superseded_by) + ' 取代')
       return [
-        '#' + Number(row.id) + ' [' + String(row.kind) + '] 主题 #' + Number(row.topic_id),
+        '#' +
+          Number(row.id) +
+          ' [' +
+          String(row.kind) +
+          '] 主题 #' +
+          Number(row.topic_id) +
+          (meta.length > 0 ? '（' + meta.join('，') + '）' : ''),
         '',
         String(row.text),
       ].join('\n')

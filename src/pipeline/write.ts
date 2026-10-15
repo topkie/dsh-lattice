@@ -11,6 +11,7 @@
 // 糊掉）。词面的区分度更高，两票都过才允许并入。
 
 import type { DatabaseSync } from 'node:sqlite'
+import { normalizeOrigin } from '../db/schema.js'
 import {
   cosine,
   decodeVec,
@@ -43,6 +44,11 @@ export interface WriteInput {
   refs?: string[]
   /** 写入方指定主属 topic：跳过几何定位，直接归属。 */
   topicHint?: number
+  /**
+   * 这条记忆的所有权归属：user / model / import，默认 model。
+   * 不认识的值会被收敛回默认（见 db/schema.ts 的 normalizeOrigin），脏值不进库。
+   */
+  origin?: string
 }
 
 /** 落位判定的证据。全部保留，便于事后复盘「为什么归到了这里」。 */
@@ -346,6 +352,7 @@ interface CommitRow {
   projectKey: string | null
   source: string | null
   sourceRef: string | null
+  origin: string
   nearId: number | null
   nearConf: number | null
 }
@@ -365,8 +372,8 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
   )
   const insertAtom = db.prepare(
     `INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key,
-                      source, source_ref, polarity, flags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)`,
+                      source, source_ref, origin, polarity, flags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)`,
   )
   const insertAtomTopic = db.prepare(
     'INSERT INTO atom_topic(atom_id, topic_id, weight, origin) VALUES (?, ?, ?, ?)',
@@ -405,6 +412,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
         row.projectKey,
         row.source,
         row.sourceRef,
+        row.origin,
         now,
         now,
       ).lastInsertRowid,
@@ -566,6 +574,7 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
       projectKey: input.projectKey ?? null,
       source: input.source ?? null,
       sourceRef: input.sourceRef ?? null,
+      origin: normalizeOrigin(input.origin),
       nearId,
       nearConf,
     },

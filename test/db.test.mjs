@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { META_ENTRY_RULE, checkEntryRule, ensureMeta, getMeta, readMeta, setMeta } from '../dist/db/meta.js'
 import { listObjects, migrate, openDb, openVault, schemaVersion } from '../dist/db/open.js'
-import { MIGRATIONS, SCHEMA_VERSION } from '../dist/db/schema.js'
+import { MIGRATIONS, SCHEMA_VERSION, normalizeOrigin } from '../dist/db/schema.js'
 import { ENTRY_RULE_ID } from '../dist/pipeline/entries.js'
+import { recordRecall } from '../dist/pipeline/search.js'
 
 let dbFile = ''
 
@@ -154,6 +155,55 @@ describe('库自描述', () => {
     const none = checkEntryRule(db, ENTRY_RULE_ID)
     assert.equal(none.ok, false)
     assert.equal(none.stored, null)
+    db.close()
+  })
+})
+
+describe('所有权与生命周期状态', () => {
+  it('origin 收敛：不认识的值退回默认，脏值不进库', () => {
+    assert.equal(normalizeOrigin('user'), 'user')
+    assert.equal(normalizeOrigin('import'), 'import')
+    assert.equal(normalizeOrigin(undefined), 'model')
+    assert.equal(normalizeOrigin('nonsense'), 'model')
+    assert.equal(normalizeOrigin('nonsense', 'import'), 'import')
+  })
+
+  it('v1 的库升级后带 origin 列，导入行按 source 推断出来', () => {
+    const db = openDb(dbFile)
+    db.exec('BEGIN')
+    for (const stmt of MIGRATIONS[0]) db.exec(stmt)
+    db.exec('PRAGMA user_version = 1')
+    db.exec('COMMIT')
+    // 一条导入的（带 source）与一条运行时写的（不带）—— 迁移要能分开它们。
+    db.exec(
+      `INSERT INTO atom(id, kind, text, summary, embedding, scope, flags, source, created_at, updated_at)
+       VALUES (1, 'k', 't', 's', zeroblob(2048), 'global', 0, 'migrate', 0, 0)`,
+    )
+    db.exec(
+      `INSERT INTO atom(id, kind, text, summary, embedding, scope, flags, created_at, updated_at)
+       VALUES (2, 'k', 't', 's', zeroblob(2048), 'global', 0, 0, 0)`,
+    )
+    migrate(db)
+    const rows = db.prepare('SELECT id, origin FROM atom ORDER BY id').all()
+    assert.equal(String(rows[0].origin), 'import')
+    assert.equal(String(rows[1].origin), 'model')
+    db.close()
+  })
+
+  it('命中计数只增不改，且不碰未命中的行', () => {
+    const { db } = openVault(dbFile)
+    const ins = db.prepare(
+      'INSERT INTO atom(id, kind, text, summary, embedding, scope, flags, created_at, updated_at) VALUES (?, ?, ?, ?, zeroblob(2048), ?, 0, 0, 0)',
+    )
+    for (const id of [1, 2]) ins.run(id, 'k', 't', 's', 'global')
+    // IN 里有重复值也只更新一次 —— 正是想要的：同一次召回里同一条记忆只记一次。
+    assert.equal(recordRecall(db, [1, 1, 1], 111), 1)
+    assert.equal(recordRecall(db, [1], 222), 1)
+    assert.equal(recordRecall(db, [], 333), 0)
+    const rows = db.prepare('SELECT id, recall_hits, last_recalled_at FROM atom ORDER BY id').all()
+    assert.equal(Number(rows[0].recall_hits), 2)
+    assert.equal(Number(rows[0].last_recalled_at), 222)
+    assert.equal(Number(rows[1].recall_hits), 0)
     db.close()
   })
 })
