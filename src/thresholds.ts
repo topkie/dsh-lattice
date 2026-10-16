@@ -30,6 +30,16 @@ import {
   MAX_HAN_TERM,
   FRAGMENT_PENALTY,
   MIN_NEIGHBOR_EVIDENCE,
+  MILLIS_PER_DAY,
+  LEARNED_FEATURE_TERMS,
+  LEARNED_COOLDOWN_HOURS,
+  LEARNED_HALF_LIFE_DAYS,
+  LEARNED_FORGET_COUNT_EFF,
+  LEARNED_MAX_PER_ATOM,
+  LEARNED_GLOBAL_FACTOR,
+  LEARNED_PROMOTE_COUNT,
+  LEARNED_PROMOTE_RECENT_DAYS,
+  LEARNED_PROMOTE_MAX_WEIGHT,
 } from './pipeline/entries.js'
 import { LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT } from './pipeline/list.js'
 import { AFFILIATION, CHANNEL_WEIGHT, DUP_COS, DUP_LEX, MAX_QUERY_TERMS, RRF_K } from './pipeline/search.js'
@@ -169,6 +179,9 @@ export interface DesignGap {
 
 /** 设计文档在开发笔记里的位置（本仓库 docs/ 只放工程文档，设计正文不进公开仓库）。 */
 const DESIGN_DOC = '开发笔记 设计/技术文档/7.配置项清单.md'
+
+/** T17 的 learned 反哺参数出自设计报告 §27，不是配置项清单，单独指一处。 */
+const DESIGN_DOC_T17 = '开发笔记 设计/设计报告/27.Entry三级权重与learned反哺.md'
 
 /** 全部登记项。按模块分块，与源码顺序一致，便于对照审查。 */
 export const THRESHOLDS: readonly ThresholdEntry[] = [
@@ -632,6 +645,156 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-15，2026-10-17 复核',
     },
     variesWith: ['中文 bigram 的候选密度（切词规则）', '正文长度分布', '语料语言'],
+  },
+  // ────────────────────── learned 反哺（entries.ts，T17）──────────────────────
+  //
+  // 这一组全部来自设计报告 §27「防抖六条」，**没有一条在本库上标定过** —— 每条的 evidence
+  // 都如实这么写。本机也没有可比的对照：反哺的效果要几十次真实召回才显现，那需要一段
+  // 真实使用期，不是一次探针能造出来的。
+  {
+    name: 'LEARNED_FEATURE_TERMS',
+    area: '入口',
+    value: () => LEARNED_FEATURE_TERMS,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_FEATURE_TERMS' },
+    affects: '一次召回反哺几个查询特征词（取 query 的 TF-IDF 前三，与写入侧同一套抽取规则）',
+    calibration: {
+      evidence: '**设计文档给的值，未在本库标定**：§27 反哺三步第 1 条「取 query 的 TF-IDF top-3 特征词」',
+    },
+    variesWith: ['查询长度分布', '一次召回命中多少条 atom（乘数效应）', '冷启动阶段库还小、IDF 不稳'],
+    design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 第 1 条', default: 3 },
+  },
+  {
+    name: 'MILLIS_PER_DAY',
+    area: '入口',
+    value: () => MILLIS_PER_DAY,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'MILLIS_PER_DAY' },
+    affects: 'learned 的冷却与半衰期换算（本模块里唯一一处「天」到毫秒的换算）',
+    calibration: {
+      evidence:
+        '**单位换算，不是经验阈值**。登记它是因为门禁要求每个模块级数值常量都有登记行；它与语料无关，不需要标定',
+    },
+    variesWith: ['不随时间或语料变化'],
+  },
+  {
+    name: 'LEARNED_COOLDOWN_HOURS',
+    area: '入口',
+    value: () => LEARNED_COOLDOWN_HOURS,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_COOLDOWN_HOURS' },
+    affects: '冷却：同一（查询词, atom）在这个窗口内只记 1 次，重复查询不构成重复证据',
+    calibration: { evidence: '**设计文档给的值，未在本库标定**：§27 防抖第 1 条「24 h 内只记 1 次」' },
+    variesWith: ['一次会话里重复同一问法的频率', '召回频次（低频库里冷却几乎不触发）'],
+    design: { doc: DESIGN_DOC_T17, key: '防抖第 1 条（单位与代码一致，都是小时）', default: 24 },
+  },
+  {
+    name: 'LEARNED_HALF_LIFE_DAYS',
+    area: '入口',
+    value: () => LEARNED_HALF_LIFE_DAYS,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_HALF_LIFE_DAYS' },
+    affects: '遗忘与淘汰共用的证据强度 count_eff 的半衰期',
+    calibration: { evidence: '**设计文档给的值，未在本库标定**：§27 防抖第 2 条「90 天半衰期」' },
+    variesWith: ['记忆的实际复用周期', '召回频次'],
+    design: { doc: DESIGN_DOC_T17, key: '防抖第 2 条', default: 90 },
+  },
+  {
+    name: 'LEARNED_FORGET_COUNT_EFF',
+    area: '入口',
+    value: () => LEARNED_FORGET_COUNT_EFF,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_FORGET_COUNT_EFF' },
+    affects: '遗忘线：count_eff 低于它的 learned 行删除',
+    calibration: {
+      evidence:
+        '**与设计文档的 1.5 分叉，两者都没有在本库标定。** 文档的公式是 count += exp(-Δt_days/90)，' +
+        '即 count 是实数累加；而 entry.hits 是 INTEGER NOT NULL，没有第二列能存小数累加值。' +
+        '整数事件数下 count_eff = hits × 2^(-Δ/90) ≤ hits，1.5 这条线会把 hits=1 的行在写下的' +
+        '那一刻就删掉（1 < 1.5）—— 反哺等于没做。改记 0.5 的含义是「残留证据不足半个事件」：' +
+        'hits=1 静默 90 天后消失、hits=2 静默 180 天后消失。**0.5 同样没有实测依据**，' +
+        '它是「整数计数下这条线唯一说得通的位置」，不是标定结果',
+    },
+    variesWith: ['hits 的存储口径（若将来改成小数累加，这条线要按文档回到 1.5）', '召回频次'],
+    design: { doc: DESIGN_DOC_T17, key: '防抖第 2 条（文档取 1.5，代码取 0.5，见 diverges）', default: 1.5 },
+    diverges:
+      '**文档 1.5 ｜ 代码 0.5**，理由见 evidence：文档的 count 是实数累加，hits 是整数列。' +
+      '这不是调参分歧，是存储口径不一致导致同一个数字无法照抄',
+  },
+  {
+    name: 'LEARNED_MAX_PER_ATOM',
+    area: '入口',
+    value: () => LEARNED_MAX_PER_ATOM,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_MAX_PER_ATOM' },
+    affects: '单 atom 的 learned 入口上限，超出按 count_eff 淘汰最低的',
+    calibration: { evidence: '**设计文档给的值，未在本库标定**：§27 防抖第 3 条「learned 入口 ≤ 12 条」' },
+    variesWith: [
+      'extracted 入口上限（DEFAULT_MAX_EXTRACTED=16）—— 两者是同一批槽位的两半',
+      '真实召回里「查询词不属于该 atom 已有入口」的比例（T17 探针实测这个比例很高，上限很少触发）',
+    ],
+    design: { doc: DESIGN_DOC_T17, key: '防抖第 3 条', default: 12 },
+  },
+  {
+    name: 'LEARNED_GLOBAL_FACTOR',
+    area: '入口',
+    value: () => LEARNED_GLOBAL_FACTOR,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_GLOBAL_FACTOR' },
+    affects: '全局 learned 上限 = 此系数 × 库里的 atom 数，超出按 count_eff 淘汰最低的',
+    calibration: {
+      evidence: '**设计文档给的值，未在本库标定**：§27 防抖第 4 条「learned 总数 ≤ 5 × n_atoms」',
+    },
+    variesWith: ['库的 atom 数（这个上限随库增长，因此不是固定额度）'],
+    design: { doc: DESIGN_DOC_T17, key: '防抖第 4 条', default: 5 },
+  },
+  {
+    name: 'LEARNED_PROMOTE_COUNT',
+    area: '入口',
+    value: () => LEARNED_PROMOTE_COUNT,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_PROMOTE_COUNT' },
+    affects: '升档线：count_eff 到线且最近有命中时，learned 行的分值升到 extracted 档（0.6）',
+    calibration: { evidence: '**设计文档给的值，未在本库标定**：§27 反哺三步第 3 条「count ≥ 5」' },
+    variesWith: [
+      '冷却窗口（24 h）与整数计数：hits ≥ 5 意味着至少 5 个跨 24 h 的事件，即约 5~7 天的使用',
+      '召回频次；低频库里升档几乎不会发生',
+    ],
+    design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 第 3 条（文档的 count 也是实数累加）', default: 5 },
+  },
+  {
+    name: 'LEARNED_PROMOTE_RECENT_DAYS',
+    area: '入口',
+    value: () => LEARNED_PROMOTE_RECENT_DAYS,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_PROMOTE_RECENT_DAYS' },
+    affects: '升档与**降档**的时间窗：最近一次命中超出这个窗口就不再够格，已升档的降回 0.3',
+    calibration: {
+      evidence:
+        '**设计文档给的值，未在本库标定**：§27 第 3 条「30 天内出现 ≥ 2 次」。' +
+        '代码只有 (hits, last_seen) 两列，只能守住「最近一次命中在 30 天内」这半边：' +
+        '「30 天内出现 2 次」要事件级时间戳，表里没有第二列可存。另半边由冷却间接兜住 —— ' +
+        'hits ≥ 5 意味着至少 5 个跨 24 h 的事件',
+    },
+    variesWith: ['召回频次', '若将来给 entry 加一列「首次命中时间」，就能按文档实现完整的 30 天窗口'],
+    design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 第 3 条的「30 天内」', default: 30 },
+    diverges:
+      '**只实现了「最近一次命中在 30 天内」，没有实现「30 天内出现 ≥ 2 次」**：后者要事件级时间戳，' +
+      '表里只有 hits 与 last_seen。这是收窄，不是放宽',
+  },
+  {
+    name: 'LEARNED_PROMOTE_MAX_WEIGHT',
+    area: '入口',
+    value: () => LEARNED_PROMOTE_MAX_WEIGHT,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_PROMOTE_MAX_WEIGHT' },
+    affects: '升档能升到的分值上限 —— 取 ENTRY_WEIGHT.extracted，永不等于 declared 的 1.0',
+    calibration: {
+      evidence:
+        '**设计文档给的值，未在本库标定**：§27 第 3 条把「→ extracted」标为 0.6。' +
+        '代码把这条晋升表达成 **weight 的上限**而不是 **origin 的改写**（见 diverges），' +
+        '取值跟着 ENTRY_WEIGHT.extracted 走，不另写一份 0.6',
+    },
+    variesWith: ['ENTRY_WEIGHT.extracted（同一个数的两个出口，改一个必须看另一个）'],
+    design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 第 3 条（→ extracted，0.6）', default: 0.6 },
+    diverges:
+      '**文档改 origin（learned → extracted → declared），代码只改 weight，origin 恒为 learned。**' +
+      '三条理由：① weight 只被注入层的入口展示读（view.ts 的 topicEntries 按 MAX(weight) 排序），' +
+      '不参与召回打分（entryPath 用 FTS bm25），改 origin 换不到任何召回收益；' +
+      '② schema 那句 declared/learned 是真相源、extracted 可重算，靠 origin 区分能不能重算，' +
+      '把 learned 改写成 extracted 会让它在下次重算抽取时静默消失；' +
+      '③ 「用得多的词自动获得发言权」这件事上，升到 declared(1.0) 尤其不能做 —— ' +
+      '它把「这个词被查得多」写成了「写入方声明过这个词」。代码里没有 → declared 这一级',
   },
   // ──────────────────────────── 召回融合（search.ts）────────────────────────────
   {

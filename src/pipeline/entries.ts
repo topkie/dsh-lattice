@@ -5,7 +5,9 @@
 // 找到这条记忆。所以这里的取向很明确：宁可多给几个不那么优雅的入口，也不要漏。
 //
 // 三级权重（declared 1.0 / extracted 0.6 / learned 0.3）：写入侧只产前两级，
-// learned 由召回命中反哺，本模块不涉及。
+// learned 由召回命中反哺 —— 反哺也在这个模块里（feedLearned），但不在写入路径上：
+// 它由 lattice_recall 工具在返回前显式调用。入口不进正文向量，所以这一层冗余
+// 不影响知识正交。
 
 import type { DatabaseSync } from 'node:sqlite'
 import { bigramTerms, toSearchColumn } from '../util/text.js'
@@ -431,4 +433,354 @@ export function buildEntries(
   }
   for (const rec of extractedEntries(text, vocab, opts.max ?? DEFAULT_MAX_EXTRACTED)) keep(rec)
   return [...byTerm.values()]
+}
+
+// ───────────────────────── learned 反哺（召回 → 入口）─────────────────────────
+
+// 三级权重里只有前两级由写入产生。第三级 learned 是**召回的反哺**：一次召回把 query 的
+// 特征词记到它命中的 atom 上，于是同一个问法下次能直接命中入口层。入口不进正文向量，
+// 所以这一点点冗余不污染知识正交 —— 见文件头与 §27 防抖第 6 条。
+//
+// 触发点在 lattice_recall 工具里（本插件只有工具、没有 hook）：recall() 保持只读，
+// 反哺是它返回前的一次**显式**调用。下面这组常量决定「记什么、记多久、什么时候删」，
+// 全部登记在 thresholds.ts。
+
+/** 反哺时取 query 的几条特征词。 */
+export const LEARNED_FEATURE_TERMS = 3
+
+/** 一天的毫秒数。冷却与半衰期都以「天」为语义单位，换算只写在这里。 */
+export const MILLIS_PER_DAY = 86_400_000
+
+/** 冷却：同一（查询词, atom）在这么多小时内只记一次。 */
+export const LEARNED_COOLDOWN_HOURS = 24
+
+/** 遗忘：证据强度 count_eff 的半衰期（天）。 */
+export const LEARNED_HALF_LIFE_DAYS = 90
+
+/**
+ * 遗忘线：count_eff 低于此值的 learned 行删掉。
+ *
+ * **与设计文档 §27 的 1.5 分叉，理由在存储层。** 文档的公式是
+ * `count += exp(-Δt_days/90)`，即 count 是**实数累加**；而 entry.hits 是
+ * `INTEGER NOT NULL`，本仓库也没有第二个能存小数累加值的列。整数事件数下 1.5 是
+ * **自相矛盾**的线：count_eff = hits × 2^(-Δ/90) ≤ hits，所以只出现过一次的条目
+ * （hits=1）在写下的那一刻 count_eff 就已经 ≤ 1 < 1.5，会被立刻删掉 —— 反哺等于没做。
+ * 这里改用 0.5，含义是「残留证据不足半个事件」：hits=1 静默 90 天后消失，
+ * hits=2 静默 180 天后消失。整数计数下这是这条线唯一说得通的位置。
+ */
+export const LEARNED_FORGET_COUNT_EFF = 0.5
+
+/** 单个 atom 的 learned 入口上限。 */
+export const LEARNED_MAX_PER_ATOM = 12
+
+/** 全局 learned 上限 = 此系数 × 库里的 atom 数。 */
+export const LEARNED_GLOBAL_FACTOR = 5
+
+/** 升档线：count_eff 达到此值即把分值升到 extracted 档。 */
+export const LEARNED_PROMOTE_COUNT = 5
+
+/** 升档要求的最近命中窗口（天）。 */
+export const LEARNED_PROMOTE_RECENT_DAYS = 30
+
+/**
+ * 升档后的分值上限 —— **只到 extracted 的 0.6，永不等于 declared 的 1.0**。
+ *
+ * 为什么升档改的是 weight 而不是 origin：origin 是**来源**，weight 是**分值**。
+ * 把 learned 行的 origin 改成 extracted，等于声称「这个入口是从正文抽出来的」，而
+ * schema.ts 那句 `declared/learned 是真相源，extracted 可重算` 正是靠 origin 区分
+ * 「能不能重算」的：被改写的行会在下一次重算抽取时**静默消失**。改成 declared 更重 ——
+ * 那等于把「这个词被查得多」写成「写入方声明过这个词」。
+ *
+ * 分值升到 extracted 档已经拿到升档能带来的**全部**效果：weight 只被注入层的入口展示读
+ * （view.ts 的 topicEntries 按 MAX(weight) 排序），不参与召回打分 —— entryPath 用的是
+ * FTS 的 bm25，不看 weight。所以「升 origin」换不到任何召回收益，只换来一份伪造的来源。
+ *
+ * 另有一重结构自带的限幅：view.ts 取 `MAX(e.weight)`，同一个 term 上 declared 行恒为
+ * 1.0，升过档的 learned 行永远压不过写入方显式声明的入口。
+ */
+export const LEARNED_PROMOTE_MAX_WEIGHT = ENTRY_WEIGHT.extracted
+
+/** 一轮反哺的账。调用方可以忽略；测试与诊断靠它区分「没记」与「记了但被防抖挡住」。 */
+export interface LearnedFeedback {
+  /** 新建的 learned 行数。 */
+  created: number
+  /** 命中冷却后只把计数加一的行数。 */
+  reinforced: number
+  /** 因冷却被跳过的（查询词, atom）对数。 */
+  cooled: number
+  /** 该 atom 已有同名入口（declared / extracted）而跳过的对数 —— 不制造重复行。 */
+  covered: number
+  /** 本轮分值升到 extracted 档的次数。 */
+  promoted: number
+  /** 本轮因证据过期从 extracted 档**降回** learned 档的次数。 */
+  demoted: number
+  /** 因配额（单 atom / 全局）淘汰的行数。 */
+  evicted: number
+  /** 因证据衰减到遗忘线以下而删除的行数。 */
+  forgotten: number
+}
+
+/**
+ * learned 行的证据强度：整数事件数按半衰期衰减。
+ *
+ * 衰减在**读**的时候算，不落库。「每次事件把整段历史乘一次衰减再存回整数列」这条路
+ * 走不通：hits=1 乘 0.99 取整还是 1，计数永远停在 1，衰减等于不存在。读时算没有这个问题；
+ * 代价是「上次命中之前」的整段历史按同一时刻计权，比逐事件衰减略高估，高估量不超过 hits。
+ */
+export function learnedCountEff(hits: number, lastSeen: number, now: number): number {
+  const days = Math.max(0, (now - lastSeen) / MILLIS_PER_DAY)
+  return hits * Math.pow(2, -days / LEARNED_HALF_LIFE_DAYS)
+}
+
+/** 是否够升档：累计证据 count_eff 到线，**且**最近一次命中还在窗口内。 */
+function isPromoted(hits: number, lastSeen: number, now: number): boolean {
+  if (now - lastSeen > LEARNED_PROMOTE_RECENT_DAYS * MILLIS_PER_DAY) return false
+  return learnedCountEff(hits, lastSeen, now) >= LEARNED_PROMOTE_COUNT
+}
+
+/**
+ * 取 query 的特征词。**用写入侧同一套规则**（extractedEntries）—— 查询侧与写入侧共用
+ * 切词与打分，是这份索引早已定下的对称性要求。
+ *
+ * 顺带把泛词挡在门外：df/N > 0.5 的词在写入侧就被丢掉了，反哺若放它进来，
+ * 一次「之前定过什么」这样的提问就能把泛词写成某条记忆的入口，此后任何人问都会命中它。
+ */
+function learnedFeatureTerms(db: DatabaseSync, query: string): EntryRecord[] {
+  const q = String(query ?? '').trim()
+  if (q === '') return []
+  // 同一个词元在候选里可能出现多次（正文里重复出现），这里按 term 收敛成一条：
+  // 否则同一轮的同一个 (atom, term) 会被处理两遍，计数与账目都对不上。
+  const seen = new Set<string>()
+  const out: EntryRecord[] = []
+  for (const rec of extractedEntries(q, readVocab(db), LEARNED_FEATURE_TERMS)) {
+    if (seen.has(rec.term)) continue
+    seen.add(rec.term)
+    out.push(rec)
+  }
+  return out
+}
+
+/**
+ * 查询侧用的词表缓存：**只给反哺取特征词用**，写入侧仍然每次现算（见 write.ts 的 vocabOf）。
+ *
+ * 为什么这里敢缓存，而写入侧明确不缓：写入侧出过的事故是「失效之后在只有 1 条 atom 的库上
+ * 重建」，词表当场失真、整条记忆一个入口都生不出来 —— 那是**重建时机**错，不是缓存本身错。
+ * 这里的缓存键是 atom 表的 (行数, 最大 id, 最大 updated_at)，三者任一变化即重建；
+ * 而且它只决定「这次 query 的哪三个词被反哺」，不参与任何索引内容的生成。
+ *
+ * 不缓存的代价是实测的：1374 条 atom 的库上 buildVocabIndex 要 **113 ms**（T17 探针），
+ * 而这段开销会被加进每一次召回的返回路径。
+ */
+const READ_VOCAB = new WeakMap<DatabaseSync, { stamp: string; index: VocabIndex }>()
+
+function readVocab(db: DatabaseSync): VocabIndex {
+  const row = db.prepare('SELECT COUNT(*) AS n, MAX(id) AS mx, MAX(updated_at) AS mt FROM atom').get() as {
+    n: number | bigint
+    mx: number | bigint | null
+    mt: number | bigint | null
+  }
+  const stamp = row.n + '/' + row.mx + '/' + row.mt
+  const hit = READ_VOCAB.get(db)
+  if (hit !== undefined && hit.stamp === stamp) return hit.index
+  const index = buildVocabIndex(db)
+  READ_VOCAB.set(db, { stamp, index })
+  return index
+}
+
+/** (atom, term) 的复合键。用 \u0000 分隔，避免两个字段拼起来撞键。 */
+function entryKey(atomId: number, term: string): string {
+  return atomId + '\u0000' + term
+}
+
+/**
+ * 配额、遗忘与升档。一次扫过全部 learned 行，按**同一个量** count_eff 做四件事：
+ *
+ *   ① 遗忘：count_eff < LEARNED_FORGET_COUNT_EFF 的删掉（时间驱动的下界）
+ *   ② 单 atom 上限：某个 atom 的 learned 多于 LEARNED_MAX_PER_ATOM 时，删它最低的几条
+ *   ③ 全局上限：learned 总数多于 LEARNED_GLOBAL_FACTOR × atom 数时，删全局最低的几条
+ *   ④ 升档 / 降档：够线的把分值升到 extracted 档，静默久了再降回来（origin 不动）
+ *
+ * 四条规则共用一个量是刻意的：若一个看次数、一个看新旧，「最低的那条」在两条规则下会是
+ * 不同的行，淘汰顺序就无从解释，调参也只能靠猜。
+ *
+ * 代价是每轮反哺一次全表扫（entry 上 origin 没有索引）。实测开销见 T17 报告；
+ * 库大到这一步成为瓶颈时，正确做法是给 entry(origin) 加索引，而不是把扫描改成抽样 ——
+ * 抽样会让「谁被淘汰」变成不可复现的。
+ */
+function sweepLearned(db: DatabaseSync, now: number, out: LearnedFeedback): void {
+  const rows = db
+    .prepare("SELECT id, atom_id, hits, last_seen, weight FROM entry WHERE origin = 'learned'")
+    .all() as Array<{
+    id: number | bigint
+    atom_id: number | bigint
+    hits: number | bigint
+    last_seen: number | bigint | null
+    weight: number
+  }>
+  if (rows.length === 0) return
+
+  const scored = rows.map((r) => {
+    const lastSeen = r.last_seen === null ? 0 : Number(r.last_seen)
+    return {
+      id: Number(r.id),
+      atomId: Number(r.atom_id),
+      eff: learnedCountEff(Number(r.hits), lastSeen, now),
+      weight: Number(r.weight),
+      promoted: isPromoted(Number(r.hits), lastSeen, now),
+    }
+  })
+
+  const doomed = new Set<number>()
+  const drop = (row: { id: number }, kind: 'forgotten' | 'evicted'): void => {
+    if (doomed.has(row.id)) return
+    doomed.add(row.id)
+    out[kind]++
+  }
+
+  // ① 遗忘
+  for (const s of scored) if (s.eff < LEARNED_FORGET_COUNT_EFF) drop(s, 'forgotten')
+
+  // ② 单 atom 上限
+  const byAtom = new Map<number, typeof scored>()
+  for (const s of scored) {
+    const list = byAtom.get(s.atomId)
+    if (list === undefined) byAtom.set(s.atomId, [s])
+    else list.push(s)
+  }
+  const weakestFirst = (a: { eff: number; id: number }, b: { eff: number; id: number }): number =>
+    a.eff - b.eff || a.id - b.id
+  for (const list of byAtom.values()) {
+    if (list.length <= LEARNED_MAX_PER_ATOM) continue
+    list.sort(weakestFirst)
+    for (const s of list.slice(0, list.length - LEARNED_MAX_PER_ATOM)) drop(s, 'evicted')
+  }
+
+  // ③ 全局上限
+  const nAtoms = Number((db.prepare('SELECT COUNT(*) AS n FROM atom').get() as { n: number | bigint }).n)
+  const cap = LEARNED_GLOBAL_FACTOR * nAtoms
+  const survivors = scored.filter((s) => !doomed.has(s.id))
+  if (survivors.length > cap) {
+    survivors.sort(weakestFirst)
+    for (const s of survivors.slice(0, survivors.length - cap)) drop(s, 'evicted')
+  }
+
+  const del = db.prepare('DELETE FROM entry WHERE id = ?')
+  for (const id of doomed) del.run(id)
+
+  // ④ 分值升档 / 降档。放在删除之后，是因为它是**时间驱动**的：一条升过档的条目静默久了要
+  // 自己降回去，而「静默」这件事只有扫描时才知道。判据与遗忘、淘汰共用 count_eff，
+  // 额外要求最近一次命中还在窗口内。已经淘汰的行不再动 weight。
+  const setWeight = db.prepare('UPDATE entry SET weight = ? WHERE id = ?')
+  for (const s of scored) {
+    if (doomed.has(s.id)) continue
+    const want = s.promoted ? LEARNED_PROMOTE_MAX_WEIGHT : ENTRY_WEIGHT.learned
+    if (s.weight === want) continue
+    setWeight.run(want, s.id)
+    if (want === LEARNED_PROMOTE_MAX_WEIGHT) out.promoted++
+    else out.demoted++
+  }
+}
+
+/**
+ * 把一次召回反哺进入口表：query 的特征词记到命中的 atom 上。
+ *
+ * **会写库**，且写在调用方的事务之外（自己开一个）。因此不进 recall() —— 那一条路径的
+ * 契约是只读，混进来就再也没法从签名上看出「这次调用会不会改库」。
+ *
+ * 两处「不记」值得说明，它们都不是省事，是防冗余：
+ *   · 该 atom **已有同名入口**（declared / extracted）时不再建 learned 行。入口层的匹配
+ *     是 `term IN (...)` 与 entry_fts 的 bigram MATCH，多一行同义词只会让这个词在 FTS 里
+ *     的 df 变大、区分度下降 —— 这正是「越学越糊」的机制之一。
+ *   · 同一 (查询词, atom) 在冷却窗内只记一次。同一次会话里反复问同一件事，不该被当成反复证据。
+ */
+export function feedLearned(
+  db: DatabaseSync,
+  query: string,
+  atomIds: readonly number[],
+  now = Date.now(),
+): LearnedFeedback {
+  const out: LearnedFeedback = {
+    created: 0,
+    reinforced: 0,
+    cooled: 0,
+    covered: 0,
+    promoted: 0,
+    demoted: 0,
+    evicted: 0,
+    forgotten: 0,
+  }
+  const ids = [...new Set(atomIds)].filter((n) => Number.isFinite(n))
+  if (ids.length === 0) return out
+  const feats = learnedFeatureTerms(db, query)
+  if (feats.length === 0) return out
+
+  // 参与的 atom 的现有入口一次取回：冷却与「已有同名入口」两个判据都只需要这一批。
+  const ph = ids.map(() => '?').join(', ')
+  const rows = db
+    .prepare('SELECT id, atom_id, term, origin, hits, last_seen FROM entry WHERE atom_id IN (' + ph + ')')
+    .all(...ids) as Array<{
+    id: number | bigint
+    atom_id: number | bigint
+    term: string
+    origin: string
+    hits: number | bigint
+    last_seen: number | bigint | null
+  }>
+  const occupied = new Set<string>()
+  const learned = new Map<string, { id: number; hits: number; lastSeen: number }>()
+  for (const r of rows) {
+    const atomId = Number(r.atom_id)
+    const key = entryKey(atomId, String(r.term))
+    occupied.add(key)
+    if (String(r.origin) === 'learned') {
+      learned.set(key, {
+        id: Number(r.id),
+        hits: Number(r.hits),
+        lastSeen: r.last_seen === null ? 0 : Number(r.last_seen),
+      })
+    }
+  }
+
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO entry(atom_id, term, bigram, weight, origin, hits, last_seen, created_at)' +
+      " VALUES (?, ?, ?, ?, 'learned', 1, ?, ?)",
+  )
+  // 只动计数：分值由 sweepLearned 一处说了算（升档与降档用同一条判据，见那里）。
+  const touch = db.prepare('UPDATE entry SET hits = ?, last_seen = ? WHERE id = ?')
+  // 一小时的毫秒数由 MILLIS_PER_DAY 除出来，不再写第二个单位字面量。
+  const cooldownMs = LEARNED_COOLDOWN_HOURS * (MILLIS_PER_DAY / 24)
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const atomId of ids) {
+      for (const f of feats) {
+        const key = entryKey(atomId, f.term)
+        const prev = learned.get(key)
+        if (prev === undefined) {
+          if (occupied.has(key)) {
+            out.covered++
+            continue
+          }
+          insert.run(atomId, f.term, f.bigram, ENTRY_WEIGHT.learned, now, now)
+          occupied.add(key)
+          out.created++
+          continue
+        }
+        if (now - prev.lastSeen < cooldownMs) {
+          out.cooled++
+          continue
+        }
+        touch.run(prev.hits + 1, now, prev.id)
+        prev.hits++
+        prev.lastSeen = now
+        out.reinforced++
+      }
+    }
+    sweepLearned(db, now, out)
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+  return out
 }

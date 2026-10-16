@@ -17,12 +17,20 @@ import { resetEncoder } from '../dist/encoder/index.js'
 let dir = ''
 let tools = []
 
-/** 最小假 ctx：只实现插件用到的那一个服务。 */
+/**
+ * 最小假 ctx：只实现插件用到的那一个服务。
+ *
+ * 还要给一个 `inject`：插件用它把「有 Web 载体就挂一条只读路由」写成**条件**注入
+ * （见 src/index.ts）。真 cordis 的每个 ctx 都有这个方法；这里给个不执行回调的替身，
+ * 等价于「本用例的宿主没有 webServer 服务」。
+ */
 function fakeCtx() {
   const registered = []
   return {
     registered,
     get: (k) => (k === 'tools' ? { register: (t) => registered.push(t) } : undefined),
+    effect: (fn) => fn(),
+    inject: () => {},
   }
 }
 

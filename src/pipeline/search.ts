@@ -442,7 +442,10 @@ function secondarySet(db: DatabaseSync, ids: number[]): Set<number> {
  * 召回入口。
  *
  * 契约要点：
- *   - 只读：不写库、不记查询日志（learned 反哺由上层异步做，不阻塞返回）
+ *   - 只读：不写库、不记查询日志。learned 反哺**不在这里**，由 lattice_recall 工具在返回前
+ *     显式调用 entries.ts 的 feedLearned 完成。原先这里写的是「由上层异步做」—— 而本插件
+ *     只有工具、没有 hook（见 tools/index.ts 的文件头），那个「上层」并不存在，
+ *     照着它去找调度层只会白找。
  *   - 查询向量由调用方传入：本模块不加载模型，便于单测注入假向量
  *   - 失败不留白：任何一路缺席都体现在 meta 里
  */

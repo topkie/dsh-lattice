@@ -10,6 +10,7 @@
 //   lattice_list    列目录（「库里有什么」，只读、分页、可过滤）
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
@@ -26,12 +27,19 @@ function libraryLine(rt: Runtime): string {
   return '库：atom ' + atoms + ' / topic ' + topics + ' / entry ' + entries + ' / edge ' + edges
 }
 
-/** 工具的公共输出形状：一律返回纯文本，由 render 直接透传。 */
+/**
+ * 工具的公共输出形状：一律返回纯文本，由 render 直接透传。
+ *
+ * 两处 `as const` 不是装饰：宿主用**字面量**判别 schema（type: 'string'）与内容块
+ * （type: 'text'）。靠推断时 'string' 会先被推成 string，宿主的返回值推断随之落到
+ * never —— 报错落在「返回值不匹配」上，离真正的原因很远。
+ * （这是删掉宿主类型替身之后，第一次编译就撞上的两处。）
+ */
 function textOutput() {
   return {
-    schema: { type: 'string' },
+    schema: { type: 'string' as const },
     render(_args: unknown, value: unknown) {
-      return [{ type: 'text', text: String(value) }]
+      return [{ type: 'text' as const, text: String(value) }]
     },
   }
 }
@@ -220,6 +228,25 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         )
       } catch {
         /* 只读连接等场景下记不了，不影响召回结果 */
+      }
+      // learned 反哺：把这次查询的特征词记到命中的 atom 上（§27）。
+      //
+      // 为什么是**同步**、就在返回路径上：本插件只有工具、没有 hook，没有「上层」可以托付 ——
+      // 异步丢出去既没有等待点，失败也无处记账。写的量很小（≤ 命中数 × 3 对，且大部分会被
+      // 冷却与「该 atom 已有同名入口」挡掉）。失败方向与上面 recordRecall 一致：
+      // 入口学不到东西，但召回照常返回。
+      //
+      // 记的是 recalled.hits（进入 topN 的那批），不是最终渲染进文本的那批：后者取决于
+      // assembleView 的预算裁剪，而裁剪结果不在它的返回值里 —— 去解析渲染文本等于把
+      // 注入层的排版当成接口用。
+      try {
+        feedLearned(
+          rt.db,
+          q,
+          recalled.hits.map((h) => h.id),
+        )
+      } catch {
+        /* 只读连接等场景下写不了，不影响召回结果 */
       }
       if (recalled.hits.length === 0) return notes.join('\n') + '\n\n没有找到相关记忆。'
       return notes.join('\n') + '\n\n' + view.text
