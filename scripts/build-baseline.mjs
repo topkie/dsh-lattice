@@ -9,7 +9,18 @@
 //   node scripts/build-baseline.mjs --source <cards.json> [--out <dir>] [--label <名字>] [--mock]
 //
 // 输入：一份 JSON 数组，字段宽松（缺的按默认值补）：
-//   [{ "path": "唯一标识", "title": "标题", "kind": "结论", "text": "正文（Markdown）" }]
+//   [{
+//     "path": "唯一标识", "title": "标题", "kind": "结论", "text": "正文（Markdown）",
+//     "origin": "import", "scope": "global",
+//   }]
+//
+// origin / scope **原样透传**：卡上写了就用卡上的，卡上没写才回落到 import / global。
+// 为什么不让构建器自己判定：它不是推断来源的地方。一份构造出来的语料，它的来源与
+// 作用域是造语料的人定下的**约定**，构建器只负责把这个约定记进库 —— 一旦在这里
+// 改成「按文本猜」，库里的 origin 就从「谁写的」变成了「看起来像谁写的」，
+// 而依赖这个字段的审核与统计都无从察觉。
+// 回落值 import / global 的含义是「既不是用户说的、也不是模型推断的，且无项目域」，
+// 不是「已经查过作者」。
 //
 // 产出（默认 .probe/baseline/）：
 //   lattice.db        基准库
@@ -43,6 +54,9 @@ import { VEC_DIM } from '../dist/util/vec.js'
 
 const BUILDER = 'scripts/build-baseline.mjs'
 const MODEL = 'Xenova/bge-small-zh-v1.5'
+/** 卡上没写 origin / scope 时的回落值；含义见文件头「原样透传」一节。 */
+const DEFAULT_ORIGIN = 'import'
+const DEFAULT_SCOPE = 'global'
 /** 批量编码的分块大小：一次喂太多会让 ONNX 运行时占用陡增。 */
 const ENCODE_CHUNK = 32
 
@@ -59,6 +73,11 @@ function parseArgs(argv) {
     else if (a === '--label') out.label = argv[++i] ?? ''
   }
   return out
+}
+
+/** 取卡上的字符串字段：非空串才算「写了」，其余一律回落。 */
+function pickString(v, fallback) {
+  return typeof v === 'string' && v !== '' ? v : fallback
 }
 
 /** 构造向量：仅 --mock 使用，跑通链路而不等模型。 */
@@ -116,7 +135,10 @@ async function main() {
   for (const c of cards) {
     const { meta, body } = stripFrontmatter(String(c.text ?? ''))
     const kind = String(meta.kind ?? c.kind ?? '知识')
-    for (const d of draftAtoms(String(c.path ?? ''), body)) drafts.push({ ...d, kind })
+    // 空串与不写同义：一个空的 origin 不是「来源是空」，而是「卡没声明」。
+    const origin = pickString(c.origin, DEFAULT_ORIGIN)
+    const scope = pickString(c.scope, DEFAULT_SCOPE)
+    for (const d of draftAtoms(String(c.path ?? ''), body)) drafts.push({ ...d, kind, origin, scope })
   }
   console.log('来源 ' + cards.length + ' 篇 → 切出 atom 草稿 ' + drafts.length + ' 条')
 
@@ -135,8 +157,10 @@ async function main() {
       kind: d.kind ?? '知识',
       source: label,
       sourceRef: d.sourcePath,
-      // 从外部来源导入 —— 所有权维度上，这与「用户说的」「模型推断的」都不是一回事。
-      origin: 'import',
+      // 来源与作用域一律来自卡（见文件头）。写死 'import' 会让库永远是单一来源，
+      // 而这正是「来源 ≥ 2 类」测不出来的原因。
+      origin: d.origin,
+      scope: d.scope,
     })
     actions[r.action]++
   }
