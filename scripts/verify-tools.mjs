@@ -36,7 +36,20 @@ const cfg = {
 }
 
 const reg = []
-apply({ get: (k) => (k === 'tools' ? { register: (t) => reg.push(t) } : undefined) }, cfg)
+// 替身 ctx：只提供本脚本要验的那两件事。
+//
+// `inject` 是 T19 起宿主半用到的 —— 它拿它挂两条只读路由（`ctx.inject(['webServer'], cb)`）。
+// 真宿主的契约是「服务可用才调 cb」，所以这里**如实照做**：不提供 webServer，于是回调不执行。
+// 本脚本验的是工具，不是路由 —— 回调不跑正是它该有的行为。
+apply(
+  {
+    get: (k) => (k === 'tools' ? { register: (t) => reg.push(t) } : undefined),
+    inject: (_names, _cb) => {
+      /* 宿主里没有 webServer 时不调 cb，与真宿主一致 */
+    },
+  },
+  cfg,
+)
 const tool = (n) => reg.find((x) => x.name === n)
 console.log('注册的工具:', reg.map((t) => t.name).join(', '))
 
