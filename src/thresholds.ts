@@ -56,6 +56,7 @@ import {
   TIER_FULL_MIN,
   TRIM_ORDER,
 } from './pipeline/view.js'
+import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import {
   DEFAULT_THRESHOLDS,
   DEFAULT_TOP_N,
@@ -1017,22 +1018,83 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '注入',
     value: () => TIER_BRIEF_MIN,
     definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_BRIEF_MIN' },
-    affects: 'tierOf：最高余弦 >= 此值走精简档，低于它落到摘录档；同时是弱相关提示线的取值来源',
+    affects:
+      '库小于锚点表下端时的**默认**精简档下界；库 >= 12 条时生效值由 calibrate.ts 按规模给出，' +
+      '本常量不再等于生效值。它同时仍是弱相关提示线 LOW_RELEVANCE_HINT 的取值来源',
     calibration: {
       atoms: 279,
       origins: { import: 279 },
       scopes: { global: 279 },
       evidence:
-        '同 TIER_FULL_MIN（D15-2，279 条基准库、20 gold + 4 无关）：它压在无关上界 0.398 与 gold 下界 0.524' +
-        '之间，test/tools.test.mjs:210-211 以断言守住这两个界。真机上它还偏松：约 0.45 的**相关**查询被标成' +
-        '弱相关，而约 0.50 的**无关**查询没被标（《开发报告》弱相关提示一节：相关与无关在真机语料上本就重叠）',
-      at: '2026-10-16',
+        '两段来历，必须分开读。**① 原标定**（D15-2，279 条基准库、20 gold + 4 无关）：0.45 压在无关上界' +
+        ' 0.398 与 gold 下界 0.524 之间，test/tools.test.mjs:210-211 以断言守住这两个界。' +
+        '**② M3-T23-b 重标定（2026-10-17）**：本次在 1374 条基准库上复算，无关 top1 上界已升到 0.515、' +
+        '相关下界 0.525，0.45 落进无关分布内部（提示线静默失效）—— 故它降级为**默认值**，' +
+        '生效值改由 src/pipeline/calibrate.ts 的锚点表按库规模给出。复算口径：8 个规模点各 30 次降采样、' +
+        '20 gold + 20 无关、池化后扫「相关通过率 − 无关通过率」最大的切点，读数 0.466 / 0.470 / 0.492 /' +
+        ' 0.514 / 0.514 / 0.514 / 0.514 / 0.525（对应 12 / 24 / 48 / 96 / 192 / 384 / 768 / 1374 条）',
+      at: '2026-10-16（原标定）/ 2026-10-17（重标定）',
     },
-    variesWith: ['换编码模型', '库规模与来源分布', '语料的领域混合度'],
+    variesWith: ['换编码模型', '库规模（生效值随规模变，本常量不再等于生效值）', '语料的领域混合度'],
     diverges:
-      '**标定场景与运行场景不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠 ——' +
-      '即这条阈值在目标语料上并未分离。重标属后续执行点。' +
+      '**标定场景与运行场景不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。' +
+      '重标定已把生效值改成规模的函数（本次），但**弱相关提示线 LOW_RELEVANCE_HINT 仍是这个常数**' +
+      '（src/tools/index.ts:59 直接引用它）—— 工具层不在本次改动边界内，两处暂时分叉，见实现报告的未确定项。' +
       '**该基准库已于 2026-10-17 扩容**（57 → 442 源文件、279 → 1374 atom、origin 由全 import 变 3 类、scope 由全 global 变 5 类）；本字段的 atoms / origins / scopes 记的是**标定那一刻**的场景，不随库变化改写',
+  },
+  {
+    name: 'TIER_SCALE_MIN_ATOMS',
+    area: '注入',
+    value: () => TIER_SCALE_MIN_ATOMS,
+    definedBy: { file: 'src/pipeline/calibrate.ts', name: 'TIER_SCALE_MIN_ATOMS' },
+    affects: 'briefMinFor：库小于此规模时不做按规模标定，退回 TIER_BRIEF_MIN（= 0.45）',
+    calibration: {
+      evidence:
+        '锚点表最下端就是 12 条 —— 它是本次降采样实验的**最小规模点**，不是标定出来的最优规模。' +
+        '比它更小的库没有任何测量，按项目约定「查不到就留空」退回旧值，不编一段外推',
+      at: '2026-10-17',
+    },
+    variesWith: ['锚点表下端的规模点变化时'],
+  },
+  {
+    name: 'TIER_SCALE_STABLE_ATOMS',
+    area: '注入',
+    value: () => TIER_SCALE_STABLE_ATOMS,
+    definedBy: { file: 'src/pipeline/calibrate.ts', name: 'TIER_SCALE_STABLE_ATOMS' },
+    affects: '只用于可观测：低于此规模时，按规模插值出的阈值不可信（调用方据此区分标定值与插值值）',
+    calibration: {
+      // 这个数不是「标定语料的 atom 数」，而是「阈值稳定所需的最小规模」；
+      // 占 atoms 字段会把它读成前者，故只写在 evidence 里。
+      evidence:
+        'devnotes M3《T23-b-降采样实验》结论 2：「档位与提示阈值稳定所需的最小 atom 数」= **192**。' +
+        '判据是相关查询 p10 与无关查询 p95 的距离 >= 0.05，且在按 replicate 聚类的 1000 次重抽样里' +
+        '至少 80% 满足。**这是本次那个查询集上的结论，不是语料无关的常数**',
+      at: '2026-10-17',
+    },
+    variesWith: ['查询集（20 相关 + 20 无关是人工挑的）', '语料构成'],
+  },
+  {
+    name: 'TIER_SCALE_ANCHORS',
+    area: '注入',
+    value: () => TIER_SCALE_ANCHORS.map((a) => a.atoms + '→' + a.briefMin).join(' / '),
+    definedBy: { file: 'src/pipeline/calibrate.ts', name: 'TIER_SCALE_ANCHORS' },
+    affects: 'briefMinFor：按库规模给出精简档下界；点与点在 log2(atom 数) 尺度上线性插值，两端夹紧（不外推）',
+    calibration: {
+      atoms: 1374,
+      origins: { import: 279, model: 1026, user: 69 },
+      scopes: { design: 192, discuss: 69, global: 309, m3: 556, process: 248 },
+      evidence:
+        'M3-T23-b 重标定（2026-10-17）：基准库 1374 条 atom（扩容后，origin/scope 如本字段）。查询集是' +
+        ' 20 条 gold（各带目标记忆）+ 20 条人工无关查询。每个规模点 30 次独立降采样，把 30 次的相关样本' +
+        '与无关样本各自合成一个池，在池上扫出使「相关通过率 − 无关通过率」最大的切点。' +
+        '**表里的每个数都是该点实测到的那个切点，不是拟合值**；点之间的插值是「规模是连续量」的近似。' +
+        '复算脚本 dsh-lattice-devnotes/probes/t23b-recal-scan.mjs（留档 probes/t23b/recal/scan-*.json）',
+      at: '2026-10-17',
+    },
+    variesWith: ['查询集（人工挑的 20 + 20）', '换编码模型', '语料的领域混合度'],
+    diverges:
+      '**上端是夹紧，不是外推**：比 1374 条更大的库本次没有测量（T23-b 报告未确定项 5 记的同一件事），' +
+      '故 > 1374 条时取 0.525 不再上移。下端同理，< 12 条退回默认值 0.45',
   },
   {
     name: 'LOW_RELEVANCE_HINT',

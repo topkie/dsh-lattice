@@ -10,6 +10,7 @@
 // 宁可少给几条线索，也不能让信息本体被挤掉。
 
 import type { DatabaseSync } from 'node:sqlite'
+import { briefMinForDb } from './calibrate.js'
 import type { RecallResult } from './search.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
@@ -49,6 +50,8 @@ export interface ViewOptions {
 export interface ViewResult {
   /** 本次用的档位。写进结果是为了能观测，不是调用方需要读它。 */
   tier: ViewTier
+  /** 本次生效的精简档下界（按库规模标定）。写进结果是为了能观测。 */
+  briefMin: number
   /** 完整文本，直接注入。 */
   text: string
   anchors: number
@@ -76,20 +79,31 @@ export const DEFAULT_PATH_LINES = 15
  * 为什么是分档而不是门槛：边界判错时，分档最坏只是相邻档位的效率损失；门槛判错
  * 要么全给要么全不给 —— 而「全不给」正是最坏的那种（模型什么也没看到，却以为自己查过了）。
  *
- * 阈值来自实测（279 条基准库、20 条 gold 查询 + 4 条无关查询）：
+ * 完整档的线来自实测（279 条基准库、20 条 gold 查询 + 4 条无关查询）：
  *   相关 top1  min 0.524 / p50 0.683 ｜ 无关 top1  max 0.398
  * 两者之间是空的，所以取值本身不敏感；取空隙中间是为了容错，不是为了拟合。
+ *
+ * 精简档的线**不再是常数**：它是库规模的函数，见 calibrate.ts。原因是那次标定用的 0.45
+ * 依赖「无关 top1 上界 0.398」这个前提，而该上界随库长大单调上移（1374 条库上已是 0.515），
+ * 于是 0.45 会落进无关分布内部、提示线静默失效。TIER_BRIEF_MIN 保留为**库小到没法标定
+ * 时的默认值**，不再等于生效值。
  */
 export type ViewTier = 'full' | 'brief' | 'excerpt'
 
-/** 完整档的下界。 */
+/** 完整档的下界。不参与按库规模重标，理由见 calibrate.ts 末节。 */
 export const TIER_FULL_MIN = 0.55
-/** 精简档的下界；低于它落到摘录档。 */
+/** 精简档下界的**默认值**（库小于锚点表下端时用它）；生效值见 calibrate.ts。 */
 export const TIER_BRIEF_MIN = 0.45
 
-export function tierOf(topCosine: number): ViewTier {
+/**
+ * 按最高余弦判档。
+ *
+ * `briefMin` 省略时用 TIER_BRIEF_MIN —— 纯函数口径，测试与对照用；
+ * 生产路径由 inferTier 传入按库规模标定出的值。
+ */
+export function tierOf(topCosine: number, briefMin: number = TIER_BRIEF_MIN): ViewTier {
   if (topCosine >= TIER_FULL_MIN) return 'full'
-  if (topCosine >= TIER_BRIEF_MIN) return 'brief'
+  if (topCosine >= briefMin) return 'brief'
   return 'excerpt'
 }
 
@@ -204,9 +218,12 @@ function stateMark(h: { origin?: string; supersededBy?: number | null }): string
  * 纯词面模式（无查询向量）没有余弦可依，**不降档** —— 宁可多给几条，也不要因为
  * 「测不出来」而少给：降档是真的丢信息，多给只是多花一点预算。
  */
-function inferTier(recalled: RecallResult): ViewTier {
-  if (recalled.meta.vectorMissing) return 'full'
-  return tierOf(recalled.meta.topCosine)
+function inferTier(recalled: RecallResult, db: DatabaseSync): { tier: ViewTier; briefMin: number } {
+  // 纯词面模式没有余弦可依，档位用不到精简档的线；这里仍把标定值算出来，
+  // 是为了让结果里的 briefMin 始终是「本库当前生效的那条线」，不至于两种情形下语义不同。
+  const briefMin = briefMinForDb(db, TIER_BRIEF_MIN)
+  if (recalled.meta.vectorMissing) return { tier: 'full', briefMin }
+  return { tier: tierOf(recalled.meta.topCosine, briefMin), briefMin }
 }
 
 export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: ViewOptions = {}): ViewResult {
@@ -220,7 +237,8 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   //
   // 档位只改**初值**：超预算时仍然按 TRIM_ORDER 依次降级，「锚不为其他段让路」
   // 那条行为契约不因分档而改变，只是起点不同。
-  const tier = opts.tier ?? inferTier(recalled)
+  const inferred = inferTier(recalled, db)
+  const tier = opts.tier ?? inferred.tier
   const st = {
     pathLimit,
     perTopic: opts.entriesPerTopic ?? TIER_ENTRIES[tier],
@@ -358,6 +376,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
 
   return {
     tier,
+    briefMin: inferred.briefMin,
     text: b.text,
     anchors: b.anchorLines.length,
     entryTopics: b.entryLines.length,
