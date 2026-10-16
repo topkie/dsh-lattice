@@ -288,7 +288,7 @@ src/
 
 ## 代码风格
 
-由 ESLint + Prettier 统一，提交前跑 `pnpm run check` 即可。几条约定：
+由 ESLint + Prettier 统一，提交前跑 `node scripts/check-all.mjs` 即可（不用 `pnpm run`，理由见「常用命令」一节）。几条约定：
 
 - 注释说明**为什么**，不复述代码在做什么
 - 公共 API 带 JSDoc；内部函数按需
