@@ -44,9 +44,9 @@ const reg = []
 apply(
   {
     get: (k) => (k === 'tools' ? { register: (t) => reg.push(t) } : undefined),
-    inject: (_names, _cb) => {
-      /* 宿主里没有 webServer 时不调 cb，与真宿主一致 */
-    },
+    // 不声明参数：本替身**永远不会**调那个回调（真宿主在服务缺失时也不调），
+    // 声明了反而会被 no-unused-vars 判掉 —— `scripts/` 不吃 `src/` 那套 argsIgnorePattern。
+    inject: () => {},
   },
   cfg,
 )
