@@ -9,7 +9,6 @@ test/_*.db-wal
 test/_*.db-shm
 .probe/
 
-# 本地 agent 补充约定：宿主会自动加载它（优先级高于同目录的 AGENTS.md），
-# 但它属于个人工作方式，不该随提交影响其他人。
+# agent 工具的本地补充约定文件
 AGENTS.local.md
 CLAUDE.local.md
