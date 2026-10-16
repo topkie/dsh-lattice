@@ -9,6 +9,8 @@
 //      再叠一层 CJK bigram 索引（unicode61）兜底。
 //   3. **主题不落库中心向量**：topic 只存 sum_vec 与 n_atoms，归一化中心在查询时现算。
 //      这样增量加减与全量重算逐位等价，不会被浮点漂移破坏上面第 1 条不变量。
+//   4. **墓碑与活着的记忆分表**：显式删除（§44）的凭证进 `forgotten`，不进 `atom`。
+//      理由见 DDL_V4 —— 一句话：「活着的记忆」这条不变量不该靠每处查询都记得加过滤。
 
 import type { ResourceParams } from '../util/memory.js'
 
@@ -18,7 +20,7 @@ import type { ResourceParams } from '../util/memory.js'
  * 结构变更必须 +1，并在 MIGRATIONS 末尾追加「把上一版升到这一版」的语句。
  * **历史步骤不可修改、不可删除**——已经发出去的库要靠它一路升上来。
  */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 /**
  * 连接建立时按序执行的 PRAGMA（不能放在事务里）。
@@ -227,7 +229,43 @@ export function normalizeOrigin(v: unknown, fallback: AtomOrigin = 'model'): Ato
   return (ATOM_ORIGINS as readonly string[]).includes(s) ? (s as AtomOrigin) : fallback
 }
 
-export const MIGRATIONS: readonly (readonly string[])[] = [DDL_V1, DDL_V2, DDL_V3]
+/**
+ * v4 新增：显式删除的墓碑（§44）。
+ *
+ * **为什么单独一张表、不给 atom 加 deleted_at 列**：`atom` 每一行的语义是「一条活着的
+ * 记忆」。把墓碑混进去会污染**所有**对它的查询 —— 召回、目录、计数、健康指标 —— 而
+ * 「每处都要记得加过滤」正是本项目反复吃亏的形态。单独成表之后，「活着的记忆」这条
+ * 不变量继续由 `atom` 自己保证，一条 SQL 就能看出它成立。
+ *
+ * **墓碑是凭证，不是被隐藏的数据**：删完那条 atom 就真的不在了。这张表只记「它曾经
+ * 存在过」，用来在做不到「删了就再不出现」的地方把写回拦下来 —— 真删之后，写回本身
+ * 就不可检测了。
+ *
+ * **`embedding` 为什么也要留下来**：这条判据是「词面 + 余弦」两票，而余弦要拿被删那条的
+ *   - 与落位判据同粒度（§3/§20 的「是不是一件事」用的就是 bigram 集合 + Jaccard），
+ *     所以它不是一个新判据；
+ *   - 存文本而不是存哈希，是为了让一条 `SELECT fingerprint FROM forgotten` 就能看出
+ *     「拦的是哪几句话」—— 调试一个只在删除后才出现的判据，可读性比几十字节重要。
+ *     代价是每行比哈希大一个数量级，而它与「用户删除过的条数」同阶，远小于库本身。
+ */
+const DDL_V4: readonly string[] = [
+  `CREATE TABLE forgotten (
+    id          INTEGER PRIMARY KEY,
+    atom_id     INTEGER NOT NULL,
+    fingerprint TEXT    NOT NULL,
+    embedding   BLOB    NOT NULL,
+    kind        TEXT    NOT NULL,
+    scope       TEXT    NOT NULL DEFAULT 'global',
+    project_key TEXT,
+    origin      TEXT    NOT NULL DEFAULT 'model',
+    summary     TEXT    NOT NULL DEFAULT '',
+    deleted_at  INTEGER NOT NULL
+  )`,
+  `CREATE INDEX idx_forgotten_deleted ON forgotten(deleted_at DESC)`,
+  `CREATE INDEX idx_forgotten_scope ON forgotten(scope, project_key)`,
+]
+
+export const MIGRATIONS: readonly (readonly string[])[] = [DDL_V1, DDL_V2, DDL_V3, DDL_V4]
 
 /** 全部 DDL 的扁平视图，供建库校验比对 schema 对象是否齐全。 */
 export const DDL: readonly string[] = MIGRATIONS.flat()

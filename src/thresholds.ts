@@ -42,6 +42,7 @@ import {
   LEARNED_PROMOTE_MAX_WEIGHT,
 } from './pipeline/entries.js'
 import { LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT } from './pipeline/list.js'
+import { FORGOTTEN_MIN_BIGRAMS, FORGOTTEN_SCAN_LIMIT } from './pipeline/forget.js'
 import { AFFILIATION, CHANNEL_WEIGHT, DUP_COS, DUP_LEX, MAX_QUERY_TERMS, RRF_K } from './pipeline/search.js'
 import {
   DEFAULT_ANCHOR_MAX,
@@ -68,7 +69,7 @@ import { VEC_DIM } from './util/vec.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
 export type ThresholdArea =
-  '写入' | '落位' | '入口' | '召回融合' | '重排去重' | '注入' | '目录' | '迁移切分' | '资源'
+  '写入' | '落位' | '入口' | '召回融合' | '重排去重' | '注入' | '目录' | '迁移切分' | '资源' | '显式删除'
 
 /** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
@@ -1332,6 +1333,49 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     },
     variesWith: ['换编码模型'],
     diverges: '**结构性常量**，登记它是为了换模型时能被一条命令查出来',
+  },
+  // ─────────────────── 显式删除（forget.ts，T20 / §44）───────────────────────
+  {
+    name: 'FORGOTTEN_MIN_BIGRAMS',
+    area: '显式删除',
+    value: () => FORGOTTEN_MIN_BIGRAMS,
+    definedBy: { file: 'src/pipeline/forget.ts', name: 'FORGOTTEN_MIN_BIGRAMS' },
+    affects: '防写回判据的**可判下限**：两侧任一不足这么多 bigram 就不做判断（放行）',
+    calibration: {
+      evidence:
+        '**不是标定值，是一条有意义性下限**：Jaccard 是两边一比算出来的，2 个 bigram 对 20 个也能得 0.09。' +
+        '取 2 是复用 `entries.ts` 的 `MIN_TERM = 2`（bigram 的最小语义单位就是 2 个字符），' +
+        '不是另立一个数。**未做实测**：真正需要标定的是「多短算太短」，那要拿真实短记忆的分布来定',
+    },
+    variesWith: ['写入约定里一条记忆的最短长度'],
+    diverges: '**不是阈值而是下限**，登记它是为了让「防写回在多短的文本上不生效」可被一条命令查出来',
+  },
+  {
+    name: 'FORGOTTEN_SCAN_LIMIT',
+    area: '显式删除',
+    value: () => FORGOTTEN_SCAN_LIMIT,
+    definedBy: { file: 'src/pipeline/forget.ts', name: 'FORGOTTEN_SCAN_LIMIT' },
+    affects: '写入时最多比对多少条墓碑；超过时结果带 truncated，写入结果上会标出来',
+    calibration: {
+      evidence:
+        '**无记录**，是资源上限而非质量阈值：墓碑数与「用户删除过的条数」同阶，正常到不了。' +
+        '设它是为了让写入是**有界**的 —— 无上限的全表读会让写入随删除次数悄悄变慢',
+    },
+    variesWith: ['用户删除的累计条数', '写入路径的延迟预算'],
+  },
+  {
+    name: 'FORGET_BODY_MAX_BYTES',
+    area: '显式删除',
+    value: () => 4096,
+    definedBy: { file: 'src/index.ts', name: 'FORGET_BODY_MAX_BYTES' },
+    affects: '删除端点（唯一的写路由）接受的请求体上限',
+    calibration: {
+      evidence:
+        '**无记录**，是资源上限：删除请求只有一个整数 id，几百字节足够。' +
+        '设它是因为读请求体是累积式的，没有上限就等于允许任何本机进程让宿主堆任意大的字符串' +
+        '（回环不是「可信」，只是「本机」—— 宿主对插件路由不做鉴权）',
+    },
+    variesWith: ['请求体里要不要带更多字段'],
   },
 ]
 

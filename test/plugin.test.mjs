@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { EventEmitter } from 'node:events'
 import { Config, apply, inject, name } from '../dist/index.js'
 
 /**
@@ -92,7 +93,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把只读路由挂上去', () => {
+  it('宿主提供 webServer 时把四条路由挂上去（三条只读 + 一条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -108,11 +109,12 @@ describe('插件契约', () => {
     assert.deepEqual([...inject], ['tools'], '模块级 inject 不得包含 webServer')
     assert.deepEqual(ctx.injected, [['webServer']], '只对 webServer 做条件注入')
 
-    // M3-T19 的真界面加了目录与搜索两条，所以这里是三条而不是一条。
+    // M3-T19 加了目录与搜索（共三条只读），M3-T20 加了删除（唯一的写端点）。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
-    assert.equal(routes.length, 3, '三条只读路由都应挂上')
+    assert.equal(routes.length, 4, '三条只读路由 + 一条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-atoms',
+      '/api/lattice-forget',
       '/api/lattice-ping-mini',
       '/api/lattice-search',
     ])
@@ -120,6 +122,117 @@ describe('插件契约', () => {
       assert.equal(route.kind, 'exact')
       assert.equal(typeof route.handler, 'function')
     }
+  })
+
+  /**
+   * 写端点的三道栅栏。替身 req/res，按 node:http 的形状给最小字段。
+   *
+   * 只断言**本插件的行为**（AGENTS.md 第七节）：这里不验宿主会不会做某事，
+   * 只验这条 handler 在给定输入下拒了什么、放行了什么。
+   */
+  function forgetHandler() {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    apply(fakeCtx({ webServer }), baseConfig)
+    return routes.find((r) => r.path === '/api/lattice-forget').handler
+  }
+
+  /**
+   * 最小 res 替身：记状态码与 body。
+   *
+   * **必须是真 EventEmitter**：node:http 的 ServerResponse.end() 会走写路径并挂 `finish`，
+   * 普通对象上少一个 `on`，异常就会被 handler 的 catch 吞成 500 —— 断言因此拿到 500，
+   * 于是看起来像「栅栏没生效」，其实是替身没造全。
+   */
+  function fakeRes() {
+    const res = new EventEmitter()
+    res.out = { status: 0, body: null }
+    res.writeHead = (status) => {
+      res.out.status = status
+      return res
+    }
+    res.end = (text) => {
+      if (typeof text === 'string') {
+        try {
+          res.out.body = JSON.parse(text)
+        } catch {
+          res.out.body = text
+        }
+      }
+      return res
+    }
+    return res
+  }
+
+  /**
+   * 最小 req 替身：**必须是真 EventEmitter**。
+   *
+   * 一开始写成「调用 on('data') 时立刻回调」的普通对象，结果 handler 挂监听之前 body 就发完了，
+   * `readJsonBody` 的 Promise 永远不结算，express 层超时成了 500 —— 栅栏断言因此拿到 500 而不是
+   * 415。替身不按被替代物的时序来，测出来的就不是真实行为。
+   */
+  function fakeReq({
+    remote = '127.0.0.1',
+    method = 'POST',
+    type = 'application/json',
+    body = '{"atom_id":1}',
+  } = {}) {
+    const req = new EventEmitter()
+    req.socket = { remoteAddress: remote }
+    req.method = method
+    req.headers = type === null ? {} : { 'content-type': type }
+    req.url = '/api/lattice-forget'
+    req.destroy = () => {}
+    // 无论什么方法都发完 body：真实请求的流一定会结束，替身不发的话，handler 里
+    // `await readJsonBody` 的 Promise 永不结算 —— 那不是被测代码的行为，是替身的缺陷。
+    setImmediate(() => {
+      req.emit('data', Buffer.from(body, 'utf8'))
+      req.emit('end')
+    })
+    return req
+  }
+
+  it('写端点第一道栅栏：非回环来源 403，且不问它用什么方法', async () => {
+    const handler = forgetHandler()
+    const res = fakeRes()
+    await handler(fakeReq({ remote: '10.0.0.7' }), res)
+    assert.equal(res.out.status, 403)
+    assert.equal(res.out.body.error, 'forbidden')
+  })
+
+  it('写端点第二道栅栏：非 POST 405（GET 也拒，与只读端点方向相反）', async () => {
+    const handler = forgetHandler()
+    const res = fakeRes()
+    await handler(fakeReq({ method: 'GET' }), res)
+    assert.equal(res.out.status, 405)
+    assert.equal(res.out.body.error, 'method')
+  })
+
+  it('写端点第三道栅栏：content-type 不是 application/json 时 415', async () => {
+    const handler = forgetHandler()
+    // 这正是跨站表单能发出的那一种 —— 挡的就是它。
+    const res = fakeRes()
+    await handler(fakeReq({ type: 'application/x-www-form-urlencoded' }), res)
+    assert.equal(res.out.status, 415)
+    assert.equal(res.out.body.error, 'content-type')
+
+    // 缺头同样拒：默认值不算通过。
+    const res2 = fakeRes()
+    await handler(fakeReq({ type: null }), res2)
+    assert.equal(res2.out.status, 415)
+  })
+
+  it('改写体不是合法 JSON 时 400，而不是当成空删除', async () => {
+    const handler = forgetHandler()
+    const res = fakeRes()
+    await handler(fakeReq({ body: 'not json' }), res)
+    assert.equal(res.out.status, 400)
+    assert.equal(res.out.body.error, 'bad-body')
   })
 
   it('宿主没有 webServer 时不注册路由、不抛，四个工具照常在', () => {

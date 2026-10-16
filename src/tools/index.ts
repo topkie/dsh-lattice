@@ -8,13 +8,16 @@
 //   lattice_recall  按需取回（返回组装好的三段式文本，不是裸数组）
 //   lattice_expand  展开某条记忆的全文或它的兄弟
 //   lattice_list    列目录（「库里有什么」，只读、分页、可过滤）
+//
+// **还有第五个动作，但没有第五个工具**：删除。`lattice_forget` 刻意不在下面这个数组里
+// —— 理由见文件尾 `forgetTool` 上方那段注释。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
-import { writeAtom } from '../pipeline/write.js'
+import { ForgottenError, writeAtom } from '../pipeline/write.js'
 import { getRuntime, runtimeEncode, type Runtime, type RuntimeConfig } from '../state.js'
 
 /** 库现状一行——放在召回结果前面，让模型知道这个库有多大、值不值得再查。 */
@@ -148,14 +151,23 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const hint = typeof args?.topic_hint === 'number' ? args.topic_hint : undefined
       const sup =
         typeof args?.supersedes === 'number' && Number.isFinite(args.supersedes) ? args.supersedes : undefined
-      const r = await writeAtom(rt.write, {
-        text,
-        kind: str(args?.kind, '结论'),
-        scope: str(args?.scope, 'global'),
-        refs,
-        topicHint: hint,
-        origin: str(args?.origin, 'model'),
-      })
+      let r
+      try {
+        r = await writeAtom(rt.write, {
+          text,
+          kind: str(args?.kind, '结论'),
+          scope: str(args?.scope, 'global'),
+          refs,
+          topicHint: hint,
+          origin: str(args?.origin, 'model'),
+        })
+      } catch (e) {
+        // 防写回拦下（§44）。**不静默丢弃**：把「被拒了、以及为什么」原样交回写入方，
+        // 否则它会以为写成功了 —— 那才是这条判据真正的失败形态。
+        // 其余错误照旧上抛：输入类问题该显式失败，不该被这里吞成一句文本。
+        if (e instanceof ForgottenError) return describeForgetRejection(e)
+        throw e
+      }
       const action = r.action === 'joined' ? '并入已有主题' : '新建主题'
       const reason = r.created === 'ambiguous' ? '（两个候选接近，已标记待定）' : ''
       const lines = [
@@ -360,4 +372,55 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   })
 
   return [writeTool, recallTool, expandTool, listTool]
+}
+
+/**
+ * `lattice_forget` 的**定义**：它存在，但**不进工具表**。
+ *
+ * §11.1 的边界：物理删除归用户，模型只能**提议**。所以这个定义不放进 `buildTools`
+ * 返回的数组 —— 「模型可见的工具表」在本仓库里就是这个数组（`apply` 逐条注册它，
+ * 宿主呈现给模型的就是注册表里的可见条目；没有 `buildTools` 的返回，谁也不会注册它）。
+ *
+ * 那为什么还要写出来？因为**删除这个动作本身需要一个实现落点**。它的调用者是
+ * `src/index.ts` 的 `/api/lattice-forget` 写端点（界面上的删除按钮），不是模型。
+ * 把它写成一个工具定义而不是一段散在路由里的逻辑，是为了让「模型能做什么」与「用户
+ * 能做什么」在**同一个文件里**可以逐条对照 —— 边界被写下来，才有人能发现它被越过。
+ *
+ * 宿主对未注册的名字回 UNKNOWN_TOOL（`dsh-tools` 的注册表查找），所以模型即使从别处
+ * 知道这个名字也调不动。见 `test/tools.test.mjs` 里那条断言。
+ *
+ * 注意它**没有** `execute`：真正的实现在 `pipeline/forget.ts` 的 `forgetAtom`，由写端点
+ * 调用。这里不重复一份逻辑，避免出现第二个真相源。
+ */
+export const FORGET_TOOL_NAME = 'lattice_forget'
+
+export const FORGET_TOOL_SPEC = {
+  name: FORGET_TOOL_NAME,
+  description:
+    '删除一条记忆（物理删除 + 留痕）。**模型不可调用**：物理删除归用户（§11.1），模型只能提议。界面的删除入口调用 pipeline/forget.ts 的实现，不经过这里。',
+  parameters: {
+    atom_id: { type: 'number', description: '要删除的 atom id', required: true },
+    reason: { type: 'string', description: '删除原因（可选，只进反馈）' },
+  },
+} as const
+/**
+ * 被防写回判据拦下时，给写入方的**具体**反馈（§44：拦下之后不静默丢弃）。
+ *
+ * 为什么反馈里要写出墓碑号与日期：模型需要能对用户说清「这是你删过的那条」，
+ * 而一个「被拒绝了」不足以让它不再试。
+ */
+export function describeForgetRejection(err: ForgottenError): string {
+  const e = err.evidence
+  const how = e.how === 'both' ? '词面与语义都重合' : '语义高度接近（词面改写较大）'
+  const cos = e.cos === null ? '未算（无向量）' : e.cos.toFixed(3)
+  const when = new Date(e.deletedAt).toISOString().slice(0, 10)
+  const lines = [
+    '写入被拒：这条内容与用户删过的一条记忆重合（' + how + '）。',
+    '  原记忆 #' + e.atomId + '（' + e.kind + '，' + e.scope + '）：' + e.summary,
+    '  删除于 ' + when + '，墓碑 #' + e.tombstoneId + '。',
+    '  相似度：词面 ' + e.lex.toFixed(3) + '，余弦 ' + cos + '。',
+    '用户删除过的内容不会被重新写入。若这确实是一件新的事，请换一个角度写清楚它与原记忆的区别；不要重复提交同一句话。',
+  ]
+  if (err.truncated) lines.push('  注意：墓碑较多，本次只比对了最近 ' + err.scanned + ' 条。')
+  return lines.join('\n')
 }

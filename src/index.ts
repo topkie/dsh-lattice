@@ -4,11 +4,17 @@
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
 //   2. 注册四个工具：ping（健康检查）、write、recall、expand
 //
-// 外加三条**只读**路由给浏览器半取数用（见 apply 里的注释与文件尾的 handler）：
+// 外加四条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
 //   /api/lattice-ping-mini  库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
 //   /api/lattice-atoms      目录：分页 + 过滤，与 lattice_list 同一条数据路径
 //   /api/lattice-search     搜索：与 lattice_recall 同一条数据路径，但**不记命中**
-// 三条都只读：界面的写入口（删除）是 T20，不在这里。
+//   /api/lattice-forget     **删除**：物理删除 + 留痕（§44）。四条里唯一的写端点
+//
+// 前三条只读，栅栏只留「本机回环」一道；最后一条是写端点，三道（回环 + POST +
+// application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
+//
+// `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
+// 这个动作只有一个入口：用户在界面上点删除。
 //
 // **只有工具，没有 hook**：禁用 LLM 后「轮次结束自动沉淀」必然要调 LLM 做结构化，
 // 与本插件的定位冲突。写入与召回都必须是显式动作。
@@ -20,6 +26,7 @@ import { deriveResourceParams } from './util/memory.js'
 import { getRuntime, resolveDataDir, runtimeEncode, type RuntimeConfig } from './state.js'
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
 import { recall } from './pipeline/search.js'
+import { forgetAtom } from './pipeline/forget.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -59,6 +66,23 @@ const ATOMS_ROUTE_PATH = '/api/lattice-atoms'
 
 /** 搜索路由：一条查询进去，若干条命中出来。 */
 const SEARCH_ROUTE_PATH = '/api/lattice-search'
+
+/**
+ * 删除路由：本插件**唯一**的写端点，也是界面上唯一的删除入口（§11.1：物理删除归用户）。
+ *
+ * 为什么必须是一个写端点而不是工具：模型只能**提议**删除。`lattice_forget` 因此不进
+ * 模型可见的工具表（表达方式见 tools/index.ts 里那段注释），删除这个动作只能由用户
+ * 在界面上点出来。
+ */
+const FORGET_ROUTE_PATH = '/api/lattice-forget'
+
+/**
+ * 请求体上限。删除请求只有一个整数 id，几百字节足够。
+ *
+ * 为什么要有：`readJson` 是**累积**式的，没有上限就意味着任何能连上回环的人都能让宿主
+ * 为一个请求堆任意大的字符串。回环不是「可信」，只是「本机」（宿主对插件路由不做鉴权）。
+ */
+const FORGET_BODY_MAX_BYTES = 4096
 
 /**
  * 插件配置 schema。
@@ -221,6 +245,11 @@ export function apply(ctx: Context, config: unknown): void {
           path: SEARCH_ROUTE_PATH,
           handler: (req, res) => searchRoute(runtimeCfg, req, res),
         }),
+        webServer.register({
+          kind: 'exact',
+          path: FORGET_ROUTE_PATH,
+          handler: (req, res) => forgetRoute(runtimeCfg, req, res),
+        }),
       ]
       return () => {
         for (const dispose of disposers) dispose()
@@ -336,13 +365,26 @@ function reasonOf(e: unknown): string {
  *
  * 与 miniPing 里那段是有意的重复：那条路由是 T19 实测通过的基线，本轮不动它的函数体。
  */
-function guardReadOnly(req: IncomingMessage, res: ServerResponse): boolean {
+function guardLoopback(req: IncomingMessage, res: ServerResponse): boolean {
   const remote = req?.socket?.remoteAddress ?? ''
   const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
   if (!loopback) {
     jsonOut(res, 403, { ok: false, error: 'forbidden', message: '仅允许本机回环请求' })
     return false
   }
+  return true
+}
+
+/**
+ * 只读路由的栅栏：回环 + 只认 GET。
+ *
+ * 为什么回环那道要单独抽出来：写路由要的是「回环 + 只认 POST」，两者共用回环、
+ * 方法那一道方向相反。写成「写栅栏调用只读栅栏」是一次真实的口径错位 —— 那会让写
+ * 端点对**每一个** POST 都回 405，也就是写完的写端点根本用不了，而单元测试之外没有
+ * 任何东西会喊出来。（本文件里踩过：`guardWrite` 一开始就是那么写的。）
+ */
+function guardReadOnly(req: IncomingMessage, res: ServerResponse): boolean {
+  if (!guardLoopback(req, res)) return false
   if (req.method !== 'GET') {
     jsonOut(res, 405, { ok: false, error: 'method', message: '仅支持 GET' })
     return false
@@ -464,5 +506,123 @@ async function searchRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
     })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'search-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 写端点的栅栏：回环 + 只认 POST + 要求 application/json。
+ *
+ * 为什么比只读那组多两道（依据见 M3 的 T19 前置调研与修复报告）：只读路由无请求体，
+ * 跨站页面即使发得出去也**读不到响应**（插件路由不带任何 CORS 头），所以只留回环即可。
+ * 写路由不一样 —— 它不需要读到响应就已经造成了后果。
+ *
+ * 后两道挡的是**跨站简单请求**：HTML 表单只能发 `application/x-www-form-urlencoded`
+ * 或 `text/plain`，`fetch` 想发 `application/json` 就会触发预检，而预检需要 CORS 头，
+ * 本插件一个都不给。于是这两道合起来把「跨站页面借用户的浏览器删掉一条记忆」堵死。
+ *
+ * 顺序仍然是先回环后方法：外来的请求连「你用什么方法」都不该问。
+ */
+function guardWrite(req: IncomingMessage, res: ServerResponse): boolean {
+  if (!guardLoopback(req, res)) return false
+  if (req.method !== 'POST') {
+    jsonOut(res, 405, { ok: false, error: 'method', message: '仅支持 POST' })
+    return false
+  }
+  const type = String(req.headers?.['content-type'] ?? '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase()
+  if (type !== 'application/json') {
+    jsonOut(res, 415, {
+      ok: false,
+      error: 'content-type',
+      message: '仅接受 application/json（跨站表单发不出这个类型）',
+    })
+    return false
+  }
+  return true
+}
+
+/**
+ * 读一个 JSON 请求体。
+ *
+ * 上限见 `FORGET_BODY_MAX_BYTES`：累积式读取没有上限就等于让任何本机进程为所欲为。
+ * 超限**不静默截断** —— 截断的 JSON 解析失败会得到一句「格式不对」，把「你发太大了」
+ * 这个真实原因藏起来。
+ */
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > FORGET_BODY_MAX_BYTES) {
+        reject(new Error('请求体超过 ' + FORGET_BODY_MAX_BYTES + ' 字节'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      if (raw.trim() === '') {
+        // 空体是调用方写错了，不是「删除全部」—— 显式拒绝，不给任何默认动作。
+        reject(new Error('请求体为空'))
+        return
+      }
+      try {
+        resolve(JSON.parse(raw))
+      } catch (e) {
+        reject(new Error('请求体不是合法 JSON：' + reasonOf(e)))
+      }
+    })
+    req.on('error', (e) => reject(e))
+  })
+}
+
+/**
+ * 删除：物理删除 + 留痕（§44）。
+ *
+ * 这是本插件唯一的写入口。它不做二次确认（§43：用户点删除 = 完整授权，过闸的对象是
+ * **模型的操作**），也没有回收站与恢复（§44：那会把「删除」降级成「暂时挪开」）。
+ */
+async function forgetRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  const atomId = Number(raw.atom_id)
+  if (!Number.isInteger(atomId) || atomId <= 0) {
+    jsonOut(res, 400, { ok: false, error: 'bad-id', message: 'atom_id 必须是正整数' })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const r = forgetAtom(rt.db, {
+      atomId,
+      reason: typeof raw.reason === 'string' ? raw.reason : undefined,
+    })
+    if (r === null) {
+      // 404 而不是 200：界面要能区分「删掉了」与「这条本来就不在」。
+      jsonOut(res, 404, { ok: false, error: 'not-found', message: '记忆 #' + atomId + ' 不在库里' })
+      return
+    }
+    jsonOut(res, 200, {
+      ok: true,
+      atomId: r.atomId,
+      tombstoneId: r.tombstoneId,
+      deletedAt: r.deletedAt,
+      kind: r.kind,
+      scope: r.scope,
+      summary: r.summary,
+      alreadyForgotten: r.alreadyForgotten,
+    })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'forget-failed', message: reasonOf(e) })
   }
 }

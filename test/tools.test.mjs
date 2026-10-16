@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
 import { closeRuntime } from '../dist/state.js'
-import { isWeakMatch, LOW_RELEVANCE_HINT } from '../dist/tools/index.js'
+import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC, isWeakMatch, LOW_RELEVANCE_HINT } from '../dist/tools/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 
 let dir = ''
@@ -90,6 +90,24 @@ describe('工具注册', () => {
       'lattice_recall',
       'lattice_write',
     ])
+  })
+
+  /**
+   * §11.1 的边界：物理删除归用户，模型只能提议。
+   *
+   * 「不进模型可见的工具表」在本仓库里的表达就是**不放进 buildTools 的返回数组**
+   * （宿主呈现给模型的就是注册表里的可见条目）。这两条断言把它钉住：规格存在，
+   * 而注册表里没有它。少了任何一条，边界都可能在一次重构里被悄悄越过。
+   */
+  it('模型可见的工具表不含 lattice_forget（删除归用户）', () => {
+    assert.equal(FORGET_TOOL_SPEC.name, FORGET_TOOL_NAME)
+    assert.equal(FORGET_TOOL_NAME, 'lattice_forget')
+    assert.ok(!tools.some((t) => t.name === FORGET_TOOL_NAME), 'lattice_forget 不得出现在注册表里')
+    // 反过来确认这个名字真的没被注册 —— 模型发出它只会拿到 UNKNOWN_TOOL。
+    assert.equal(
+      tools.find((t) => t.name === FORGET_TOOL_NAME),
+      undefined,
+    )
   })
 
   it('每个业务工具都有 description / parameters / execute', () => {

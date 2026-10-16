@@ -25,6 +25,12 @@ import {
 } from '../util/vec.js'
 import { bigramTerms, extractSummary, jaccard, stripMarkdown } from '../util/text.js'
 import { buildEntries, buildVocabIndex, type EntryRecord, type VocabIndex } from './entries.js'
+import {
+  DEFAULT_FORGET_THRESHOLDS,
+  checkForgotten,
+  type ForgetThresholds,
+  type ForgottenEvidence,
+} from './forget.js'
 
 /** 落位动作。rejected（双峰拒绝且写入方未指定主属）由上层处理，见文件末尾说明。 */
 export type WriteAction = 'joined' | 'created'
@@ -78,6 +84,37 @@ export interface WriteResult {
   evidence?: PlacementEvidence
   /** 本次真正落库的入口。 */
   entries: EntryRecord[]
+  /**
+   * 防写回这次的比对痕迹。**只在「有墓碑、但没命中」时才带**，用来区分两种「没命中」：
+   * 「比过了不命中」与「库里根本没有墓碑 / 根本没比」。
+   *
+   * 为什么这个区分要有：这个判据只在删除之后才生效，而它失效时的形态恰好是**静默放行**
+   * —— 库里多出一条用户删过的记忆，没有任何报错。痕迹留着，才有办法在事后看出
+   * 「当时到底比了没有」。
+   */
+  forgotten?: { scanned: number; truncated: boolean }
+}
+
+/**
+ * 写入被防写回判据拦下。
+ *
+ * 单独一个类而不是抛通用 Error：调用方（工具层 / 写端点）要据此给出一条**具体的**反馈
+ * ——「你写的这条与用户删过的 #N 重合」。§44 明文要求「拦下之后不静默丢弃」：写入方
+ * 必须知道它被拒了、以及为什么，否则它会以为写成功了。
+ */
+export class ForgottenError extends Error {
+  readonly evidence: ForgottenEvidence
+  /** 这次实际比过多少条墓碑。 */
+  readonly scanned: number
+  /** 墓碑多到只比了最近的一部分。 */
+  readonly truncated: boolean
+  constructor(evidence: ForgottenEvidence, scanned: number, truncated: boolean) {
+    super('这条内容已被用户删除过（墓碑 #' + evidence.tombstoneId + '），拒绝写入')
+    this.name = 'ForgottenError'
+    this.evidence = evidence
+    this.scanned = scanned
+    this.truncated = truncated
+  }
 }
 
 /** 阈值。与插件 Config 一一对应，此处独立一份便于测试直接构造。 */
@@ -106,6 +143,11 @@ export interface WriteCtx {
   vocab?: VocabIndex | null
   /** 落位候选上限。 */
   topN?: number
+  /**
+   * 防写回的阈值。省略时用 `forget.ts` 的默认值 —— 那**就是落位判据的两个阈值**，
+   * 所以正常部署下这个字段根本不需要给（§44：复用已有判据，不发明新阈值）。
+   */
+  forget?: ForgetThresholds
 }
 
 /**
@@ -510,10 +552,24 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   // 少一个可空列，也就少一处 IS NULL 分支。
   const embedding = encodeVec(vec !== null && !isZeroVec(vec) ? normalized(vec) : zeroVec())
 
-  // ② 入口。写入侧与查询侧必须用同一套切词（bigramTerms），否则索引与查询不对称。
+  // ② 防写回：这条内容是不是用户删过的某一条（§44）。
+  //
+  // 为什么在**写入路径**上比：这是唯一能拦住写回的时机 —— 召回时拦没有意义，内容已经
+  // 进库了。为什么在入口与落位**之前**比：被拦下时不该再做那两件更贵的事（建词表索引、
+  // 取候选 topic），而且越早拒绝，写入方拿到的反馈越干净。
+  //
+  // 阈值用的是 `forget.ts` 的默认值（= 落位的 tauLex / tauJoin / tauLexOnly），不读插件
+  // config：防写回没有、也不该有配置旋钮 —— 它是判据的一部分，不是一个可调参数。
+  // 无向量时两票退化成词面一票，那条线跟着抬到 tauLexOnly，方向与落位一致。
+  const forgottenCheck = checkForgotten(ctx.db, text, vec, ctx.forget ?? DEFAULT_FORGET_THRESHOLDS)
+  if (forgottenCheck.hit) {
+    throw new ForgottenError(forgottenCheck.evidence, forgottenCheck.scanned, forgottenCheck.truncated)
+  }
+
+  // ③ 入口。写入侧与查询侧必须用同一套切词（bigramTerms），否则索引与查询不对称。
   const entries = buildEntries(text, { declared: input.refs ?? [] }, vocabOf(ctx))
 
-  // ③ 落位。
+  // ④ 落位。
   let decision: Decision
   let evidence: PlacementEvidence | undefined
   let hintMiss: number | undefined
@@ -596,6 +652,10 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   if (newTopic) result.created = decision.kind === 'create' ? decision.reason : 'far'
   if (hintMiss !== undefined) result.hintMiss = hintMiss
   if (evidence !== undefined) result.evidence = evidence
+  // 只在「确实比过」时才留痕：scanned=0 表示库里没有墓碑，那是常态、不必写进结果。
+  if (forgottenCheck.scanned > 0) {
+    result.forgotten = { scanned: forgottenCheck.scanned, truncated: forgottenCheck.truncated }
+  }
 
   afterWrite(ctx, result.topicId, atomId, entries.length)
   return result
