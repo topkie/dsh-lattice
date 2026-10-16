@@ -21,7 +21,7 @@ node test/run.mjs               # 只跑测试
 # 各步骤也可以单独跑（在项目根目录）
 node node_modules/typescript/bin/tsc --noEmit
 node node_modules/eslint/bin/eslint.js .
-node node_modules/prettier/bin/prettier.cjs --write "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs"
+node node_modules/prettier/bin/prettier.cjs --write "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" ".github/**/*.yml"
 node scripts/verify-encoder.mjs # 真实模型验证（需联网，不进 CI）
 ```
 
