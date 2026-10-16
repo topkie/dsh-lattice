@@ -103,12 +103,23 @@ export function migrate(db: DatabaseSync): MigrateResult {
   return { from, to: SCHEMA_VERSION, applied }
 }
 
-/** 便捷入口：打开 + 迁移 + 返回连接。 */
+/**
+ * 便捷入口：打开 + 迁移 + 返回连接。
+ *
+ * **只读连接不做迁移** —— 迁移要写库，而只读连接写不了。这不是错误处理，是语义：
+ * 「读一个旧版本的库」是合法用法（对照实验要读改动前的快照、诊断要读老库），
+ * 不该因为版本不同而被拒绝。此时返回的 `migration.to` 是**库的实际版本**，
+ * 不是插件支持的版本 —— 调用方若关心两者是否一致，自己比 `schemaVersion(db)` 与 `SCHEMA_VERSION`。
+ */
 export function openVault(
   file: string,
   opts: OpenOptions = {},
 ): { db: DatabaseSync; migration: MigrateResult } {
   const db = openDb(file, opts)
+  if (opts.readOnly) {
+    const v = schemaVersion(db)
+    return { db, migration: { from: v, to: v, applied: 0 } }
+  }
   const migration = migrate(db)
   return { db, migration }
 }

@@ -35,6 +35,38 @@ describe('建库与迁移', () => {
     db.close()
   })
 
+  it('只读打开一个旧版本的库：不迁移、不报错，如实报告库的实际版本', () => {
+    // 造一个「版本落后」的库：建到最新版，再把版本号改回去（表是全的，只有版本号旧）。
+    // 这正是改过 schema 之后、还没重建的库的样子 —— 而它必须能被只读打开。
+    const seed = openVault(dbFile)
+    seed.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION - 1}`)
+    seed.db.close()
+
+    const { db, migration } = openVault(dbFile, { readOnly: true })
+    // 没被迁移：版本仍是旧的，且 applied 为 0
+    assert.equal(schemaVersion(db), SCHEMA_VERSION - 1)
+    assert.equal(migration.applied, 0)
+    // 如实报告的是「库的实际版本」，不是插件支持的版本
+    assert.equal(migration.from, SCHEMA_VERSION - 1)
+    assert.equal(migration.to, SCHEMA_VERSION - 1)
+    db.close()
+
+    // 再打开一次确认那个库确实没被写过
+    const again = openDb(dbFile)
+    assert.equal(schemaVersion(again), SCHEMA_VERSION - 1)
+    again.close()
+  })
+
+  it('只读打开最新版本的库：同样不迁移，结果一致', () => {
+    const seed = openVault(dbFile)
+    seed.db.close()
+    const { db, migration } = openVault(dbFile, { readOnly: true })
+    assert.equal(schemaVersion(db), SCHEMA_VERSION)
+    assert.equal(migration.applied, 0)
+    assert.equal(migration.to, SCHEMA_VERSION)
+    db.close()
+  })
+
   it('迁移幂等', () => {
     const db = openDb(dbFile)
     migrate(db)
