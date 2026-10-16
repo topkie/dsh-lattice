@@ -2,4 +2,6 @@ dist
 node_modules
 coverage
 pnpm-lock.yaml
+# 文档不参与格式化：中文 Markdown 会被重排成大量无意义 diff，收益不抵噪声。
+# 因此所有格式检查的命令行也不再列 md 通配符 —— 列了只是空集。
 *.md

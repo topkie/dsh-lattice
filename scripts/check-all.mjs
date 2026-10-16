@@ -13,15 +13,14 @@ import { existsSync } from 'node:fs'
 
 const NODE = process.execPath
 
-/** 参与格式检查的文件范围（与 CI 保持一致）。 */
-const FORMAT_GLOBS = [
-  'src/**/*.ts',
-  'test/**/*.mjs',
-  'scripts/*.mjs',
-  'docs/*.md',
-  '*.md',
-  '.github/**/*.yml',
-]
+/**
+ * 参与格式检查的文件范围（与 CI 保持一致）。
+ *
+ * 这里**没有 Markdown**：`.prettierignore` 排除了 `*.md`，把 md 通配符写进来只会得到空集 ——
+ * 命令照样打印「All matched files use Prettier code style!」，但它一个文档都没看。
+ * 判据恒真比没有判据更糟（它看起来在工作），所以宁可如实收窄范围。
+ */
+const FORMAT_GLOBS = ['src/**/*.ts', 'test/**/*.mjs', 'scripts/*.mjs', '.github/**/*.yml']
 
 /**
  * 步骤定义：名称 + 命令 + 参数。顺序按「先静态后动态」—— 便宜的失败先暴露。
