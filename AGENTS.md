@@ -92,6 +92,15 @@ worktree 与探针目录里会建 `node_modules` 的 junction（指回主仓库�
 (Get-Item $p).Delete()             # 只删链接本身
 ```
 
+**②之补：`git worktree remove` 不删 `node_modules` 的 junction。**
+
+所以每清理一个 worktree，都会在 `.worktrees/<名字>/` 下**留下一个 junction 空壳**；
+**而最后来 `rm -rf .worktrees` 收尾的人会跟随链接删掉主仓库的 `node_modules`** ——
+与 ② 是同一个事故形态，只是发生在「收尾那一步」而不是「删探针那一步」。
+
+**做法**：`git worktree remove` 之后，对该目录下的 `node_modules` 用 `(Get-Item $p).Delete()` 删链接，
+再删那个空目录。**别用 `rm -rf` 收尾 `.worktrees/`。**
+
 **③ `git worktree prune` 会清理「管理记录已丢失」的 worktree，而那些目录里可能还有未提交的文件。**
 
 它已经删掉过一个子体的 **2474 行未提交代码**（那些文件从未 `git add` 过，所以 git 里连对象都没有，
