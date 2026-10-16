@@ -77,6 +77,7 @@ import { DEFAULT_KNN_K } from './cluster/graph.js'
 import { DEFAULT_MIN_CLUSTER_SIZE } from './cluster/hierarchy.js'
 import { MST_BRIDGE_FACTOR } from './cluster/mst.js'
 import { RECLUSTER_BATCH_ATOMS } from './cluster/rebuild.js'
+import { GRAPH_INFER_MAX_ATOMS, NEAR_COS_MIN, NEAR_K, OUT_DEGREE_CAP } from './graph/infer.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
 export type ThresholdArea =
@@ -91,6 +92,7 @@ export type ThresholdArea =
   | '资源'
   | '显式删除'
   | '重聚类'
+  | '图扩展'
 
 /** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
@@ -204,6 +206,9 @@ const DESIGN_DOC = '开发笔记 设计/技术文档/7.配置项清单.md'
 
 /** T17 的 learned 反哺参数出自设计报告 §27，不是配置项清单，单独指一处。 */
 const DESIGN_DOC_T17 = '开发笔记 设计/设计报告/27.Entry三级权重与learned反哺.md'
+
+/** T18 的出度上限出自 §33 与 §40 两条，不在配置项清单里，单独指一处。 */
+const DESIGN_DOC_T18_FAIL = '开发笔记 设计/设计报告/33.失败模式与降级.md'
 
 /** 全部登记项。按模块分块，与源码顺序一致，便于对照审查。 */
 export const THRESHOLDS: readonly ThresholdEntry[] = [
@@ -1616,6 +1621,83 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '延迟，本轮没做',
     },
     variesWith: ['机器磁盘与 WAL 配置', '宿主对单次同步阻塞的容忍度', '库规模（批数随 atom 数增长）'],
+  },
+  // ────────────────────────────── 图扩展（graph/infer.ts）──────────────────────────────
+  {
+    name: 'NEAR_K',
+    area: '图扩展',
+    value: () => NEAR_K,
+    definedBy: { file: 'src/graph/infer.ts', name: 'NEAR_K' },
+    affects:
+      'inferEdges：每个 atom 保留多少个向量近邻作为 near 边。它同时是图路的宽度与 ' +
+      '§36 第 8 项 MOD 的旋钮 —— 实测 MOD 几乎等于 K',
+    calibration: {
+      atoms: 1374,
+      origins: { import: 279, model: 1026, user: 69 },
+      scopes: { design: 192, discuss: 69, global: 309, m3: 556, process: 248 },
+      evidence:
+        'T18 探针 03（可复跑）在基准库上的参数网格：K = 2/3/4/6/8 × cosMin = 0.70/0.75/0.80。' +
+        '实测 96%（1293/1374）的 atom 过线邻居多于 K，所以 MOD 由 K 直接决定：' +
+        'K=4 → 3.86，K=6（cosMin 0.75）→ 4.64。§36 给 MOD 的目标区间 2~5，取区间中点 4。' +
+        '**只有一个规模档的实测**',
+      at: '2026-10-17',
+    },
+    variesWith: ['库规模（atom 越多近邻越密）', '换编码模型（余弦尺度会变）', '§36 的 MOD 目标区间'],
+  },
+  {
+    name: 'NEAR_COS_MIN',
+    area: '图扩展',
+    value: () => NEAR_COS_MIN,
+    definedBy: { file: 'src/graph/infer.ts', name: 'NEAR_COS_MIN' },
+    affects: 'inferEdges：余弦低于此值的 atom 对不建边。它决定边质量的下限，也决定孤立率',
+    calibration: {
+      atoms: 1374,
+      origins: { import: 279, model: 1026, user: 69 },
+      scopes: { design: 192, discuss: 69, global: 309, m3: 556, process: 248 },
+      evidence:
+        'T18 探针 01（余弦分布）与探针 03（参数网格）实测：top-16 邻居的 cos 中位数 0.748、' +
+        'p10 0.685 —— 0.70 与 0.86 之间没有自然断点，抬线砍不掉一批「明显更差」的边，' +
+        '只会制造孤点：0.70 → 孤立 1.6%，0.75 → 8.1%（越过 §36 的 <8% 目标），' +
+        '0.80 → 34%（越过 20% 报警线）。0.70 是三个候选里唯一同时满足 MOD 与孤立率两条区间的。' +
+        '**它不是「相似」的语义线**，只是「别把可用的 atom 变成孤点」的底线',
+      at: '2026-10-17',
+    },
+    variesWith: ['换编码模型（余弦尺度会变）', '§36 的孤立率目标', '语料的领域混合度'],
+  },
+  {
+    name: 'OUT_DEGREE_CAP',
+    area: '图扩展',
+    value: () => OUT_DEGREE_CAP,
+    definedBy: { file: 'src/graph/infer.ts', name: 'OUT_DEGREE_CAP' },
+    affects:
+      '出度硬上限，生成侧（inferEdges）与查询侧（graphPath 的每个种子）各用一次：' +
+      '生成侧超出部分被截断，查询侧每个种子最多贡献这么多条候选',
+    calibration: {
+      evidence:
+        '**设计文档给的值，未在本库标定**：§33 的降级路径写「出度硬上限（建议 16）+ confidence ' +
+        '截断」，§40 的反例判据写「必须给每 Atom 出度硬上限 16」，技术文档 4.2 的图路参数也是 16。' +
+        '本轮实测中它**从未触发** —— 参数网格里 cappedByHardLimit 恒为 0、最大出度 8，' +
+        '真正在起作用的是 NEAR_K；16 是 K 被调大时的兜底',
+    },
+    variesWith: ['NEAR_K（K 接近或超过 16 时它才开始生效）', '库规模与语料密度'],
+    design: { doc: DESIGN_DOC_T18_FAIL, key: '出度硬上限', default: 16 },
+  },
+  {
+    name: 'GRAPH_INFER_MAX_ATOMS',
+    area: '图扩展',
+    value: () => GRAPH_INFER_MAX_ATOMS,
+    definedBy: { file: 'src/graph/infer.ts', name: 'GRAPH_INFER_MAX_ATOMS' },
+    affects:
+      'inferEdges：超过此规模就不做全量两两比较，直接拒绝推断并如实报告结果，' + '而不是安静地跑上几分钟',
+    calibration: {
+      evidence:
+        '**按实测吞吐外推，未在更大库上实测**：基准库 1374 条 atom 的全量成对（943 251 对、' +
+        '512 维）实测 460~510 ms；O(N²) 外推到 4 000 条约 4 s、到 8 000 条约 16 s。' +
+        '取 4 000 对应「首次召回最多多等约 4 秒」这个判断，不是实测出来的上限。' +
+        '要真正解掉这条外推，得把全量成对换成桶内候选或 SimHash 预筛',
+      at: '2026-10-17',
+    },
+    variesWith: ['机器算力', '单次召回可接受的阻塞时长', '是否改成近邻候选而非全量成对'],
   },
 ]
 

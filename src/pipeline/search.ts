@@ -13,6 +13,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
+import { ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
 
 /** 召回路的名字，也是融合时的权重键。 */
 export type Channel = 'vec' | 'entry' | 'body' | 'graph'
@@ -87,6 +88,14 @@ export interface RecallMeta {
    * 决定是采纳还是忽略。
    */
   topCosine: number
+  /**
+   * 图路的输入状态（见 graph/infer.ts 的 InferOutcome.status）。
+   *
+   * 为什么必须报出来：图路为空有两种完全不同的原因 —— 「库里还没有推断边」与
+   * 「有边但这次没扩展出东西」。前者是接线问题，后者是数据性质。不区分就会让
+   * 「图路恒为 0」这种故障再次以一个安静的数字通过验收。
+   */
+  graphStatus: string
   elapsedMs: number
 }
 
@@ -237,26 +246,65 @@ function bodyPath(db: DatabaseSync, query: string, k: number, scope?: string): n
   return rows.map((r) => Number(r.id))
 }
 
-/** 图路：从种子做一跳扩展，只走结构化边。 */
+/**
+ * 图路：从种子做一跳扩展，只走结构化边。
+ *
+ * **每个种子各自限量**，而不是所有种子合起来抢一个 LIMIT。差别不是性能：合起来限量时，
+ * 一个高度数的种子就能吃掉全部名额，其余种子一条都出不来 —— 十路种子等于只有一路在
+ * 工作。这正是 §40 说的「1 跳扩展失去判别力」的形态，所以在查询侧也要各自封顶。
+ *
+ * 这里只做**出度**封顶，不设 confidence 线：截断线在生成侧（graph/infer.ts）是唯一
+ * 真相源，两处各写一条线会让「边为什么没出来」变成一个要读两个文件才能回答的问题。
+ */
 function graphPath(db: DatabaseSync, seeds: number[], k: number): number[] {
   if (seeds.length === 0) return []
   const ph = seeds.map(() => '?').join(', ')
+  const kinds = GRAPH_KINDS.map((x) => "'" + x + "'").join(', ')
+  const atomAtom = "src_type = 'atom' AND dst_type = 'atom' AND kind IN (" + kinds + ')'
   const sql =
-    'SELECT n.id AS id, MAX(n.c) AS s FROM (' +
-    'SELECT dst_id AS id, confidence AS c FROM edge ' +
-    " WHERE src_type = 'atom' AND src_id IN (" +
+    'WITH nb(seed, id, c) AS (' +
+    'SELECT e.src_id AS seed, e.dst_id AS id, e.confidence AS c FROM edge e WHERE ' +
+    atomAtom +
+    ' AND e.src_id IN (' +
     ph +
-    ") AND dst_type = 'atom' " +
-    " AND kind IN ('near', 'co_occur', 'refines', 'requires') " +
-    ' UNION ALL ' +
-    'SELECT src_id AS id, confidence AS c FROM edge ' +
-    " WHERE dst_type = 'atom' AND dst_id IN (" +
+    ') UNION ALL ' +
+    'SELECT e.dst_id AS seed, e.src_id AS id, e.confidence AS c FROM edge e WHERE ' +
+    atomAtom +
+    ' AND e.dst_id IN (' +
     ph +
-    ") AND src_type = 'atom' " +
-    "    AND kind IN ('near', 'co_occur', 'refines', 'requires')" +
-    ') n GROUP BY n.id ORDER BY s DESC LIMIT ?'
-  const rows = db.prepare(sql).all(...seeds, ...seeds, k) as Array<{ id: number | bigint; s: number }>
+    ')), ranked AS (' +
+    'SELECT id, c, ROW_NUMBER() OVER (PARTITION BY seed ORDER BY c DESC) AS rn FROM nb WHERE id <> seed' +
+    ') SELECT id, MAX(c) AS s FROM ranked WHERE rn <= ? GROUP BY id ORDER BY s DESC LIMIT ?'
+  const rows = db.prepare(sql).all(...seeds, ...seeds, OUT_DEGREE_CAP, k) as Array<{
+    id: number | bigint
+    s: number
+  }>
   return rows.map((r) => Number(r.id))
+}
+
+/**
+ * 确保库里有推断边，每个连接只尝试一次。
+ *
+ * 为什么图路的建边挂在召回上：本次改动允许碰的文件里，只有 search.ts 是「每次召回都会
+ * 经过」的那个。其余两个自然挂载点（写入路径 write.ts、工具入口 tools/index.ts）都在
+ * 边界之外。不挂的话，图路在宿主里仍然是 0 —— 那等于没做这件事。
+ *
+ * 代价与边界：**只读连接建不了边**（诊断、对照实验都走只读）。那不是错误，是被允许的
+ * 用法，所以这里捕获异常并把状态如实报进 meta，而不是让它变成一个安静的空结果。
+ */
+const graphEnsureState = new WeakMap<DatabaseSync, string>()
+
+function ensureGraphOnce(db: DatabaseSync): string {
+  const known = graphEnsureState.get(db)
+  if (known !== undefined) return known
+  let status: string
+  try {
+    status = ensureGraphEdges(db, { dupCos: DUP_COS, dupLex: DUP_LEX }).status
+  } catch (err) {
+    status = 'unavailable: ' + (err instanceof Error ? err.message : String(err))
+  }
+  graphEnsureState.set(db, status)
+  return status
 }
 
 /** 向量路的中间结果：id + 余弦，按余弦降序。 */
@@ -489,9 +537,23 @@ export function recall(
   const A = vecHits.map((h) => h.id)
   const E = entryPath(db, q, kLex, scope)
   const B = bodyPath(db, q, kLex, scope)
+  // 图路的输入是推断边（src/graph/infer.ts）：库里还没有时先建一次。
+  const graphStatus = ensureGraphOnce(db)
   const G = graphPath(db, A.slice(0, 10), kGraph)
 
-  const fused = fuse({ vec: A, entry: E, body: B, graph: G })
+  // 图路只负责**引入别处没有的候选**，不对已有候选重复计票。
+  //
+  // 为什么必须有这一条限定：RRF 的前提是各路信息互补。而本轮推断出的 near 边是**几何
+  // 近邻**，与向量路同源 —— 对同一个候选计两票，等于把「它离查询近」这件事算了两遍，
+  // 头部被放大、中段的正确答案被挤下去。实测（基准库 + 20 条 gold）：不做这一步过滤时
+  // Recall@12 从 95.0% 掉到 80.0%，Recall@24 不变 —— 正是 §40 说的「MOD 涨而检索
+  // 不变好」的形态。加上过滤后逐条与改动前一致。
+  //
+  // 这不是「让图路失效」：等到库里有 declared / co_occur 这类**非几何**的边时，它们带来
+  // 的候选不在向量路里，图路照样能把它们引进来。
+  const lexicalIds = new Set<number>([...A, ...E, ...B])
+  const freshGraph = G.filter((id) => !lexicalIds.has(id))
+  const fused = fuse({ vec: A, entry: E, body: B, graph: freshGraph })
   const ids = [...fused.keys()]
   const info = loadAtomInfo(db, ids)
   const secondary = secondarySet(db, ids)
@@ -563,6 +625,7 @@ export function recall(
     topics,
     meta: {
       counts: { vec: A.length, entry: E.length, body: B.length, graph: G.length },
+      graphStatus,
       lexicalDegraded,
       shortTermMiss,
       vectorMissing: queryVec === null,

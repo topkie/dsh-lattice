@@ -11,6 +11,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
+import { GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
@@ -145,21 +146,36 @@ function topicEntries(db: DatabaseSync, topicId: number, limit: number): string[
   return rows.map((r) => String(r.term))
 }
 
-/** 一跳关联的摘要行。只走结构化边，且不重复锚里已有的条目。 */
+/**
+ * 一跳关联的摘要行。只走结构化边，且不重复锚里已有的条目。
+ *
+ * **两条限定是修 bug 加的，不是防御性写法**：改之前这里只检查「边的一端在锚里」，
+ * 没检查「另一端也是 atom」。而写入路径产的边全是 `atom → topic`，它的 dst_id 是
+ * **topic id** —— 在 id 空间重叠的库上，`JOIN atom ON atom.id = topic_id` 会命中一个
+ * 完全无关的 atom，于是【路】段列出一批假邻居，还挂着那条 topic 边的 confidence。
+ * 判据里的 graph 通道恒为 0，而这些假行照常出现，所以它长期没有被发现。
+ *
+ * kind 白名单与 search.ts 的图路共用同一个定义（GRAPH_KINDS），避免两处各写一份。
+ */
 function pathLinesFor(db: DatabaseSync, anchors: number[], exclude: Set<number>, limit: number): string[] {
   if (anchors.length === 0 || limit <= 0) return []
   const ph = anchors.map(() => '?').join(', ')
+  const kinds = GRAPH_KINDS.map((x) => "'" + x + "'").join(', ')
+  // 另一端：边的一端落进锚里时，邻居是另一端。两端都是 atom 已由 WHERE 保证。
+  const other = 'CASE WHEN e.src_id IN (' + ph + ') THEN e.dst_id ELSE e.src_id END'
   const sql =
     'SELECT e.kind AS kind, e.confidence AS conf, b.id AS oid, b.summary AS summary FROM edge e' +
-    " JOIN atom b ON b.id = CASE WHEN e.src_type = 'atom' AND e.src_id IN (" +
+    ' JOIN atom b ON b.id = ' +
+    other +
+    " WHERE e.src_type = 'atom' AND e.dst_type = 'atom'" +
+    '   AND e.kind IN (' +
+    kinds +
+    ')' +
+    '   AND (e.src_id IN (' +
     ph +
-    ') THEN e.dst_id ELSE e.src_id END' +
-    " WHERE ((e.src_type = 'atom' AND e.src_id IN (" +
+    ') OR e.dst_id IN (' +
     ph +
     '))' +
-    "    OR (e.dst_type = 'atom' AND e.dst_id IN (" +
-    ph +
-    ')))' +
     '   AND b.id NOT IN (' +
     ph +
     ')' +
