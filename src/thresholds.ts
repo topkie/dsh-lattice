@@ -72,10 +72,25 @@ import {
   REVIEW_SCAN_LIMIT,
 } from './pipeline/review.js'
 import { VEC_DIM } from './util/vec.js'
+import { DEFAULT_ALIGN_COS } from './cluster/align.js'
+import { DEFAULT_KNN_K } from './cluster/graph.js'
+import { DEFAULT_MIN_CLUSTER_SIZE } from './cluster/hierarchy.js'
+import { MST_BRIDGE_FACTOR } from './cluster/mst.js'
+import { RECLUSTER_BATCH_ATOMS } from './cluster/rebuild.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
 export type ThresholdArea =
-  '写入' | '落位' | '入口' | '召回融合' | '重排去重' | '注入' | '目录' | '迁移切分' | '资源' | '显式删除'
+  | '写入'
+  | '落位'
+  | '入口'
+  | '召回融合'
+  | '重排去重'
+  | '注入'
+  | '目录'
+  | '迁移切分'
+  | '资源'
+  | '显式删除'
+  | '重聚类'
 
 /** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
@@ -1514,6 +1529,93 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '（回环不是「可信」，只是「本机」—— 宿主对插件路由不做鉴权）',
     },
     variesWith: ['请求体里要不要带更多字段'],
+  },
+  // ────────────────────────────── 重聚类（T16）──────────────────────────────
+  {
+    name: 'DEFAULT_KNN_K',
+    area: '重聚类',
+    value: () => DEFAULT_KNN_K,
+    definedBy: { file: 'src/cluster/graph.ts', name: 'DEFAULT_KNN_K' },
+    affects:
+      'k 近邻图每点保留的邻居数，同时也是 min_samples（核心距离取第几近邻）—— ' +
+      '它决定互可达距离里「核心距离」那一项有多大，也就决定了小簇会被抹平到什么程度',
+    calibration: {
+      evidence:
+        '设计报告 §21 给 min_samples = 2，而 min_samples 与 k 在本实现里是同一个参数。' +
+        '标定来自 T16 探针在基准库（1 374 条真实向量、512 维）上的对照：与参照实现' +
+        '（clusternova，mpts=2）比，k=2 得 82 簇 / 噪声占 68.9%、参照 75 簇 / 73.4%，' +
+        '双向成员重合度 0.77 / 0.85；k>=6 时本实现塌缩到个位数簇。' +
+        '**只有一个规模档的实测**，基准库的 atom 来源分布与作用域分布未记录',
+    },
+    variesWith: ['库规模（k 越大越小簇越易被抹平）', '语料密度分布', '换编码模型（余弦尺度会变）'],
+  },
+  {
+    name: 'DEFAULT_MIN_CLUSTER_SIZE',
+    area: '重聚类',
+    value: () => DEFAULT_MIN_CLUSTER_SIZE,
+    definedBy: { file: 'src/cluster/hierarchy.ts', name: 'DEFAULT_MIN_CLUSTER_SIZE' },
+    affects:
+      '簇的规模门槛：小于此值的碎片在压缩阶段并入父簇，而不是各自成为一个主题。' +
+      '它是唯一带语义的聚类参数 —— 直接表达「多小算一个独立主题」',
+    calibration: {
+      evidence:
+        '设计报告 §21 写死 min_cluster_size = 3，**没有给标定实验**。T16 探针沿用了它，' +
+        '并在基准库上观察到 k=2 档的中位簇规模 4、最大 24。' +
+        '「3 是不是对的」本轮没有测 —— 没有拿「人工判定哪些记忆属于同一主题」做对照',
+    },
+    variesWith: ['库规模', '一条记忆的平均信息量', '「一个主题至少几条记忆才有用」这个产品判断'],
+  },
+  {
+    name: 'DEFAULT_ALIGN_COS',
+    area: '重聚类',
+    value: () => DEFAULT_ALIGN_COS,
+    definedBy: { file: 'src/cluster/align.ts', name: 'DEFAULT_ALIGN_COS' },
+    affects:
+      '身份对齐：新簇质心与旧 topic 质心的余弦达到此值才允许配对，配对成功的旧 topic id ' +
+      '被继承（挂在其上的主属引用、次属引用与 near 边因此不失效）',
+    calibration: {
+      evidence:
+        '时序文档 4.3 给的 0.80，**该文档没有给标定实验**。T16 探针在基准库上实测了这条线' +
+        '的效果（配对成功率与配对余弦的分位），但没有反向标定「0.80 之下哪些其实同属一个' +
+        '主题」—— 那需要人工对照，本轮没做。数值上与落位的 tauJoin = 0.78 接近，' +
+        '但两者问的是不同的问题，不要合并',
+    },
+    variesWith: ['换编码模型（余弦尺度会变）', '重聚类的频率（间隔越久，旧质心越不代表现状）'],
+  },
+  {
+    name: 'MST_BRIDGE_FACTOR',
+    area: '重聚类',
+    value: () => MST_BRIDGE_FACTOR,
+    definedBy: { file: 'src/cluster/mst.ts', name: 'MST_BRIDGE_FACTOR' },
+    affects:
+      'k 近邻图不连通时，缝合分量所用的桥边权重 = 全图最大权重 × 本值。' +
+      '它决定那些孤立分量在层次树上「多晚」才被并进全局根',
+    calibration: {
+      evidence:
+        '**无标定实验**。取 2（即桥边比任何真实边都贵）是一个**语义**选择而不是拟合：' +
+        '分量之间一条边都没有（不是「边太贵」，是真的没有），任何取法都造不出真实的' +
+        '连接，只能保证「它排在 Kruskal 顺序的最后」。T16 探针量化过这个选择的影响：' +
+        '基准库 k=2 时有 5 个分量（1360/4/4/3/3），4 条桥边；造桥与不造桥的**簇数、' +
+        '噪声数完全相同**（82 簇 / 947 噪声），差别只在「那 14 个孤立点有没有 label」' +
+        '—— 不造桥时有 117 个点不属于任何层次树节点，其中 103 个在主分量里',
+    },
+    variesWith: ['k（k 越大分量越少，需要桥边的场合越少）', '语料的密度分布'],
+  },
+  {
+    name: 'RECLUSTER_BATCH_ATOMS',
+    area: '重聚类',
+    value: () => RECLUSTER_BATCH_ATOMS,
+    definedBy: { file: 'src/cluster/rebuild.ts', name: 'RECLUSTER_BATCH_ATOMS' },
+    affects:
+      '落库阶段每个事务处理的条数：一批 = 一次事务 = 一次事件循环占用。' +
+      '它约束的是「重聚类会不会把宿主卡住」（B2 瓶颈：DatabaseSync 是同步的）',
+    calibration: {
+      evidence:
+        '**没有标定**。1 000 取自「一批在本机约几十毫秒、不至于让事务次数爆炸」的粗估，' +
+        '**没有测过宿主在何种批大小下开始出现可感知卡顿** —— 那需要端到端观测宿主的响应' +
+        '延迟，本轮没做',
+    },
+    variesWith: ['机器磁盘与 WAL 配置', '宿主对单次同步阻塞的容忍度', '库规模（批数随 atom 数增长）'],
   },
 ]
 

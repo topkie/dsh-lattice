@@ -87,6 +87,10 @@ function findAnywhere(name) {
  */
 const EXEMPT = {
   SCHEMA_VERSION: '协议性：库的 schema 版本，改动要走迁移（MIGRATIONS），不是调参',
+  NOISE_LABEL:
+    '协议性：聚类标签里「未归类」的哨兵值（-1）。它不是一条线而是一个约定，改它只是把' +
+    '同一个语义换个写法（同时要改读取侧对 -1 的判读），没有「取多少合适」可言',
+  MIN_K: '结构性上界：k 近邻图的 k 至少要取最近的那个邻居，不是可调区间',
 }
 
 /**
