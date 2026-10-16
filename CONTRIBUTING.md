@@ -6,7 +6,7 @@
 
 - **先读 [docs/PRINCIPLES.md](docs/PRINCIPLES.md)**——它是根本约束，与之冲突的改动会被直接拒绝
 - 较大的改动请先开 Issue 讨论，避免做完才发现方向不一致
-- 改动走任务分支，提交前确保 `node scripts/check-all.mjs` 全绿（见下方「分支与合并」）
+- 改动走任务分支，提交前确保**门禁**全绿（跑法见下方「分支与合并」）
 
 ## 修改 `AGENTS.md` 的规则
 
@@ -50,7 +50,7 @@ git commit -m "feat: <摘要>"
 
 ### 合并门禁（顺序不能反）
 
-1. `node scripts/check-all.mjs` 全绿 —— 构建、类型检查、代码检查、格式检查、单元测试，一条命令跑完；
+1. **门禁全绿** —— 构建、类型检查、代码检查、格式检查、单元测试，一条命令跑完（跑法见下）；
 2. 涉及编码或召回的改动，再手动跑一次 `scripts/verify-*.mjs`（真实模型，需联网，因此不进 CI）；
 3. 两项都过了才合并。
 
@@ -58,8 +58,16 @@ git commit -m "feat: <摘要>"
 分支名通过环境变量传入，这样脚本自己不需要调 git（受限环境下子进程可能起不来）：
 
 ```bash
+# bash / Git Bash
 GIT_BRANCH=$(git branch --show-current) node scripts/check-all.mjs
 ```
+
+```powershell
+# PowerShell
+$env:GIT_BRANCH = (git branch --show-current); node scripts/check-all.mjs
+```
+
+**不传这个变量时，它显示「分支：未知」—— 那不叫通过，是提醒根本没生效。**
 
 **只提示不阻断**：合并后回 main 复验是合法操作，强行失败只会让人绕过这个脚本。
 

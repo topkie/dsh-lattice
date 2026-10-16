@@ -14,7 +14,8 @@
 pnpm install                    # 安装依赖
 
 # 以下是推荐入口：直接调脚本，不经过包管理器
-node scripts/check-all.mjs      # 合并门禁：构建 + 类型检查 + 代码检查 + 格式检查 + 单元测试
+# 合并门禁（必须带分支名，否则第一行的分支提醒不生效）
+GIT_BRANCH=$(git branch --show-current) node scripts/check-all.mjs
 node test/run.mjs               # 只跑测试
 
 # 各步骤也可以单独跑（在项目根目录）
@@ -24,9 +25,12 @@ node node_modules/prettier/bin/prettier.cjs --write "src/**/*.ts" "test/**/*.mjs
 node scripts/verify-encoder.mjs # 真实模型验证（需联网，不进 CI）
 ```
 
+（PowerShell 下用 `$env:GIT_BRANCH = (git branch --show-current); node scripts/check-all.mjs`；
+完整说明见 [CONTRIBUTING.md](CONTRIBUTING.md) 的「合并门禁」。）
+
 **为什么推荐 `node scripts/...` 而不是 `pnpm run ...`**：某些环境下 `pnpm run` 会因为
 pnpm 自身的依赖预检查而失败（报 pnpm 不是命令）。直接调用脚本入口可以绕开这一类不确定性，
-而且与 CI 用的是同一条命令。
+而且与 CI 用的是**同一套脚本入口**。
 
 ## 导入既有记忆
 
@@ -288,7 +292,7 @@ src/
 
 ## 代码风格
 
-由 ESLint + Prettier 统一，提交前跑 `node scripts/check-all.mjs` 即可（不用 `pnpm run`，理由见「常用命令」一节）。几条约定：
+由 ESLint + Prettier 统一，提交前跑**门禁**即可（跑法与理由见「常用命令」一节）。几条约定：
 
 - 注释说明**为什么**，不复述代码在做什么
 - 公共 API 带 JSDoc；内部函数按需
