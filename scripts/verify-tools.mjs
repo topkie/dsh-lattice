@@ -70,10 +70,12 @@ for (const q of [
 ]) {
   const out = await tool('lattice_recall').execute({ query: q })
   const hasAnchor = out.includes('【锚】')
-  const none = out.includes('没有找到相关记忆')
+  const none = out.includes('没有找到相关记忆') // 只在空库时为真：召回总会给 topN，非空库上恒假
   const firstLine = out.split(String.fromCharCode(10)).find((l) => l.startsWith('- ')) ?? '(无锚)'
   const sim = /最高相似度 ([0-9.]+)/.exec(out)
-  const verdict = out.includes('没有找到足够相关') ? '判为不相关' : '给出记忆'
+  // 判据必须引用**实际会出现**的字符串。弱相关的真实信号是输出里的「相关度低」标注，
+  // 而不是「没有找到」—— 后者只在空库时出现，在非空库上恒为假，判据会永远指向同一侧。
+  const verdict = out.includes('相关度低') ? '弱相关' : '给出记忆'
   console.log(
     '  ' +
       q.padEnd(18) +
@@ -83,6 +85,7 @@ for (const q of [
       firstLine.slice(0, 34),
   )
   console.log()
+  // 非空库上 none 恒为假，而召回几乎总给锚 —— 这个计数器很少有机会增加（见处置清单 N1）。
   if (!none && !hasAnchor) bad++
 }
 

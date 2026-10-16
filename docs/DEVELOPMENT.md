@@ -14,7 +14,7 @@
 pnpm install                    # 安装依赖
 
 # 以下是推荐入口：直接调脚本，不经过包管理器
-node scripts/check-all.mjs      # 合并门禁：类型检查 + 代码检查 + 格式检查 + 单元测试
+node scripts/check-all.mjs      # 合并门禁：构建 + 类型检查 + 代码检查 + 格式检查 + 单元测试
 node test/run.mjs               # 只跑测试
 
 # 各步骤也可以单独跑（在项目根目录）

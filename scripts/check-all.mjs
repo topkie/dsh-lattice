@@ -23,8 +23,14 @@ const FORMAT_GLOBS = [
   '.github/**/*.yml',
 ]
 
-/** 步骤定义：名称 + 命令 + 参数。顺序按「先静态后动态」—— 便宜的失败先暴露。 */
+/**
+ * 步骤定义：名称 + 命令 + 参数。顺序按「先静态后动态」—— 便宜的失败先暴露。
+ *
+ * `build` 是唯一的例外：它排第一不是为了快，而是因为**测试与 verify 脚本 import 的是 `dist/`**。
+ * 少了这一步，「改了 src 却忘了编译」会让门禁在旧产物上全绿 —— 测的就不是这份源码了。
+ */
 const STEPS = [
+  ['build', 'node_modules/typescript/bin/tsc', ['-p', 'tsconfig.json']],
   ['typecheck', 'node_modules/typescript/bin/tsc', ['--noEmit']],
   ['lint', 'node_modules/eslint/bin/eslint.js', ['.']],
   // 只检查源码与文档：`--check .` 会把 dist/ 的构建产物也扫进来，那些不该受格式约束。

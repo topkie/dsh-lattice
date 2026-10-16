@@ -1,6 +1,6 @@
 {
   "name": "dsh-lattice",
-  "version": "0.0.1",
+  "version": "0.2.0-dev",
   "private": true,
   "type": "module",
   "description": "面向 DeepSeek Harness 的本地记忆插件：结构化、可检索、可重建的知识存储。",
@@ -73,7 +73,7 @@
     }
   },
   "license": "MIT",
-  "author": "topkie <sohusi@outlook.com>",
+  "author": "topkie <topkie@users.noreply.github.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/topkie/dsh-lattice.git"

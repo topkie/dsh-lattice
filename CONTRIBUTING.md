@@ -32,7 +32,7 @@ git commit -m "feat: <摘要>"
 
 ### 合并门禁（顺序不能反）
 
-1. `node scripts/check-all.mjs` 全绿 —— 类型检查、代码检查、格式检查、单元测试，一条命令跑完；
+1. `node scripts/check-all.mjs` 全绿 —— 构建、类型检查、代码检查、格式检查、单元测试，一条命令跑完；
 2. 涉及编码或召回的改动，再手动跑一次 `scripts/verify-*.mjs`（真实模型，需联网，因此不进 CI）；
 3. 两项都过了才合并。
 
