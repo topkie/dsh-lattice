@@ -66,7 +66,41 @@ README、CHANGELOG、**以及 git 提交信息**。
 - 加一条之前先问：被违反时是「做错了」还是「做法不同」？**只收前者** ——
   后者请放 `AGENTS.local.md`（第五节）。
 
-## 七、不为项目之外的东西兜底
+## 七、三个会静默出错的命令
+
+**① 合并分支用 `cherry-pick -n`，别用 `git merge --squash`。**
+
+本机沙箱下后者会失败：
+
+```
+error: cannot create standard output pipe for stash: Permission denied
+fatal: could not run stash.
+```
+
+它内部要跑 `git stash`，而 stash 需要创建管道（受限环境不允许）。`cherry-pick -n` **不需要 stash**，
+效果等价：把那条分支的改动放进暂存区，再由你提交成一条 squash 提交。**分支上有多个提交时，逐个 `-n`。**
+
+**② `rm -rf` 会跟随 junction，删掉链接指向的目标。**
+
+worktree 与探针目录里会建 `node_modules` 的 junction（指回主仓库，因为 worktree 不带依赖）。
+**`rm -rf` 那个 junction 会把主仓库的 `node_modules` 整个删掉** —— 已发生过一次（215 个包）。
+
+删之前先看清它是不是链接：
+
+```
+(Get-Item $p -Force).Attributes    # 含 ReparsePoint 就是链接
+(Get-Item $p).Delete()             # 只删链接本身
+```
+
+**③ `git worktree prune` 会清理「管理记录已丢失」的 worktree，而那些目录里可能还有未提交的文件。**
+
+它已经删掉过一个子体的 **2474 行未提交代码**（那些文件从未 `git add` 过，所以 git 里连对象都没有，
+**找不回来**）。删 worktree 之前先 `git -C <那个目录> status --short` 看清有没有东西。
+
+**连带的一条**：子体的产出**尽早提交** —— 不是「写完再提交」，而是每完成一组就 `git add -A && git commit -m "wip: …"`。
+合并时反正会 squash 掉，**而中途中断的代价从「全部丢失」降到「丢最后一段」**。
+
+## 八、不为项目之外的东西兜底
 
 - **检查只断言本仓库的行为。** 宿主或工具链不按预期时，记录并上报 —— 不要在代码里加绕行让它变绿。
 - **用例只测本仓库。** 不断言「宿主会不会做某事」。
@@ -76,4 +110,4 @@ README、CHANGELOG、**以及 git 提交信息**。
   在项目自己的代码里绕开是可以的。不可以的是：在本地打补丁、改 `node_modules`、
   或把绕行固化进检查与 CI；**是否更换依赖由项目维护者决定。**
 
-> 别名：AGENTS 仓库约定 开发约定 dsh-lattice 开发流程 分支 脱敏 个人补充 本地补充 责任边界 不兜底
+> 别名：AGENTS 仓库约定 开发约定 dsh-lattice 开发流程 分支 脱敏 worktree junction cherry-pick 个人补充 本地补充 责任边界 不兜底
