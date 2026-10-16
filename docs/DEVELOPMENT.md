@@ -112,6 +112,29 @@ node scripts/build-baseline.mjs --source <cards.json> --label <名字> [--out .p
 **「同一顺序」也是输入的一部分**：入口抽取要读词表（df），而词表随库增长。同一个 atom
 在第 1 条写入与在第 200 条写入，得到的入口权重可以不同。
 
+### 改动前先另存一份快照
+
+基准库会被**按当前规则重建**。所以「改动前后对比」不能用它当「改动前」—— 重建之后，
+对照物已经跟着变了，差值恒为 0，而 0 正是最像「没问题」的假象。
+
+正确顺序：**先另存快照，再改规则**。
+
+```
+node scripts/snapshot-baseline.mjs [--db .probe/baseline/lattice.db] [--label <名字>]
+```
+
+产出 `.probe/snap/<名字>/lattice.db` 与 `snapshot.json`（记录入口规则、规模、sha256）。
+标签默认是「库记录的入口规则 + 日期」，例如 `bigram-idf-v4-20261017` —— 它回答的正是
+对比时要问的那个问题：这份快照是哪套规则建的。标签已存在时报错，不静默覆盖。
+
+快照用 `VACUUM INTO` 写，而不是复制文件：WAL 模式下主文件可能不含尚未 checkpoint 的事务，
+直接复制会得到**没有报错的**残缺副本。
+
+需要「改动前」的 `verify-*` 脚本（`verify-entry-quality.mjs` / `verify-entry-filter.mjs`）
+**必须**用 `--before` 指到那份快照；不给就停。`verify-recall-baseline.mjs` 同理，`--db` 必填。
+这不是「多打一个参数」，而是把「我忘了指定对照物」从「一切正常」里拆出来：
+此前它们各自默认读 `.probe/baseline/lattice.db`，于是重建过的库会**静默地**充当自己的对照。
+
 **`--mock` 只用来验流程**：它用构造向量跑通链路（秒级），向量是假的，召回数字没有意义，
 不能当基准。
 ## 宿主工具
@@ -294,14 +317,19 @@ src/
 | `scripts/verify-recall.mjs` | 召回闭环：已知查询能否命中它该命中的那条记忆 |
 | `scripts/verify-view.mjs` | 注入组装：各段实际字符占比与裁剪是否按顺序触发 |
 | `scripts/verify-tools.mjs` | 工具端到端：注册、写入、召回、展开、健康检查（真实模型） |
-| `scripts/verify-entry-quality.mjs` | 入口词质量：重建入口后展示窗口噪声与 Recall 的前后对比 |
-| `scripts/verify-entry-filter.mjs` | 入口过滤的净效应：只剔除噪声词、不重排，看 Recall 是否下降 |
-| `scripts/verify-recall-baseline.mjs` | 基准库上的召回回归：Recall@12 / @24 与平均注入字符（改入口规则必跑） |
+| `scripts/verify-scope-write.mjs` | scope 端到端：真实编码器写入不同 scope、再按 scope 召回，验隔离（6 项判据） |
+| `scripts/verify-entry-quality.mjs` | 入口词质量：`--before` 快照 vs 按当前代码重建入口，比噪声与 Recall |
+| `scripts/verify-entry-filter.mjs` | 入口过滤的净效应：只剔除噪声词、不重排，看 Recall 是否下降（`--before` 必填） |
+| `scripts/verify-recall-baseline.mjs` | 召回回归：指定库上的 Recall@12 / @24 与平均注入字符（`--db` 必填） |
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
+| `scripts/snapshot-baseline.mjs` | 另存对照库快照到 `.probe/snap/<标签>/`（改规则**之前**跑） |
+| `scripts/build-baseline.mjs` | 重建基准库（`--source <cards.json>`），自带三条自检 |
 | `scripts/print-thresholds.mjs` | 阈值登记表：打印名称/值/标定场景/可变条件 + 与设计文档对照 + 库规模告警 + 覆盖核对（不需模型，可随时跑） |
 
-基准库由 `scripts/build-baseline.mjs` 生成（见上「标准验证库」），改入口规则类的验证脚本
-默认读 `.probe/baseline/lattice.db`，不再各自指定来源。
+基准库由 `scripts/build-baseline.mjs` 生成、快照由 `scripts/snapshot-baseline.mjs` 另存
+（见上「标准验证库」）。**改入口规则类的验证脚本不再自带默认库路径**：要对比就显式给
+`--before <快照>`（或 `--db <库>`），缺了参数会停下来并说清怎么补 —— 默认值在这里等于
+把「没有对照组」显示成「差值 0」。
 
 调整落位阈值时，先跑 `probe-threshold.mjs` 拿到分布，再改 `DEFAULT_THRESHOLDS`，
 并把新的数字写进那段注释——**阈值必须带着它的标定依据一起存在**，否则下一个人

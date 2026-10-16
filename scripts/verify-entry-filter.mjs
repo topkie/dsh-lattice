@@ -1,32 +1,38 @@
-// 定向对照：只剔除「含数字或下划线」的入口，看召回是否依赖它们。
-// 与 verify-entry-quality.mjs 的分工：那个验「新规则重建后整体不劣化」，
-// 这个隔离出「过滤本身」的净效应（不做任何重排）。
+// 入口过滤的净效应：只剔除「含数字或下划线」的入口，不做任何重排，看召回是否依赖它们。
 //
-// 关于基准库：本脚本的「改动前」取自基准库现有的入口，而基准库已按当前规则重建
-//（见 scripts/build-baseline.mjs），所以它现在的期望结果是「无变化」——即回归检查。
-// 将来再改入口规则时，要么另留一份旧规则快照库，要么改用「按两套规则各算一遍」的对照脚本，
-// 不要拿新库当旧规则的替身：那会让差值看起来是零，而零正是最像「没问题」的假象。
+// 与 verify-entry-quality.mjs 的分工：那个验「按新规则重建后整体不劣化」，
+// 这个隔离出「过滤本身」的净效应。
+//
+// 用法（缺 --before 直接报错退出，不静默拿当前库跟自己比）：
+//   node scripts/snapshot-baseline.mjs --label old-rule        # 改规则**之前**先另存
+//   node scripts/verify-entry-filter.mjs --before .probe/snap/old-rule/lattice.db
+//
+// 做法：把 --before 那份库复制成工作副本，先量一遍基线，再**只**删掉含数字/下划线的入口，
+// 再量一遍。两次量的都是同一份工作副本（差别只有那一次 DELETE）—— 这正是「净效应」的含义。
 
-import { copyFileSync, existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { openVault } from '../dist/db/open.js'
 import { ensureEncoder, encode } from '../dist/encoder/index.js'
 import { recall } from '../dist/pipeline/search.js'
 import { assembleView } from '../dist/pipeline/view.js'
+import { copyToWork, describeDb, requireBeforeDb, requireGold, ruleOf } from './lib/compare-db.mjs'
 
 const OUT = '.probe'
-const SRC = join(OUT, 'baseline', 'lattice.db')
-const DB = join(OUT, 'entry-filter-only.db')
+const WORK = join(OUT, 'entry-filter-only.db')
 const MODEL = 'Xenova/bge-small-zh-v1.5'
-if (!existsSync(SRC))
-  throw new Error('缺少基准库 .probe/baseline/lattice.db：先跑 scripts/build-baseline.mjs')
-mkdirSync(OUT, { recursive: true })
-for (const s of ['', '-wal', '-shm']) rmSync(DB + s, { force: true })
-copyFileSync(SRC, DB)
 
-await ensureEncoder({ model: MODEL })
-const gold = JSON.parse(readFileSync(join(OUT, 'eval-gold.json'), 'utf8'))
-const { db } = openVault(DB)
+const BEFORE = requireBeforeDb('scripts/verify-entry-filter.mjs')
+const GOLD = requireGold('scripts/verify-entry-filter.mjs')
+copyToWork(BEFORE, WORK)
+
+if (!(await ensureEncoder({ model: MODEL }))) {
+  console.error('编码器不可用：本脚本必须在真实模型下跑。')
+  process.exit(2)
+}
+const gold = JSON.parse(readFileSync(GOLD, 'utf8'))
+const { db } = openVault(WORK)
+const rule = ruleOf(db)
 const cardOf = new Map(
   db
     .prepare('SELECT id, source_ref FROM atom')
@@ -54,13 +60,17 @@ const junk = db
   .get().c
 db.exec("DELETE FROM entry WHERE term GLOB '*[0-9]*' OR term GLOB '*_*'")
 const after = await score()
-
 const N = gold.length
 const p = (x) => ((x / N) * 100).toFixed(1) + '%'
-console.log('入口过滤净效应（仅剔除 ' + junk + ' 条含数字或下划线的入口，不做重排）')
+
+console.log('入口过滤净效应（真实编码器）')
+console.log('  对照库       ' + describeDb(BEFORE) + '  规则 ' + rule)
+console.log('  工作副本     ' + describeDb(WORK) + '（本脚本只对它做一次 DELETE）')
+console.log('  剔除的入口   ' + junk + ' 条（含数字或下划线，不重排）')
 console.log('  gold Recall@12  ' + p(before.h12) + ' → ' + p(after.h12))
 console.log('  gold Recall@24  ' + p(before.h24) + ' → ' + p(after.h24))
 console.log('  平均注入字符    ' + before.chars.toFixed(0) + ' → ' + after.chars.toFixed(0))
 const pass = after.h12 >= before.h12 && after.h24 >= before.h24
 console.log('  结论：' + (pass ? '过滤本身不影响召回' : '过滤伤了召回，需要复核'))
+db.close()
 if (!pass) process.exitCode = 1

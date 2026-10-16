@@ -25,9 +25,38 @@ export interface EncoderOptions {
   dtype?: string
 }
 
+/**
+ * 本插件用到的 pipeline 形状。
+ *
+ * 为什么手写一个窄接口、而不是 import type 那个包自己的 FeatureExtractionPipeline：
+ * 它是 **optionalDependency**（装不上时走降级路径，见文件头第 2 条）。把一个可选依赖的
+ * 类型引进编译期，就把它变成了**构建期**必需 —— 那份「可缺失」的性质会在构建阶段失效。
+ * 这里只描述真正用到的那一小块，装不装得上都能编译。
+ */
+interface FeatureExtractor {
+  (
+    texts: string[],
+    options: { pooling: string; normalize: boolean },
+  ): Promise<{
+    data: unknown
+    dims?: readonly number[]
+  }>
+}
+
+/**
+ * 动态 import 进来的模块里，本插件实际依赖的那一部分。
+ *
+ * 只列这三个字段：`env` 的两个赋值、`pipeline` 的调用。写成接口而不是 `any`，
+ * 是为了让「插件用了这个包的哪几个 API」在代码里可读、可查。
+ */
+interface TransformersModule {
+  env: { remoteHost?: string; cacheDir?: string }
+  pipeline(task: string, model: string, options: { dtype: string }): Promise<FeatureExtractor | null>
+}
+
 let state: EncoderState = 'idle'
 let lastError: string | null = null
-let extractor: ((input: string | string[], options: unknown) => Promise<unknown>) | null = null
+let extractor: FeatureExtractor | null = null
 let loading: Promise<boolean> | null = null
 /** 已加载的模型标识。切换模型时必须重新加载 —— 否则会静默沿用旧模型。 */
 let loadedModel: string | null = null
@@ -69,13 +98,15 @@ export async function ensureEncoder(opts: EncoderOptions): Promise<boolean> {
   loading = (async () => {
     state = 'loading'
     try {
-      // 动态 import：包可能根本没装（optionalDependency）
-      const mod: any = await import('@huggingface/transformers')
+      // 动态 import：包可能根本没装（optionalDependency）。
+      // 这个转换是对**宿主之外**的边界：包没有随本仓库编译的声明，形状由上层用法约束，
+      // 也就是上面那个 TransformersModule —— 声称的字段一旦写错，调用点会立刻编译不过。
+      const mod = (await import('@huggingface/transformers')) as unknown as TransformersModule
       if (opts.remoteHost) mod.env.remoteHost = opts.remoteHost
       if (opts.cacheDir) mod.env.cacheDir = opts.cacheDir
-      extractor = (await mod.pipeline('feature-extraction', opts.model, {
+      extractor = await mod.pipeline('feature-extraction', opts.model, {
         dtype: opts.dtype ?? 'q8',
-      })) as typeof extractor
+      })
       state = 'ready'
       loadedModel = opts.model
       lastError = null
@@ -111,7 +142,7 @@ export async function encodeBatch(texts: string[], opts: EncoderOptions): Promis
   const ok = await ensureEncoder(opts)
   if (!ok || !extractor) return texts.map(() => null)
   try {
-    const out: any = await extractor(texts, { pooling: 'cls', normalize: true })
+    const out = await extractor(texts, { pooling: 'cls', normalize: true })
     const dim = Number(out.dims?.[1] ?? VEC_DIM)
     if (!(out.data instanceof Float32Array) || dim <= 0) throw new Error('编码输出形状异常')
     return sliceVectors(out.data, dim, texts.length)
