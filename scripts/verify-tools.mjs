@@ -73,9 +73,9 @@ for (const q of [
   const none = out.includes('没有找到相关记忆') // 只在空库时为真：召回总会给 topN，非空库上恒假
   const firstLine = out.split(String.fromCharCode(10)).find((l) => l.startsWith('- ')) ?? '(无锚)'
   const sim = /最高相似度 ([0-9.]+)/.exec(out)
-  // 判据必须引用**实际会出现**的字符串。弱相关的真实信号是输出里的「相关度低」标注，
+  // 判据必须引用**实际会出现**的字符串。弱相关的真实信号是输出里的「可能不相关」标注，
   // 而不是「没有找到」—— 后者只在空库时出现，在非空库上恒为假，判据会永远指向同一侧。
-  const verdict = out.includes('相关度低') ? '弱相关' : '给出记忆'
+  const verdict = out.includes('可能不相关') ? '弱相关' : '给出记忆'
   console.log(
     '  ' +
       q.padEnd(18) +

@@ -37,14 +37,8 @@ function textOutput() {
 }
 
 /**
- * 低于这个余弦就不把结果当「相关记忆」给模型，只说没找到。
+ * 低于这个值就在结果上标一句「可能不相关」。**只是提示，不拦截** —— 判断权交回调用方。
  *
- * 取值依据是同义改写样本上的标定分布（见 pipeline/write.ts）：跨主题最高 0.633、
- * 同主题最低 0.811。阈值落在两者之间且贴近跨主题上界 —— 宁可漏报（说没找到）
- * 也不要把噪声当真结论喂给模型，后者会导致基于无关记忆的错误推理。
- */
-/** 低于这个值就在结果上标一句「可能不相关」。**只是提示，不拦截** —— 见下。 */
-/**
  * 取值与「摘录档」的下界同源（view.ts 的 TIER_BRIEF_MIN）：两者回答的是同一个问题
  * ——「这次的匹配算不算相关」。分头定两个数，只会让它们慢慢分叉。
  *
@@ -54,12 +48,11 @@ function textOutput() {
 export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
 
 /**
- * 这次召回的结果值不值得给模型看。
+ * 这次召回的结果值不值得给模型看 —— 是否该在结果前提示「可能不相关」。
  *
  * 抽成纯函数是为了能直接测判据本身 —— 否则要构造「库里有一条毫不相关的记忆」
  * 这类场景，而真实模型下那条记忆总会得到一个不算低的相似度，测不出边界。
  */
-/** 是否该在结果前提示「可能不相关」。 */
 export function isWeakMatch(meta: RecallMeta): boolean {
   if (meta.vectorMissing) return false // 纯词面模式没有余弦可依，不做判断
   return meta.topCosine < LOW_RELEVANCE_HINT
@@ -210,11 +203,12 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (recalled.meta.vectorMissing) notes.push('（编码器不可用，本次为纯词面召回）')
       if (recalled.meta.lexicalDegraded) notes.push('（词面两路均未命中，仅向量路有结果）')
       if (recalled.meta.shortTermMiss) notes.push('（查询含两字词但入口层零命中）')
-      // 召回总会返回 topN 条，不管相关性。把最高相似度报出来，调用方才知道该不该信。
+      // 召回总会返回 topN 条，不管相关性。把最高相似度**如实**报出来，调用方才知道该不该信；
+      // 低于提示线时再补一句「可能不相关」。这里只标注、不拦截 —— 见 LOW_RELEVANCE_HINT。
       if (!recalled.meta.vectorMissing && recalled.hits.length > 0) {
         const c = recalled.meta.topCosine
-        const level = c >= 0.78 ? '高' : c >= 0.6 ? '中' : '低'
-        notes.push('（最高相似度 ' + c.toFixed(2) + '，相关度' + level + '）')
+        const hint = isWeakMatch(recalled.meta) ? '，可能不相关' : ''
+        notes.push('（最高相似度 ' + c.toFixed(2) + hint + '）')
       }
       // 记一次命中。召回本身是只读语义，这一步失败不该让召回失败 —— 但也绝不假装成功：
       // 库里的命中计数会因此偏低，这是刻意选的失败方向。
