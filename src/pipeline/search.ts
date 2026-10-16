@@ -303,7 +303,7 @@ function vecPath(db: DatabaseSync, q: Float32Array | null, k: number, scope?: st
   return best.sort((a, b) => b.cos - a.cos)
 }
 /** 单路最多用多少个词进 FTS 查询。长查询切出的 bigram 会很多，超出部分区分度也低。 */
-const MAX_QUERY_TERMS = 48
+export const MAX_QUERY_TERMS = 48
 
 /**
  * RRF 融合。
@@ -346,7 +346,7 @@ function affiliationFactor(secondary: boolean, onlyGraph: boolean): number {
  * 两个条件都严格 —— 同义换述被词面挡掉、纯噪声被 cos 挡掉，所以用摘要而不是全文就够。
  * 精度更高的 atom_pair 表由重聚类任务建立，接入后这里可以直接换成查表。
  */
-const DUP_COS = 0.92
+export const DUP_COS = 0.92
 /**
  * 判定重复所需的词面重叠。
  *
@@ -358,7 +358,7 @@ const DUP_COS = 0.92
  * 取 0.72：只有几乎逐字重复才会被压制。真正重复的（同一段文本）实测 Jaccard 为 1.0，
  * 稳过。宁可漏压（多出一条），也不误压（丢掉一条信息）。
  */
-const DUP_LEX = 0.72
+export const DUP_LEX = 0.72
 
 function suppressDuplicates(
   db: DatabaseSync,

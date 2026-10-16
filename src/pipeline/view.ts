@@ -64,11 +64,11 @@ export interface ViewResult {
   trimmed: TrimStep[]
 }
 
-const DEFAULT_BUDGET = 6000
-const DEFAULT_ANCHOR_MAX = 1200
-const DEFAULT_ENTRIES_PER_TOPIC = 8
-const DEFAULT_ENTRY_LINE_MAX = 160
-const DEFAULT_PATH_LINES = 15
+export const DEFAULT_BUDGET = 6000
+export const DEFAULT_ANCHOR_MAX = 1200
+export const DEFAULT_ENTRIES_PER_TOPIC = 8
+export const DEFAULT_ENTRY_LINE_MAX = 160
+export const DEFAULT_PATH_LINES = 15
 
 /**
  * 注入档位：按匹配质量决定这次给多少。

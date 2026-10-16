@@ -364,13 +364,39 @@ describe('落位判据（decidePlacement 边界表）', () => {
   })
 })
 describe('写入管线：入口生成', () => {
-  it('抽取入口会滤掉虚字构成的二字组，真词则保留', () => {
+  it('抽取入口：真词入选，跨词边界碎片出局', () => {
     const recs = extractedEntries('系统代理配置与缓存索引的说明。', buildVocabIndex(db))
     const terms = recs.map((r) => r.term)
     assert.ok(terms.includes('代理'), '真词应当入选')
     assert.ok(terms.includes('缓存'), '真词应当入选')
-    assert.ok(!terms.includes('的说'), '含虚字的二字组不该成为入口')
     assert.ok(recs.every((r) => r.weight > 0 && r.weight <= 0.6))
+  })
+
+  it('边界自由度为零的碎片出局，观测不足的候选不被硬判', () => {
+    // v4 的候选资格判据：左右邻汉字都只观测到一种取值 -> 出局。这里手工喂词表，
+    // 因为要构造的正是「观测到恒定」那一档，写库反而要造很多条正文。
+    const mk = (t, extra = {}) => ({
+      df: 1,
+      tf: 1,
+      leftVaried: true,
+      rightVaried: true,
+      leftSeen: 5,
+      rightSeen: 5,
+      ...extra,
+    })
+    const stats = new Map([
+      // 「值阈」永远是左「位」右「值」——两侧都恒定，且有足够观测 -> 判为碎片
+      ['值阈', mk('值阈', { leftVaried: false, rightVaried: false })],
+      // 「代理」在一侧恒定，另一侧多样 -> 不硬判（留在候选池里由降权处理）
+      ['代理', mk('代理', { rightVaried: false })],
+      // 只有一两次观测的候选：恒定还可能是抽样偶然 -> 不硬判
+      ['新建', mk('新建', { leftVaried: false, rightVaried: false, leftSeen: 1, rightSeen: 2 })],
+    ])
+    const vocab = { df: (t) => (t === '值阈' ? 5 : 0), total: () => 100, stat: (t) => stats.get(t) }
+    const terms = extractedEntries('值阈代理新建的说明。', vocab, 16).map((r) => r.term)
+    assert.ok(!terms.includes('值阈'), '两侧都恒定且有观测的候选必须出局')
+    assert.ok(terms.includes('代理'), '只有一侧恒定的候选不该被硬判')
+    assert.ok(terms.includes('新建'), '观测不足时不下「恒定」这个结论')
   })
 
   it('整段中文（原文切片）不作为入口', () => {
@@ -380,7 +406,7 @@ describe('写入管线：入口生成', () => {
     const terms = recs.map((r) => r.term)
     assert.ok(!terms.includes('因为所以但是因此'), '超过四字的整段中文是原文切片')
     assert.ok(!terms.includes('这是一个用于测试的结论'))
-    assert.ok(!terms.includes('用于测试的'), '三字以上、含虚字的片段同样出局')
+    assert.ok(!terms.includes('用于测试的'), '超过四字的片段出局（靠长度上限，v4 起不再依赖虚字表）')
   })
 
   it('declared 入口权重恒为 1.0，且同名入口不被 extracted 覆盖', () => {

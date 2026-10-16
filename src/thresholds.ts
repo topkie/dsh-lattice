@@ -1,0 +1,1243 @@
+// 阈值登记表：把散落在各模块里的**经验取值**集中登记成可核对的条目。
+//
+// 为什么需要它：M2 的决策审核发现三处阈值（入口泛词 df/N>0.5、单字虚词表、档位阈值
+// 0.55/0.45）各自踩了同一个坑 —— 阈值取自某个库的分布，却用在另一个库上，而代码里
+// 没有任何地方记着它是在什么语料上标定的。缺的不是某次修正，而是「阈值必须带标定依据」
+// 这条流程约束。本模块是那条约束的载体。
+//
+// **设计的形状（三条约束）**
+//
+// 1. **值的真相源留在原处**。这里不写数字，只写 `() => CONST` —— 打印时现取。把值搬进来
+//    会让「为什么是这个值」的长注释与值分家，那正是本次要治的病。用函数而不是直接引用，
+//    是为了让值始终是**活的**：模块默认值改了，表里跟着变，不会留下第二份数字。
+// 2. **漏登记必须能自动检出**。`scripts/print-thresholds.mjs` 解析 src 下每一个模块级数值
+//    常量，凡是不在本表、也不在豁免清单里的，一律以非零码退出。「记得加一行」不是机制。
+// 3. **一个名字在几个地方取值，就登记几个地方**。配置类阈值既有模块默认值（write.ts 的
+//    DEFAULT_THRESHOLDS），又有 zod schema 的默认与范围（index.ts 的 Config）。两处已经分叉
+//    过（tauJoin 与 tauLex 都和设计文档对不上），所以 `design` 与 `zod` 是行的一部分，不是附注。
+//
+// **本模块不改变任何行为**：只被打印脚本与覆盖检查读取，插件运行时不 import 它。
+//
+// 标定场景只能来自代码注释、`dsh-lattice-devnotes/` 的报告或实证记录。**查不到就写「无记录」**
+// —— 把缺口暴露出来正是本模块的产出之一；编一个看起来合理的场景比留空更糟。
+
+import {
+  ENTRY_WEIGHT,
+  DEFAULT_MAX_EXTRACTED,
+  MIN_VOCAB_FOR_DF,
+  MIN_TERM,
+  MAX_TERM,
+  MAX_HAN_TERM,
+  FRAGMENT_PENALTY,
+  MIN_NEIGHBOR_EVIDENCE,
+} from './pipeline/entries.js'
+import { LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT } from './pipeline/list.js'
+import { AFFILIATION, CHANNEL_WEIGHT, DUP_COS, DUP_LEX, MAX_QUERY_TERMS, RRF_K } from './pipeline/search.js'
+import {
+  DEFAULT_ANCHOR_MAX,
+  DEFAULT_BUDGET,
+  DEFAULT_ENTRIES_PER_TOPIC,
+  DEFAULT_ENTRY_LINE_MAX,
+  DEFAULT_PATH_LINES,
+  MIN_ANCHORS,
+  SEGMENT_RATIO,
+  TIER_BRIEF_MIN,
+  TIER_FULL_MIN,
+  TRIM_ORDER,
+} from './pipeline/view.js'
+import {
+  DEFAULT_THRESHOLDS,
+  DEFAULT_TOP_N,
+  FINGERPRINT_CHARS,
+  FINGERPRINT_MEMBERS,
+  WORD_ONLY_TOP_N_FACTOR,
+} from './pipeline/write.js'
+import { LOW_RELEVANCE_HINT } from './tools/index.js'
+import { MAX_ATOM_CHARS, MIN_ATOM_CHARS } from './migrate/split.js'
+import { VEC_DIM } from './util/vec.js'
+
+/** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
+export type ThresholdArea =
+  '写入' | '落位' | '入口' | '召回融合' | '重排去重' | '注入' | '目录' | '迁移切分' | '资源'
+
+/** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
+export type ThresholdValue = number | string | Readonly<Record<string, number>>
+
+/**
+ * 标定场景：这个值是在什么库、多少条 atom、什么来源分布下定的。
+ *
+ * 只填代码或开发笔记里**查得到**的内容。`evidence` 必须指到具体证据，不许写「经验值」。
+ * 语料条数未记录时留空，**不要拿运行规模顶替** —— 那正是本任务要消灭的那种混淆。
+ */
+export interface ThresholdCalibration {
+  /** 标定时语料的 atom 数。未记录时省略。 */
+  atoms?: number
+  /** 标定时语料的来源分布。 */
+  origins?: Readonly<Record<string, number>>
+  /** 标定时语料的作用域分布。 */
+  scopes?: Readonly<Record<string, number>>
+  /** 证据出处（文件 + 章节，或脚本名）。 */
+  evidence: string
+  /** 标定日期；未记录则省略。 */
+  at?: string
+}
+
+/** 设计文档的对应项。 */
+export interface DesignSite {
+  /** 设计文档标识。本仓库 docs/ 不含设计正文（不进公开仓库），故指向开发笔记的章节名。 */
+  doc: string
+  /** 设计文档里的键名；与代码常量名不同名时两处都写。 */
+  key: string
+  default: number
+  /** 文档里的范围；未给范围时省略。 */
+  min?: number
+  max?: number
+  /** 单位不同（例如比例为百分数）时的换算倍数，用于一致性比较。 */
+  scale?: number
+  /**
+   * 设计文档把一组键写成一行（`wVec/wEntry/wBody/wGraph`）时，各子键在代码里的对应名字。
+   * 数组下标与 `key` 里用 `/` 分开的那一段一一对应。
+   */
+  codeKeys?: readonly string[]
+}
+
+/** zod schema 里的默认值与取值范围。 */
+export interface ZodSite {
+  file: string
+  name: string
+  default: number
+  min: number
+  max: number
+}
+
+/** 一条登记项。 */
+export interface ThresholdEntry {
+  /** 与源码里的常量名一致（内联量写形如 `X（内联）`，见 inline）。 */
+  name: string
+  area: ThresholdArea
+  /** 值仍在原处：打印时现取，不改行为。 */
+  value: () => ThresholdValue
+  /** 定义处（文件 + 常量名）；行号由打印脚本自己定位，不手工维护。 */
+  definedBy: { file: string; name: string }
+  /** 受该阈值影响的行为。 */
+  affects: string
+  /** 标定场景；查不到依据时省略（打印为「无记录」）。 */
+  calibration?: ThresholdCalibration
+  /** 什么变了它就该重标。 */
+  variesWith: readonly string[]
+  /**
+   * 内联数值字面量：没有独立常量名，值就地写在表达式里。
+   * `source` 是用于定位行号的原样片段（在文件里必须唯一）。
+   * 这类条目的 `value` 是**镜像**，仅供打印，不是真相源 —— 真相源是那一行。
+   */
+  inline?: { file: string; source: string }
+  /** 对象型阈值组：每个子键各算一行。 */
+  group?: readonly string[]
+  /** 设计文档的对应项（能在文档里找到名字的才有）。 */
+  design?: DesignSite
+  /** zod schema 里的默认值与范围。 */
+  zod?: ZodSite
+  /** 该名字在别处还有取值点（例如 index.ts 的 `??` 兜底），改动时必须同步。 */
+  otherSites?: readonly string[]
+  /** 已知的与设计文档的分叉，写明现状以便审核。 */
+  diverges?: string
+  /** 覆盖检查用的常量名：默认取 definedBy.name；内联量与设计类条目写 null。 */
+  constName?: string | null
+  /** 打印时展示的值；值不是数字（例如 Set、复合推导值）时用它替代。 */
+  display?: string
+  /** 设计文档有、代码里已实现但键名不同的项：实现位置。 */
+  codeSites?: readonly string[]
+}
+
+/**
+ * 设计文档 §7 里**有名字、代码里没有对应项**的配置。
+ *
+ * 与阈值登记表分开：它们没有当前值可登记。列在这里是为了让「文档有、代码无」这个缺口
+ * 可见，而不是靠读文档的人自己发现。方向相反的缺口（代码有、文档无）由登记项里
+ * `design` 字段的缺席表示。
+ */
+export interface DesignGap {
+  /** 设计文档里的键名。 */
+  key: string
+  /** 设计文档给的默认值（非数值时记 0 并在 note 里说明原值）。 */
+  designDefault: number
+  /** 代码里对应什么、或为什么没有。 */
+  note: string
+  /** 代码里其实实现了、只是键名不同时的实现位置。 */
+  codeSites?: readonly string[]
+}
+
+/** 设计文档在开发笔记里的位置（本仓库 docs/ 只放工程文档，设计正文不进公开仓库）。 */
+const DESIGN_DOC = '开发笔记 设计/技术文档/7.配置项清单.md'
+
+/** 全部登记项。按模块分块，与源码顺序一致，便于对照审查。 */
+export const THRESHOLDS: readonly ThresholdEntry[] = [
+  // ────────────────────────────── 落位（write.ts）──────────────────────────────
+  {
+    name: 'DEFAULT_THRESHOLDS.tauJoin',
+    area: '落位',
+    value: () => DEFAULT_THRESHOLDS.tauJoin,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DEFAULT_THRESHOLDS' },
+    affects: 'decidePlacement：与最近 topic 的余弦达到此值、且词面那一票也过，才允许并入',
+    calibration: {
+      evidence:
+        'write.ts:111-131 注释与 scripts/probe-threshold.mjs（可复跑）：真实模型、8 组 x 3 条同义改写；' +
+        '同主题余弦 min 0.811 / p50 0.897 / max 0.956，跨主题 0.375 / 0.509 / 0.633，两类完全分离。' +
+        '取贴近下界的保守线 0.78（误并是静默的知识损坏，漏并只是多一个主题）。**未记录语料条数与来源分布**',
+      at: '2026-10-15',
+    },
+    variesWith: ['换编码模型', '标定语料的领域混合度', '误并与漏并的代价评估'],
+    constName: null,
+    design: { doc: DESIGN_DOC, key: 'tauJoin', default: 0.75, min: 0.6, max: 0.95 },
+    zod: { file: 'src/index.ts', name: 'tauJoin', default: 0.78, min: 0.6, max: 0.95 },
+    otherSites: ['src/index.ts:98 `Number(cfg.tauJoin ?? 0.78)` —— 同一默认值写了第二遍'],
+    diverges: '设计文档默认 0.75，代码与 zod 都是 0.78（标定后上调，文档未同步）',
+  },
+  {
+    name: 'DEFAULT_THRESHOLDS.tauLex',
+    area: '落位',
+    value: () => DEFAULT_THRESHOLDS.tauLex,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DEFAULT_THRESHOLDS' },
+    affects: 'decidePlacement：并入所需的词面重叠（bigram-Jaccard，第二票）',
+    calibration: {
+      evidence:
+        'write.ts:111-131 注释与 scripts/probe-threshold.mjs：同主题原文 bigram-Jaccard min 0.059 / p50 0.229 /' +
+        ' max 0.471，跨主题 max 0.061；取贴住噪声上界的 0.05。**未记录语料条数与来源分布**',
+      at: '2026-10-15',
+    },
+    variesWith: ['语料语言或书写粒度', '原子化切分的长度', '词面判据换粒度时'],
+    constName: null,
+    design: { doc: DESIGN_DOC, key: 'tauLex', default: 0.12, min: 0.05, max: 0.5 },
+    zod: { file: 'src/index.ts', name: 'tauLex', default: 0.05, min: 0.02, max: 0.5 },
+    otherSites: ['src/index.ts:99 `Number(cfg.tauLex ?? 0.05)`'],
+    diverges: '设计文档默认 0.12（其下界恰为 0.05），代码取的正是那个下界；zod 下界 0.02 比文档更宽',
+  },
+  {
+    name: 'DEFAULT_THRESHOLDS.tauNew',
+    area: '落位',
+    value: () => DEFAULT_THRESHOLDS.tauNew,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DEFAULT_THRESHOLDS' },
+    affects: 'decidePlacement：低于此余弦直接新建 topic（落未归类域）',
+    calibration: {
+      evidence:
+        'write.ts:111-131 注释与《设计报告》落位判定表：跨主题余弦 max 0.633，取 0.5 作为「全新」的下界。' +
+        '**未记录语料条数与来源分布**',
+      at: '2026-10-15',
+    },
+    variesWith: ['换编码模型', '标定语料的领域混合度'],
+    constName: null,
+    design: { doc: DESIGN_DOC, key: 'tauNew', default: 0.5, min: 0.2, max: 0.8 },
+    zod: { file: 'src/index.ts', name: 'tauNew', default: 0.5, min: 0.2, max: 0.8 },
+    otherSites: ['src/index.ts:101 `Number(cfg.tauNew ?? 0.5)`'],
+  },
+  {
+    name: 'DEFAULT_THRESHOLDS.tauLexOnly',
+    area: '落位',
+    value: () => DEFAULT_THRESHOLDS.tauLexOnly,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DEFAULT_THRESHOLDS' },
+    affects: 'decidePlacement：无向量（编码器降级）时并入所需的词面重叠，比两票模式高',
+    calibration: {
+      evidence:
+        'write.ts:130 注释（同主题词面 p50 之上、噪声 max 之上）与 devnotes M1《按「跨机器是否一致」分类》' +
+        'A 类表（0.78 / 0.05 / 0.10 / 0.50，注明「已实测标定」）。**未记录语料条数与来源分布**',
+      at: '2026-10-15',
+    },
+    variesWith: ['词面判据本身的变化（tauLex）', '编码器可用率与其降级路径'],
+    constName: null,
+    zod: { file: 'src/index.ts', name: 'tauLexOnly', default: 0.1, min: 0.02, max: 0.6 },
+    otherSites: ['src/index.ts:100 `Number(cfg.tauLexOnly ?? 0.1)`'],
+    diverges: '**设计文档 §7 没有这个键** —— 代码新增（降级路径），文档未同步',
+  },
+  {
+    name: 'DELTA_PEAK（内联）',
+    area: '落位',
+    value: () => 0.06,
+    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    affects: 'decidePlacement：sim1 - sim2 小于此差值时判为「双峰」，退回新建（ambiguous）',
+    inline: { file: 'src/pipeline/write.ts', source: 's1 - (sim2 ?? 0) < 0.06' },
+    calibration: {
+      evidence:
+        '《设计报告》落位判定表（sim1 - sim2 < 0.06 且 sim1 >= tauNew 则双峰拒绝）；设计文档 §7 里它有名字' +
+        '（deltaPeak，默认 0.06、范围 0.01-0.20），代码里没有名字。**未记录实测语料**',
+    },
+    variesWith: ['换编码模型（余弦尺度的间距会变）', '同域不同子话题的密度'],
+    constName: null,
+    design: { doc: DESIGN_DOC, key: 'deltaPeak', default: 0.06, min: 0.01, max: 0.2 },
+    diverges:
+      '**设计文档有名字、代码里是内联字面量** —— 同一件事在文档里是配置项、在代码里是魔法数；' +
+      'zod schema 里没有它，运行时不可配置',
+  },
+  // ─────────────────────── 落位的候选规模与指纹（write.ts）─────────────────────
+  {
+    name: 'LEX_CANDIDATES',
+    area: '落位',
+    value: () => 8,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'LEX_CANDIDATES' },
+    affects: 'decidePlacement：有向量时，只给余弦最靠前的这么多候选 topic 算词面那一票',
+    calibration: {
+      evidence:
+        'write.ts:284-286 注释：词面是「昂贵的第二票」（每 topic 一次索引查询）——理由是成本不是分布；' +
+        '**无实测标定记录**',
+    },
+    variesWith: ['候选 topic 数与索引查询成本', '库规模（候选变多时该近似会失真）'],
+  },
+  {
+    name: 'WORD_ONLY_CANDIDATES',
+    area: '落位',
+    value: () => 64,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'WORD_ONLY_CANDIDATES' },
+    affects: '无向量时先取多少个 topic 参与词面预筛（没有余弦可用，只能靠它缩小候选）',
+    calibration: { evidence: 'write.ts:137-141 注释只说「先取多少个」；**无实测标定记录**' },
+    variesWith: ['库内 topic 总数', 'topic 表按 rebuilt_at 倒序取候选这一近似的偏差'],
+    diverges: '**没有进 zod schema**：降级路径的候选上限运行时不可配置',
+  },
+  {
+    name: 'WORD_ONLY_TOP_N_FACTOR',
+    area: '落位',
+    value: () => WORD_ONLY_TOP_N_FACTOR,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'WORD_ONLY_TOP_N_FACTOR' },
+    affects: '无向量时，词面预筛保留的候选数是 topN 的多少倍',
+    calibration: {
+      evidence:
+        '**无记录**。原来是内联的 `* 2`，本次为可登记而提升为常量（取值未变）；' +
+        '注释只说「词面筛掉一批之后还要留够 decidePlacement 的输入」',
+    },
+    variesWith: ['词面预筛的淘汰率', 'topN 改动时'],
+  },
+  {
+    name: 'DEFAULT_TOP_N',
+    area: '落位',
+    value: () => DEFAULT_TOP_N,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DEFAULT_TOP_N' },
+    affects: 'loadCandidates 的默认候选上限（写入侧的 topic 候选数）',
+    calibration: {
+      evidence: '**无记录**。值与注入层的 topN 同数（24），但两处各自写死，没有一处说明为什么是 24',
+    },
+    variesWith: ['库内 topic 总数', '落位准确率对候选规模的敏感度'],
+    design: { doc: DESIGN_DOC, key: 'topN', default: 24, min: 5, max: 50 },
+    zod: { file: 'src/index.ts', name: 'topN', default: 24, min: 5, max: 50 },
+    otherSites: [
+      'src/index.ts:104 `Number(cfg.topN ?? 24)`',
+      'src/tools/index.ts:201 recall(..., { topN: cfg.topN }) —— 注入层候选数走的是配置',
+    ],
+    diverges:
+      '**同名两处用途**：zod/Config 的 topN 管「召回交注入层的候选数」，这里管「写入侧的 topic 候选数」，' +
+      '并被 write.ts 当作默认值引用。两者数值相同纯属巧合，改配置不会改这里',
+  },
+  {
+    name: 'FINGERPRINT_CHARS',
+    area: '落位',
+    value: () => FINGERPRINT_CHARS,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'FINGERPRINT_CHARS' },
+    affects: '每个成员贡献给 topic 词面指纹的正文字符数（指纹用于估重叠度）',
+    calibration: {
+      evidence:
+        'devnotes M1《按「跨机器是否一致」分类》B 类表：400，「中文摘要 + 背景段的典型长度」，跨机器一致、' +
+        '跨语料要重标。**未记录是哪个库、多少条 atom**',
+    },
+    variesWith: ['语料的段落长度分布', '语言（换成英文/日文语料）'],
+  },
+  {
+    name: 'FINGERPRINT_MEMBERS',
+    area: '落位',
+    value: () => FINGERPRINT_MEMBERS,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'FINGERPRINT_MEMBERS' },
+    affects: '单个 topic 最多取多少个成员的指纹（取前 N 个，保证结果确定）',
+    calibration: { evidence: 'write.ts:181-182 注释只说「最多取多少个成员的指纹」；**无实测标定记录**' },
+    variesWith: ['单个 topic 的成员数分布（大 topic 多时指纹代表性下降）'],
+  },
+  {
+    name: 'TOPIC_LABEL_CHARS（内联）',
+    area: '落位',
+    value: () => 16,
+    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    affects: '新建 topic 时标签取摘要的前多少字符',
+    inline: { file: 'src/pipeline/write.ts', source: 'row.summary.slice(0, 16)' },
+    calibration: {
+      evidence: '**无记录**；与注入层入口行的主题标签宽度（view.ts 的 clip(t.label, 16)）同值但两处各自写死',
+    },
+    variesWith: ['主题标签在注入层显示多宽', '摘要长度分布'],
+  },
+  {
+    name: 'NEAR_EDGE_CONFIDENCE（内联）',
+    area: '落位',
+    value: () => 0.5,
+    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    affects: '写 near 边时的默认 confidence（有真实 sim 时用 sim 顶替）',
+    inline: { file: 'src/pipeline/write.ts', source: 'row.nearConf ?? 0.5' },
+    calibration: { evidence: '**无记录**。是「没有证据时给中位」的占位值，不是标定结果' },
+    variesWith: ['图路排序对 confidence 的依赖方式'],
+  },
+  {
+    name: 'SUMMARY_CHARS（内联）',
+    area: '写入',
+    value: () => 48,
+    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    affects: '写入时抽取摘要的字符上限（摘要进 atom.summary，参与注入与去重）',
+    inline: { file: 'src/pipeline/write.ts', source: 'extractSummary(text, 48)' },
+    calibration: {
+      evidence:
+        'text.ts:80-85 注释：取第一句、超长截断、按码点计数以免劈开代理对；48 本身**无实测标定记录**。' +
+        '默认值住在 util/text.ts 的函数签名里（extractSummary(text, max = 48)），调用点又写了一遍 48',
+    },
+    variesWith: ['一句话讲一件事这条写入约定的实际长度分布', '语言'],
+  },
+  {
+    name: 'SEARCH_BODY_MAX_CHARS（内联）',
+    area: '写入',
+    value: () => 1600,
+    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    affects: 'buildSearchBody 里进 trigram 索引的正文字符上限（超出即截断）',
+    inline: { file: 'src/pipeline/write.ts', source: 'if (body.length <= 1600) return' },
+    calibration: { evidence: 'write.ts:330-341 注释只说明「摘要重复一次」的理由；1600 **无实测标定记录**' },
+    variesWith: ['atom 正文长度分布', '长正文的细节召回是否重要'],
+  },
+  // ────────────────────────────── 入口（entries.ts）──────────────────────────────
+  {
+    name: 'DF_FILTER_RATIO（内联）',
+    area: '入口',
+    value: () => 0.5,
+    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    affects: '泛词过滤：df/N 超过此比例的词元直接丢弃（不参与入口竞争）',
+    inline: { file: 'src/pipeline/entries.ts', source: 'if (dfFilterActive && df / N > 0.5) continue' },
+    calibration: {
+      evidence:
+        'entries.ts:181-196 注释（泛词是相对于语料定义的）与 M2 审核 T11：**在 279 atom 的基准库上' +
+        'df/N > 0.5 根本够不到，净贡献为 0** —— 即这条判据从未在目标语料上被实测触发过。' +
+        '「0.5」的出处是「过半数即无区分度」这句直觉，不是某次测量',
+    },
+    variesWith: ['库内 atom 数与来源分布', '语言（英文词表大，问题不明显）'],
+    diverges:
+      '**本任务要治的原始病例**：判据取自直觉、在运行语料上不触发、且没有任何地方记着它的标定场景。' +
+      '治理（改相对判据）属后续执行点，本次只登记不改值',
+  },
+  {
+    name: 'IDF_PRIOR（内联）',
+    area: '入口',
+    value: () => 0.5,
+    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    affects: '入口打分的 IDF 平滑项：log((N - df + 0.5) / (df + 0.5) + 1)',
+    inline: { file: 'src/pipeline/entries.ts', source: 'Math.log((N - df + 0.5) / (df + 0.5) + 1)' },
+    calibration: {
+      evidence: '**无记录**。取 0.5 是 IDF 平滑（Robertson-Sparck Jones 形式）的常规写法，属算法惯例而非实测',
+    },
+    variesWith: ['仅在换用别的 IDF 变体时'],
+  },
+  {
+    name: 'NEIGHBOR_SAMPLE（内联）',
+    area: '入口',
+    value: () => 2,
+    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    affects: '判断「左右邻是否只有一种取值」时保留的邻居样本数（第二个不同值即判定为多样）',
+    inline: {
+      file: 'src/pipeline/entries.ts',
+      source: 'else if (s.left1 !== ch && s.left2 === null) s.left2 = ch',
+    },
+    calibration: {
+      evidence:
+        'D11-4 与 entries.ts:111-121 注释：**人工标注的 60 个样本**上，「两侧邻居都多于一种」把真词与' +
+        '碎片分开到 96.7%（AUC 0.973）。标定语料是那 60 个二字组样本，不是整库',
+      at: '2026-10-15',
+    },
+    variesWith: ['语料领域（邻居多样性的基线）', '上游切词规则'],
+  },
+  {
+    name: 'EXTRACT_WEIGHT_CEIL（内联）',
+    area: '入口',
+    value: () => 0.6,
+    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    affects: '抽取入口的权重归一后上界（declared 恒为 1.0，抽取不得越过它）',
+    inline: { file: 'src/pipeline/entries.ts', source: '归一后落在 [0, 0.6]' },
+    calibration: {
+      evidence:
+        'entries.ts:315 注释：抽取入口永远不越过 declared 的 1.0；0.6 由 ENTRY_WEIGHT.extracted 决定，非实测',
+    },
+    variesWith: ['ENTRY_WEIGHT.extracted 改动时'],
+  },
+  {
+    name: 'IDF_FREQUENCY_FACTOR（内联）',
+    area: '入口',
+    value: () => 'log2(1 + tf)',
+    display: 'IDF × log2(1+tf)（tf=1 时该因子恰为 1，条目退化成 v3 的纯 IDF）',
+    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    affects: '抽取入口的打分：IDF（区分度）乘上词频项（证据强度），决定十六个槽位归谁',
+    inline: {
+      file: 'src/pipeline/entries.ts',
+      source: 'Math.log((N - df + 0.5) / (df + 0.5) + 1) * Math.log2(1 + tf)',
+    },
+    calibration: {
+      evidence:
+        '2026-10-17 实现报告：删掉单字虚词表后，纯 Entry 路 gold 召回在只改门时为 50%、' +
+        '只改打分时为 70%、两者都不改（v3 字表 + 纯 IDF）为 65%。取 log2(1+tf) 而非 tf 本身，' +
+        '是为了让重复次数的边际收益递减——**形式是判断，幅度未做扫描**。' +
+        '端到端（真实模型、20 条 gold）另有取舍，见同一份报告',
+      at: '2026-10-17',
+    },
+    variesWith: ['语料规模（短正文里 tf 的分布）', '每 atom 的入口配额', '上游切词规则'],
+  },
+  {
+    name: 'BOUNDARY_FREEDOM（判据线，非数值常量）',
+    area: '入口',
+    value: () => '是否「边界自由度为零」，无阈值数字',
+    display: '边界自由度为零即出局（判据线在零，没有可调数字）',
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'hasBoundaryFreedom' },
+    constName: null,
+    inline: { file: 'src/pipeline/entries.ts', source: 'function hasBoundaryFreedom(' },
+    affects: '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值即出局',
+    calibration: {
+      evidence:
+        '2026-10-17 实现报告：**判据线是「零」本身，不是扫描出来的**。279 atom 基准库上本判据' +
+        '丢弃纯汉字二字型的一部分候选；被它放回来的高频真词（记忆 57 / 实测 50 / 判据 38 / ' +
+        '目录 30 / 合并 30 / 验证 22…）正是 v3 单字虚词表的成片误杀。' +
+        '**光换这一层不够**：只删字表不改打分，纯 Entry 路 gold 召回 65% -> 50%；' +
+        '配套改打分（见 IDF_FREQUENCY_FACTOR）后为 70%。' +
+        '**端到端贡献在 20 条 gold 上不可分辨**：去掉本判据重跑，20 条查询的名次一模一样。' +
+        '判为「不可分辨」而不是「零贡献」，理由只在样本量 —— 同一次端到端测量里 @12 的 5% 之差' +
+        '（1 条）同样被判为不可判定；用同一个样本对前者谨慎、对后者干脆是双标。' +
+        '保留它的依据：实测无误杀（反向差集 216 条全是碎片），且删掉它会让字表留下的两个调用点' +
+        '完全失守（候选池变松是一个独立的设计决定，需单独论证）。**待扩库后复测**',
+      at: '2026-10-17',
+    },
+    variesWith: ['语料规模（邻居观测的多少）', '上游切词规则', '语料语言'],
+    diverges:
+      '**已知不等价**：几何量放回了一批 v3 会挡的高频泛词（不是 / 一个 / 什么 / 需要 / 用户 / ' +
+      '内容 / 问题…）——它们两侧都多样，几何量分不开。「这个词是不是词」与「这个词有没有主题' +
+      '信息」是两个量，本判据只管前者',
+  },
+  {
+    name: 'MIN_NEIGHBOR_EVIDENCE',
+    area: '入口',
+    value: () => MIN_NEIGHBOR_EVIDENCE,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'MIN_NEIGHBOR_EVIDENCE' },
+    affects: '判「边界自由度为零」所需的单侧最少邻居观测次数；不足则不下这个结论，只降权',
+    calibration: {
+      evidence:
+        '2026-10-17 实现报告：基准库上取 2 与取 3 对纯 Entry 路 gold 召回**完全同分**，' +
+        '取 2 只多留少量 df<=2 的候选。取 2 的另一个理由是 test/write.test.mjs 里的写库场景：' +
+        '两条 atom 时「代理」是 leftSeen=1 / rightSeen=1，取 2 才放它过去',
+      at: '2026-10-17',
+    },
+    variesWith: ['语料规模（每条 atom 的平均长度）', '上游切词规则'],
+  },
+  {
+    name: 'MIN_VOCAB_FOR_DF',
+    area: '入口',
+    value: () => MIN_VOCAB_FOR_DF,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'MIN_VOCAB_FOR_DF' },
+    affects: '语料规模达到此值，泛词过滤（df/N > 0.5）才生效',
+    calibration: {
+      evidence:
+        'D11-9：低于该规模「出现在半数 atom 里」不携带信息（库内 2 条时出现一次就是半数）。' +
+        '**在 12 atom 这个规模上定的**，由 test/write.test.mjs 守着小库边界；标定语料未记录',
+      at: '2026-10-15',
+    },
+    variesWith: ['每 atom 的入口配额（配额越小，泛词线越早需要生效）', '语料语言', '上游切词规则'],
+  },
+  {
+    name: 'MIN_TERM',
+    area: '入口',
+    value: () => MIN_TERM,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'MIN_TERM' },
+    affects: '入口词元的长度下界（按码点）；低于它不参选',
+    calibration: {
+      evidence:
+        'devnotes M1《按「跨机器是否一致」分类》B 类表把 2 / 8 归为「汉语词长分布」，' +
+        '**但没有一次实测**。取值来自设计判断：二字词是中文检索的主力',
+    },
+    variesWith: ['上游切词规则（改成词级切分后长度含义会变）', '换成英文/日文语料'],
+  },
+  {
+    name: 'MAX_TERM',
+    area: '入口',
+    value: () => MAX_TERM,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'MAX_TERM' },
+    affects: '入口词元的长度上界（按码点）；超过它不参选',
+    calibration: { evidence: '同 MIN_TERM：B 类表标注为「汉语词长分布」，**无实测记录**' },
+    variesWith: ['上游切词规则', '语料语言', '正文的书写粒度'],
+  },
+  {
+    name: 'MAX_HAN_TERM',
+    area: '入口',
+    value: () => MAX_HAN_TERM,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'MAX_HAN_TERM' },
+    affects: '整段连续汉字作为入口时的长度上限（超过四字即出局）；三字以上另需通过边界自由度判据（v4 起）',
+    calibration: {
+      evidence:
+        'D11-6：切词把连续汉字整段当词，于是正文任意片段都成候选（「全程没有建分支」「为什么会这样」），' +
+        '它们不会被任何查询命中却占着每 atom 只有十几个的槽位。理由是「真词里超过四字的极少」——' +
+        '**定性判断，未做词长统计**',
+      at: '2026-10-15',
+    },
+    variesWith: ['语料语言', '正文的书写粒度（一句话讲一件事的实际长度）'],
+  },
+  {
+    name: 'FRAGMENT_PENALTY',
+    area: '入口',
+    value: () => FRAGMENT_PENALTY,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'FRAGMENT_PENALTY' },
+    affects:
+      '边界自由度缺一侧的候选（疑似跨词边界碎片）得分乘以该系数；降权而非剔除（v4 起两侧都恒定的已直接出局）',
+    calibration: {
+      evidence:
+        'D11-4 与 entries.ts:111-121 注释：**人工标注的 60 个样本**上，「两侧邻居都多于一种」把真词与' +
+        '碎片分开到 96.7%（AUC 0.973）；但判为碎片的那组里仍约三成是真词，故只降权。系数取到' +
+        '「让碎片落到有真词可选的槽位之外，又不至于在候选不足时把槽位空出来」——**幅度是判断，不是扫描出来的**',
+      at: '2026-10-15',
+    },
+    variesWith: ['边界自由度判据本身的变化', '语料里真词与碎片的比例'],
+    diverges:
+      'M2 审核实测：单靠该降权**不足以把二字碎片挤出展示窗口**（审核报告「二字汉字碎片」一节）。' +
+      'v4 因此把它上面的那档（两侧都恒定）改成硬判出局，本条只管「只剩一侧、或观测不足」的候选',
+  },
+  {
+    name: 'ENTRY_WEIGHT',
+    area: '入口',
+    value: () => ENTRY_WEIGHT,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'ENTRY_WEIGHT' },
+    affects: '入口权重的三级：declared 全值 / extracted 归一后按比例 / learned 由召回反哺',
+    group: ['declared', 'extracted', 'learned'],
+    calibration: {
+      evidence:
+        'entries.ts:31-36 注释「基础权重——级别越高越可信」，**无实测记录**。' +
+        'devnotes M1《按「跨机器是否一致」分类》A 类把它归为「设计决策，与语料无关」',
+    },
+    variesWith: ['入口来源分级本身变化时（例如新增一级）'],
+    diverges:
+      '**设计文档 §7 没有这组键**（文档的四路权重是召回的 wVec/wEntry/wBody/wGraph，与本组不是一回事）；' +
+      '代码里 learned 一级写入侧不产生，仅由召回反哺',
+  },
+  {
+    name: 'DEFAULT_MAX_EXTRACTED',
+    area: '入口',
+    value: () => DEFAULT_MAX_EXTRACTED,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'DEFAULT_MAX_EXTRACTED' },
+    affects: '每个 atom 抽取的入口数上限（declared 入口不参与这个竞争）',
+    calibration: {
+      evidence:
+        'D11-1 与 entries.ts:38-49 注释：原设计取 8。中文无词边界，25 字能切约 17 个 bigram，' +
+        '实测「大文件下载要走代理，但回环地址不能走代理」两次出现的「代理」都被挤出前 8，只剩「走代」，' +
+        '查「代理」一无所获；放宽到 16 后同一批查询全部命中。' +
+        '**2026-10-17 全库扫描（六点 + 四个补点，配对 bootstrap 4000 次）推翻了「该继续放宽」的推理**：' +
+        '8 与 12 的纯 Entry 路 gold 召回比 16 低 25 个百分点、95% 区间不含 0（显著）；16 → 32 只多 10 个百分点、' +
+        '区间含 0（不显著）—— **16 是收益曲线的拐点**。端到端在 8~32 全区间不动。' +
+        '三种「按长度 / 按候选池」的预算化形态全部不优于固定 16（最好的打平，最差的 EPA 9.69、纯 Entry 召回掉到 55%）。' +
+        '所以：**从候选数推「槽位不够」是不成立的** —— 多出来的候选本来就排不进窗口；方向（倾向多给）只在 8→16 这一段成立。' +
+        '**复核 D11-1 自己那两条论据**：例文实际 **20 个码点**（注释写 25 字）、切出 17 个 bigram（这一条对上）；' +
+        '但「两次出现的『代理』都被挤出前 8」在 v4 下**不成立** —— 实测 max=8 时「代理」就是**第 1 名**，' +
+        '那条观察属于 v3（单字虚词表 + 退化打分）时期，v4 换掉打分后它的前提已经消失；' +
+        '「真实记忆通常 40~180 字」也对不上本库（实测平均 **250 码点**、中位 210，>180 字的占 **59.5%**）。' +
+        '**结论方向仍成立，但依据要换成实测密度**：原始 bigram/码点 = 0.358、过滤后候选池/码点 = 0.284。' +
+        '另一条原理性结论：**入口上限不可能是「覆盖」** —— 要把目标卡正文里出现的查询词全收进入口，' +
+        '需要上限 ≥ 27~278（中位 130），16 只够 1/20、64 只够 3/20；它只能是**质量闸门**',
+      at: '2026-10-15，2026-10-17 复核',
+    },
+    variesWith: ['中文 bigram 的候选密度（切词规则）', '正文长度分布', '语料语言'],
+  },
+  // ──────────────────────────── 召回融合（search.ts）────────────────────────────
+  {
+    name: 'CHANNEL_WEIGHT',
+    area: '召回融合',
+    value: () => CHANNEL_WEIGHT,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'CHANNEL_WEIGHT' },
+    affects: 'RRF 融合时四路的权重（w / (RRF_K + rank)）',
+    group: ['vec', 'entry', 'body', 'graph'],
+    calibration: {
+      evidence:
+        'search.ts:20-26 注释：Entry 高于正文，理由是「入口冗余」原理；' +
+        'devnotes M1《按「跨机器是否一致」分类》A 类：设计决策，与语料无关。**无实测记录**',
+    },
+    variesWith: ['各路的精度对比测量（例如图路边多为无类型几何边）'],
+    design: {
+      doc: DESIGN_DOC,
+      key: 'wVec/wEntry/wBody/wGraph',
+      default: 1.0,
+      codeKeys: ['vec', 'entry', 'body', 'graph'],
+    },
+    diverges:
+      '**同一组键的名字对不上**：设计文档叫 wVec/wEntry/wBody/wGraph，代码叫 vec/entry/body/graph' +
+      '（CHANNEL_WEIGHT）。四路权重只有 vec 与设计默认同名同值，其余三项的对应关系要靠语义猜',
+  },
+  {
+    name: 'RRF_K',
+    area: '召回融合',
+    value: () => RRF_K,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'RRF_K' },
+    affects: 'RRF 融合常数：分越高越压平头部排名的垄断，让多路共识浮现',
+    calibration: {
+      evidence:
+        'search.ts:28 注释「60 是常用取值」，**无实测记录**；' +
+        'devnotes M1《按「跨机器是否一致」分类》A 类归为「算法常数」',
+    },
+    variesWith: ['换成别的融合方式时'],
+    design: { doc: DESIGN_DOC, key: 'rrfK', default: 60, min: 10, max: 100 },
+    diverges: '**zod schema 里没有它** —— 文档给了 10-100 的范围，运行时不生效、不可调',
+  },
+  {
+    name: 'AFFILIATION',
+    area: '召回融合',
+    value: () => AFFILIATION,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'AFFILIATION' },
+    affects: '归属因子：主属命中的得分乘以这些系数（只由图路引入的最低）',
+    group: ['primary', 'secondary', 'graphOnly'],
+    calibration: {
+      evidence:
+        'search.ts:31-32 注释「主属 > 仅次属 > 仅由图路引入」，**无实测记录**；' +
+        'devnotes M1《按「跨机器是否一致」分类》A 类归为「设计给定的语义层级」',
+    },
+    variesWith: ['次属与图路引入的精度测量'],
+    diverges:
+      '**设计文档 §7 没有这组键**。设计报告里出现过 graph 权重 0.5，代码的 graphOnly 是 0.70 ——' +
+      '两者不是同一个量，但不熟悉的人容易当成同一个',
+  },
+  {
+    name: 'DEFAULT_SEED_COUNT（内联）',
+    area: '召回融合',
+    value: () => 10,
+    definedBy: { file: 'src/pipeline/search.ts', name: '内联（无常量名）' },
+    affects: '图路用向量路的前多少条做种子（A.slice(0, 10)）',
+    inline: { file: 'src/pipeline/search.ts', source: 'graphPath(db, A.slice(0, 10), kGraph)' },
+    calibration: { evidence: '**无记录**（源码无注释，开发笔记里也没有这个数）' },
+    variesWith: ['图路的边密度与精度', '库规模'],
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+  },
+  {
+    name: 'kVec / kLex / kGraph（内联）',
+    area: '召回融合',
+    value: () => 'kVec 100 / kLex 100 / kGraph 50',
+    display: 'kVec 100 / kLex 100 / kGraph 50',
+    definedBy: { file: 'src/pipeline/search.ts', name: '内联（无常量名）' },
+    affects: '四路各自取多少条进融合（向量路 100、词面两路各 100、图路 50）',
+    inline: { file: 'src/pipeline/search.ts', source: 'const kVec = opts.kVec ?? 100' },
+    calibration: {
+      evidence:
+        '**无记录**。devnotes M1 待办一已把 `LIMIT 24/48/64` 这类「表面是性能上限、实际约束召回质量」' +
+        '的候选数点名为**归类错误**：它随库规模变化，不与机器相关。这三个数属于同一类',
+    },
+    variesWith: ['库规模（库长大时固定取前 N 会让召回质量悄悄退化）'],
+    diverges: '**设计文档 §7 没有这几个键**，zod schema 里也没有 —— 固定上限改预算制是后续执行点',
+  },
+  {
+    name: 'MAX_QUERY_TERMS',
+    area: '召回融合',
+    value: () => MAX_QUERY_TERMS,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'MAX_QUERY_TERMS' },
+    affects: '单路最多用多少个词进 FTS 查询',
+    calibration: {
+      evidence:
+        'search.ts:305 注释「长查询切出的 bigram 会很多，超出部分区分度也低」；' +
+        'devnotes M1《按「跨机器是否一致」分类》B 类归为「中文 bigram 的候选密度」但**无实测**，' +
+        '同文在「一个归类错误」一节又指出它约束的是**召回质量**、随**库规模**变化',
+    },
+    variesWith: ['库规模', '查询长度分布', '中文 bigram 的候选密度'],
+    diverges: 'M1 已把它列为「按实际候选数取、用 FTS5 查询复杂度上限兜底」的待办项，未做',
+  },
+  {
+    name: 'DUP_COS',
+    area: '重排去重',
+    value: () => DUP_COS,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'DUP_COS' },
+    affects: '重复压制：余弦低于此值即不判重复（两票中的几何票）；仅在同主属 topic 桶内两两比较',
+    calibration: {
+      evidence:
+        'search.ts:339-348 注释：原设计依赖 atom_pair 表（cos >= 0.92 且词面 >= 0.5），改为词面兜底后' +
+        '沿用 0.92。devnotes M1《按「跨机器是否一致」分类》A 类称其为「重复的几何判据」。' +
+        '**没有一次「不同说法的同一件事」实测**（DUP_LEX 才有）',
+    },
+    variesWith: ['换编码模型（余弦尺度会变）', '同义改写的相似度分布'],
+  },
+  {
+    name: 'DUP_LEX',
+    area: '重排去重',
+    value: () => DUP_LEX,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'DUP_LEX' },
+    affects: '重复压制：词面重叠低于此值即不判重复（两票中的词面票）',
+    calibration: {
+      evidence:
+        'search.ts:350-360 注释：原设计 0.5，**实测中文短文本上太松** —— 「系统代理必须走本地端口……」' +
+        '与「系统代理配置本地端口……」的 bigram-Jaccard 是 0.64，它们讲同一件事但各有信息，不该折叠。' +
+        '取 0.72：只有几乎逐字重复才被压制（同一段文本实测 Jaccard 为 1.0）。' +
+        '**标定语料是构造的对照句对，未记录库与条数**',
+      at: '2026-10-15',
+    },
+    variesWith: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）'],
+  },
+  // ────────────────────────────── 注入（view.ts）───────────────────────────────
+  {
+    name: 'SEGMENT_RATIO',
+    area: '注入',
+    value: () => SEGMENT_RATIO,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'SEGMENT_RATIO' },
+    affects: '三段字符配额的占比（锚 / 入口 / 路），三段之和为 1',
+    group: ['anchors', 'entries', 'paths'],
+    calibration: {
+      evidence:
+        'view.ts:8-10 注释：「不是审美选择：锚决定回答质量，路只提供线索」—— 理由完整，' +
+        '**但没有实测记录**（未做过不同配比下的召回质量对比）',
+    },
+    variesWith: ['锚段平均长度与主题数的变化', '入口段在回答里的实际贡献'],
+    design: {
+      doc: DESIGN_DOC,
+      key: 'ratioAnchor/Entry/Path',
+      default: 55,
+      scale: 100,
+      codeKeys: ['anchors', 'entries', 'paths'],
+    },
+    diverges:
+      '**名字与单位都不同**：文档按百分数（55 / 20 / 25，和=100）且叫 ratioXxx，代码是小数' +
+      '（0.55 / 0.2 / 0.25）且键名是 anchors/entries/paths',
+  },
+  {
+    name: 'MIN_ANCHORS',
+    area: '注入',
+    value: () => MIN_ANCHORS,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'MIN_ANCHORS' },
+    affects: '锚段保底条数：预算再紧也先给这么多条；同时是摘录档的锚上限',
+    calibration: {
+      evidence:
+        'devnotes M1 待办四《保底锚与降噪冲突》：保底锚与「低相关只给入口段」直接冲突，' +
+        '两条路（保留保底 / 低相关一起去掉）都记录在案，最终选了分档方案（D15-3：摘录档锚上限 = MIN_ANCHORS）。' +
+        '**3 这个数本身没有实测标定**',
+    },
+    variesWith: ['无关查询的容忍度（保底越高，降噪越不彻底）', '一次注入的字符预算'],
+  },
+  {
+    name: 'TRIM_ORDER',
+    area: '注入',
+    value: () => TRIM_ORDER.join(' -> '),
+    display: 'paths->5 -> entries->4 -> anchors->summary -> paths->0 -> anchors->3',
+    definedBy: { file: 'src/pipeline/view.ts', name: 'TRIM_ORDER' },
+    affects: '超预算时的裁剪顺序（路 -> 入口 -> 锚降级 -> 路清零 -> 锚减量）',
+    calibration: {
+      evidence:
+        'view.ts:21-27 注释：这个数组是**行为契约**，测试直接依赖它的顺序而不是某个具体输出。' +
+        '顺序的理由是「锚不为其他段让路」——**设计不变量，不是标定结果**',
+    },
+    variesWith: ['三段分工本身变化时（例如新增一段）'],
+    diverges:
+      '**设计文档 §7 没有这个键**，zod schema 里也没有。它按字符串而非数值登记：' +
+      '列在此处的目的是让「行为契约级常量」不被漏掉',
+  },
+  {
+    name: 'TIER_FULL_MIN',
+    area: '注入',
+    value: () => TIER_FULL_MIN,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_FULL_MIN' },
+    affects: 'tierOf：最高余弦 >= 此值走完整档（三段全给）',
+    calibration: {
+      atoms: 279,
+      origins: { import: 279 },
+      scopes: { global: 279 },
+      evidence:
+        'D15-2 与 view.ts:73-82 注释：**279 条基准库、20 条 gold 查询 + 4 条无关查询**（全 import、全 global）；' +
+        '相关 top1 min 0.524 / p50 0.683，无关 top1 max 0.398。「两者之间是空的，所以取值本身不敏感；' +
+        '取空隙中间是为了容错，不是为了拟合」',
+      at: '2026-10-16',
+    },
+    variesWith: [
+      '换编码模型（余弦尺度直接变）',
+      '库规模与来源分布（当前宿主库只有 12 条全 model）',
+      '语料的领域混合度',
+    ],
+    diverges:
+      '**标定场景与运行场景不一致**：标定在 279 条全 import 的基准库上，而插件现在跑在 12 条全 model 的' +
+      '宿主库上（M2 审核指出的同一类问题）。打印命令的规模告警会报出这次不一致。' +
+      '**该基准库已于 2026-10-17 扩容**（57 → 442 源文件、279 → 1374 atom、origin 由全 import 变 3 类、scope 由全 global 变 5 类）；本字段的 atoms / origins / scopes 记的是**标定那一刻**的场景，不随库变化改写',
+  },
+  {
+    name: 'TIER_BRIEF_MIN',
+    area: '注入',
+    value: () => TIER_BRIEF_MIN,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_BRIEF_MIN' },
+    affects: 'tierOf：最高余弦 >= 此值走精简档，低于它落到摘录档；同时是弱相关提示线的取值来源',
+    calibration: {
+      atoms: 279,
+      origins: { import: 279 },
+      scopes: { global: 279 },
+      evidence:
+        '同 TIER_FULL_MIN（D15-2，279 条基准库、20 gold + 4 无关）：它压在无关上界 0.398 与 gold 下界 0.524' +
+        '之间，test/tools.test.mjs:210-211 以断言守住这两个界。真机上它还偏松：约 0.45 的**相关**查询被标成' +
+        '弱相关，而约 0.50 的**无关**查询没被标（《开发报告》弱相关提示一节：相关与无关在真机语料上本就重叠）',
+      at: '2026-10-16',
+    },
+    variesWith: ['换编码模型', '库规模与来源分布', '语料的领域混合度'],
+    diverges:
+      '**标定场景与运行场景不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠 ——' +
+      '即这条阈值在目标语料上并未分离。重标属后续执行点。' +
+      '**该基准库已于 2026-10-17 扩容**（57 → 442 源文件、279 → 1374 atom、origin 由全 import 变 3 类、scope 由全 global 变 5 类）；本字段的 atoms / origins / scopes 记的是**标定那一刻**的场景，不随库变化改写',
+  },
+  {
+    name: 'LOW_RELEVANCE_HINT',
+    area: '注入',
+    value: () => LOW_RELEVANCE_HINT,
+    definedBy: { file: 'src/tools/index.ts', name: 'LOW_RELEVANCE_HINT' },
+    affects: 'isWeakMatch：低于此值在召回结果前标一句「可能不相关」（只提示不拦截）',
+    calibration: {
+      atoms: 279,
+      origins: { import: 279 },
+      scopes: { global: 279 },
+      evidence:
+        'D15-4 / D15-5 与 tools/index.ts:39-48 注释：**原值 0.68 实测永不触发**（gold 集 top1 中位数就有' +
+        ' 0.683）——「一个永不触发的提示与没有提示是一回事，却看起来还在工作」。改为与摘录档下界同源' +
+        '（= TIER_BRIEF_MIN = 0.45），理由是两者回答同一个问题：「这次的匹配算不算相关」。' +
+        '标定约束由 test/tools.test.mjs 守住：必须落在 0.398 与 0.524 之间',
+      at: '2026-10-16',
+    },
+    variesWith: ['TIER_BRIEF_MIN 改动时（它是别名，不是独立取值）', '换编码模型'],
+    otherSites: ['src/tools/index.ts:48 `= TIER_BRIEF_MIN` —— 不是自己的数，与摘录档同源'],
+  },
+  {
+    name: 'DEFAULT_BUDGET',
+    area: '注入',
+    value: () => DEFAULT_BUDGET,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_BUDGET' },
+    affects: '注入字符预算的默认值（工具调用可覆盖）',
+    calibration: {
+      evidence: '**无记录**：只有设计文档 §7 给了默认值 6000 与范围 1000-20000，没有标定依据',
+    },
+    variesWith: ['模型上下文窗口', '一次注入里锚段的平均长度'],
+    design: { doc: DESIGN_DOC, key: 'viewBudget', default: 6000, min: 1000, max: 20000 },
+    zod: { file: 'src/index.ts', name: 'viewBudget', default: 6000, min: 1000, max: 20000 },
+    otherSites: ['src/index.ts:103 `Number(cfg.viewBudget ?? 6000)`'],
+    diverges:
+      '**同一个默认值写了三遍**：view.ts 的 DEFAULT_BUDGET、zod 的 .default(6000)、index.ts 的 `?? 6000`。' +
+      '三处目前一致',
+  },
+  {
+    name: 'DEFAULT_ANCHOR_MAX',
+    area: '注入',
+    value: () => DEFAULT_ANCHOR_MAX,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_ANCHOR_MAX' },
+    affects: '单条锚的字符上限（全文很长时截断，避免一条吃掉整段）',
+    calibration: { evidence: '**无记录**。源码无注释；设计文档 §7 也没有这个键' },
+    variesWith: ['atom 正文长度分布', '字符预算'],
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有 —— 运行时不可配置',
+  },
+  {
+    name: 'DEFAULT_ENTRIES_PER_TOPIC',
+    area: '注入',
+    value: () => DEFAULT_ENTRIES_PER_TOPIC,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_ENTRIES_PER_TOPIC' },
+    affects: '每个命中主题给几条入口（摘录档由 TIER_ENTRIES 收窄到 4）',
+    calibration: {
+      evidence: '**无记录**。它与 DEFAULT_MAX_EXTRACTED=16 是「配额的一半」，但没有任何注释说明这层关系',
+    },
+    variesWith: ['DEFAULT_MAX_EXTRACTED 改动时（同一件事的两个端点）', '主题数'],
+  },
+  {
+    name: 'DEFAULT_ENTRY_LINE_MAX',
+    area: '注入',
+    value: () => DEFAULT_ENTRY_LINE_MAX,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_ENTRY_LINE_MAX' },
+    affects: '单个主题的入口行字符上限（防止一行过长挤占锚段）',
+    calibration: { evidence: '**无记录**。源码无注释，设计文档与 zod 里都没有这个键' },
+    variesWith: ['入口词的长度分布', '每主题入口条数'],
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+  },
+  {
+    name: 'DEFAULT_PATH_LINES',
+    area: '注入',
+    value: () => DEFAULT_PATH_LINES,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_PATH_LINES' },
+    affects: '路段整体行数上限（裁剪顺序里会先降到 5、再清零）',
+    calibration: { evidence: '**无记录**。源码无注释；TRIM_ORDER 里的 5 与它是什么关系也没有写明' },
+    variesWith: ['一跳关联的平均条数', '字符预算'],
+  },
+  {
+    name: 'TIER_ANCHOR_CAP',
+    area: '注入',
+    value: () => ({ full: Number.POSITIVE_INFINITY, brief: 8, excerpt: MIN_ANCHORS }),
+    definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_ANCHOR_CAP' },
+    affects: '各档的锚条数上限（完整档不设上限，交给预算管）',
+    group: ['full', 'brief', 'excerpt'],
+    calibration: {
+      evidence:
+        'D15-3：full 不限（预算机制已经管住总量）/ brief 8 / excerpt = MIN_ANCHORS(3)。' +
+        '**brief=8 与 DEFAULT_ENTRIES_PER_TOPIC 同值但没有说明是巧合还是有意**；无实测记录',
+      at: '2026-10-16',
+    },
+    variesWith: ['各档的字符预算', 'MIN_ANCHORS 改动时（摘录档上限跟着走）'],
+  },
+  {
+    name: 'TIER_ENTRIES',
+    area: '注入',
+    value: () => ({ full: 8, brief: 8, excerpt: 4 }),
+    definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_ENTRIES' },
+    affects: '各档每个主题给几条入口（只有摘录档收窄）',
+    group: ['full', 'brief', 'excerpt'],
+    calibration: {
+      evidence: 'D15-3：「低相关时入口段是主角，但也要收窄」——**是判断，无实测记录**',
+      at: '2026-10-16',
+    },
+    variesWith: ['入口段在各档里的实际贡献'],
+    diverges:
+      '**值在代码里是字面量而不是引用常量**（view.ts:103-107 直接写 8 / 8 / 4），' +
+      '与 DEFAULT_ENTRIES_PER_TOPIC 形成第二份同一个数',
+  },
+  {
+    name: 'PATH_SUMMARY_CHARS（内联）',
+    area: '注入',
+    value: () => 80,
+    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    affects: '路段每行摘要的截断长度',
+    inline: { file: 'src/pipeline/view.ts', source: 'clip(String(r.summary), 80)' },
+    calibration: { evidence: '**无记录**，源码无注释' },
+    variesWith: ['路段在注入里的角色（纯线索）'],
+  },
+  {
+    name: 'ANCHOR_SUMMARY_CHARS（内联）',
+    area: '注入',
+    value: () => 64,
+    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    affects: '锚段降级为摘要时的截断长度（st.anchorToSummary 分支）',
+    inline: { file: 'src/pipeline/view.ts', source: 'st.anchorToSummary ? 64 : anchorMax' },
+    calibration: { evidence: '**无记录**，源码无注释' },
+    variesWith: ['摘要长度分布（extractSummary 的 48 是它的上游）'],
+  },
+  {
+    name: 'DEMOTED_ANCHOR_CHARS（内联）',
+    area: '注入',
+    value: () => 60,
+    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    affects: '空间不足时把锚降级为短摘要所截断的长度（与 64 那条是两条不同分支）',
+    inline: { file: 'src/pipeline/view.ts', source: 'clip(h.summary, 60)' },
+    calibration: { evidence: '**无记录**。与同一段的 64 只差 4 个字符，**看不出为什么要有两个数**' },
+    variesWith: ['同上；这个值更像历史遗留'],
+  },
+  {
+    name: 'ENTRY_LABEL_CHARS（内联）',
+    area: '注入',
+    value: () => 16,
+    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    affects: '入口行里主题标签的截断宽度',
+    inline: { file: 'src/pipeline/view.ts', source: "clip('[' + clip(t.label, 16) + '] '" },
+    calibration: { evidence: '**无记录**；与写入侧建 topic 时的 slice(0, 16) 同值但两处各自写死' },
+    variesWith: ['入口行的预算占比'],
+  },
+  {
+    name: 'TRIM_PATHS_LIMIT（内联）',
+    area: '注入',
+    value: () => 5,
+    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    affects: '裁剪第一步把路段行数上限压到的值（TRIM_ORDER 的 paths->5）',
+    inline: { file: 'src/pipeline/view.ts', source: 'st.pathLimit = Math.min(st.pathLimit, 5)' },
+    calibration: { evidence: '**无记录**。TRIM_ORDER 的名字里带着 5，但 5 从哪来没有出处' },
+    variesWith: ['TRIM_ORDER 改动时（名字与值必须同步）'],
+  },
+  // ────────────────────────────── 目录（list.ts）───────────────────────────────
+  {
+    name: 'LIST_MAX_LIMIT',
+    area: '目录',
+    value: () => LIST_MAX_LIMIT,
+    definedBy: { file: 'src/pipeline/list.ts', name: 'LIST_MAX_LIMIT' },
+    affects: '一页最多给多少条；请求值被强制钳制到 [1, 50]',
+    calibration: {
+      evidence:
+        'D13-1：「上限不是默认值而是硬边界，防止调用方一次拉空整个库」。' +
+        '**50 本身无实测记录** —— 它约束的是注意力稀释，不是某个分布',
+      at: '2026-10-16',
+    },
+    variesWith: ['一次注入能容纳的摘要条数', '库规模'],
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有（工具侧有测试守着钳制行为）',
+  },
+  {
+    name: 'LIST_DEFAULT_LIMIT',
+    area: '目录',
+    value: () => LIST_DEFAULT_LIMIT,
+    definedBy: { file: 'src/pipeline/list.ts', name: 'LIST_DEFAULT_LIMIT' },
+    affects: '默认页大小',
+    calibration: {
+      evidence: 'list.ts:15 注释「取值偏小：列目录是为了定位，不是为了读完」——**理由，非标定**',
+      at: '2026-10-16',
+    },
+    variesWith: ['同上'],
+    diverges: '**设计文档 §7 没有这个键**',
+  },
+  // ────────────────────── 迁移切分（migrate/split.ts）─────────────────────────
+  {
+    name: 'MIN_ATOM_CHARS',
+    area: '迁移切分',
+    value: () => MIN_ATOM_CHARS,
+    definedBy: { file: 'src/migrate/split.ts', name: 'MIN_ATOM_CHARS' },
+    affects: '切分时一条 atom 的最小字符数（低于它不再切）',
+    calibration: {
+      evidence:
+        '**无记录**。源码无注释；只影响一次性迁移脚本（本机卡片导入），不参与运行时管线 ——' +
+        '登记它是为了覆盖完整性，不代表它需要标定',
+    },
+    variesWith: ['「一句话讲一件事」这条写入约定的实际长度'],
+    diverges: '**设计文档 §7 没有这个键**（文档的 autoSplit 是一期关闭的配置项）',
+  },
+  {
+    name: 'MAX_ATOM_CHARS',
+    area: '迁移切分',
+    value: () => MAX_ATOM_CHARS,
+    definedBy: { file: 'src/migrate/split.ts', name: 'MAX_ATOM_CHARS' },
+    affects: '切分时一条 atom 的最大字符数（超过即按句子再切）',
+    calibration: { evidence: '**无记录**（同 MIN_ATOM_CHARS）' },
+    variesWith: ['同上'],
+  },
+  // ──────────────────────── 资源参数（util/memory.ts）─────────────────────────
+  {
+    name: 'MmapCeilBytes（推导）',
+    area: '资源',
+    value: () => 256 * 1024 * 1024,
+    display: '256 MB（上限，与「内存的八分之一」取更小者）',
+    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    affects: 'mmap 窗口上限',
+    inline: { file: 'src/util/memory.ts', source: 'Math.min(256 * 1024 * 1024, mem / 8)' },
+    calibration: {
+      evidence:
+        'devnotes M1《按「跨机器是否一致」分类》C 类（真正与机器相关）：256 MB 的 mmap 在 8 GB 机器上' +
+        '无所谓、在 2 GB 机器上就是白占。**是本机推导规则的上限，不是标定值**',
+    },
+    variesWith: ['机器内存', '库文件大小'],
+    diverges: '**已从常量改成推导值**（M1 待办一第 2、3 项），但仍是一个写死的上限',
+  },
+  {
+    name: 'MmapFloorBytes（推导）',
+    area: '资源',
+    value: () => 64 * 1024 * 1024,
+    display: '64 MB（下限）',
+    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    affects: 'mmap 窗口下限（库很小时也至少给这么多）',
+    inline: { file: 'src/util/memory.ts', source: 'dbFileSize * 1.5 : 64 * 1024 * 1024' },
+    calibration: { evidence: '**无记录**。与上限同处，1.5x / 1/8 / 64 MB 三个数都没有出处' },
+    variesWith: ['机器内存'],
+  },
+  {
+    name: 'CacheRatio（推导）',
+    area: '资源',
+    value: () => 0.05,
+    display: '内存的 5%',
+    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    affects: 'SQLite 页缓存目标大小（内存 × 5%）',
+    inline: { file: 'src/util/memory.ts', source: 'clamp(mem * 0.05, 16 * 1024 * 1024, 128 * 1024 * 1024)' },
+    calibration: {
+      evidence:
+        'memory.ts:31-42 注释：SQLite 默认只有 2 MB，对万级 atom 偏小；也不能无上限，' +
+        '大内存机器上按 5% 会凭空多占几百 MB。**推导规则写明了，但 5% 没有实测依据**',
+    },
+    variesWith: ['机器内存', '库的访问模式'],
+  },
+  {
+    name: 'CacheMinBytes（推导）',
+    area: '资源',
+    value: () => 16 * 1024 * 1024,
+    display: '16 MB',
+    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    affects: '页缓存下限',
+    inline: { file: 'src/util/memory.ts', source: '16 * 1024 * 1024, 128 * 1024 * 1024' },
+    calibration: { evidence: '**无记录**（同 CacheRatio）' },
+    variesWith: ['机器内存'],
+  },
+  {
+    name: 'CacheMaxBytes（推导）',
+    area: '资源',
+    value: () => 128 * 1024 * 1024,
+    display: '128 MB',
+    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    affects: '页缓存上限',
+    inline: { file: 'src/util/memory.ts', source: '128 * 1024 * 1024)' },
+    calibration: { evidence: '**无记录**（同 CacheRatio）' },
+    variesWith: ['机器内存'],
+  },
+  {
+    name: 'BusyTimeoutFloorMs（推导）',
+    area: '资源',
+    value: () => 5000,
+    display: '5000 ms',
+    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    affects: '写锁等待下限：max(5000, 单条写入耗时 × 200)',
+    inline: { file: 'src/util/memory.ts', source: 'Math.max(5000, Math.round(3.5 * 200))' },
+    calibration: {
+      evidence:
+        'memory.ts:40-41 注释：**实测单条写入约 3.5 ms**，5 秒已能排下上千次写入；慢盘上按写入耗时' +
+        '放大而不是拍一个更大的常数。标定发生在**本机磁盘**上',
+    },
+    variesWith: ['磁盘延迟', '并发写入压力'],
+    diverges: '**这个数同时是「本机实测」的产物**：3.5 ms × 200 里的 200 与 3.5 都没有文档出处',
+  },
+  {
+    name: 'VEC_DIM',
+    area: '资源',
+    value: () => VEC_DIM,
+    definedBy: { file: 'src/util/vec.ts', name: 'VEC_DIM' },
+    affects: '向量维度与 BLOB 长度校验；维度不匹配的向量被跳过而不是硬算',
+    calibration: {
+      evidence:
+        'vec.ts:10 注释与 devnotes M1《按「跨机器是否一致」分类》A 类：bge-small-zh-v1.5 的输出维度（模型事实）',
+    },
+    variesWith: ['换编码模型'],
+    diverges: '**结构性常量**，登记它是为了换模型时能被一条命令查出来',
+  },
+]
+
+/** 设计文档有、代码里没有（或键名完全不同）的配置项。本次只登记，不改文档也不改代码。 */
+export const DESIGN_GAPS: readonly DesignGap[] = [
+  {
+    key: 'deltaPeak',
+    designDefault: 0.06,
+    note:
+      '**文档有、代码里没有名字**：实现就是 write.ts 里 `s1 - (sim2 ?? 0) < 0.06` 那个内联字面量，' +
+      '既没有常量名也没有进 zod schema —— 文档说它是可配的（0.01-0.20），实际不可配',
+  },
+  {
+    key: 'ratioAnchor/Entry/Path',
+    designDefault: 55,
+    note: '**文档有、代码里键名不同**：实现在 pipeline/view.ts 的 SEGMENT_RATIO（小数 0.55 / 0.2 / 0.25）',
+    codeSites: ['src/pipeline/view.ts:16 SEGMENT_RATIO'],
+  },
+  {
+    key: 'wVec/wEntry/wBody/wGraph',
+    designDefault: 1,
+    note: '**文档有、代码里键名不同**：实现在 pipeline/search.ts 的 CHANNEL_WEIGHT（vec / entry / body / graph）',
+    codeSites: ['src/pipeline/search.ts:21 CHANNEL_WEIGHT'],
+  },
+  {
+    key: 'autoSplit',
+    designDefault: 0,
+    note:
+      '**文档有、代码里没有运行时开关**（文档默认 false）—— 一期就关闭自动切分，代码里只有迁移脚本' +
+      ' migrate/split.ts。文档给的是 bool，本表的 designDefault 只收 number，故记 0 并在此说明',
+    codeSites: ['src/migrate/split.ts（仅迁移脚本，非运行时）'],
+  },
+  {
+    key: 'reclusterCron',
+    designDefault: 0,
+    note:
+      '**文档有、代码里没有**（文档默认字符串 03:00，不是数值）—— 低峰重聚类尚未实现，' +
+      '与本任务同属后续里程碑',
+  },
+  {
+    key: 'enabled / vaultPath / encoderEnabled / encoderModel',
+    designDefault: 1,
+    note:
+      '**文档有、代码里用的是别的名字或名字相同但非数值**：enabled 与 encoderEnabled 在 index.ts 的' +
+      ' Config 里同名；vaultPath 在代码里叫 dataDir（state.ts 的 resolveDataDir）；encoderModel 同名同默认。' +
+      '列在此处是为了让「文档 §7 的每个键都有人认领」可核对',
+    codeSites: ['src/index.ts:42-51（enabled / dataDir / encoderEnabled / encoderModel）'],
+  },
+]
+
+/** 对象型阈值组的子键在打印时各占一行（整对象一个值不可比对、也无法逐项标定）。 */
+export function subKeys(entry: ThresholdEntry): readonly string[] {
+  return entry.group ?? []
+}
+
+/** 取当前值：值仍在原处，这里只是现取。 */
+export function currentValue(entry: ThresholdEntry): ThresholdValue {
+  return entry.value()
+}
+
+/** 定义位置：内联量用片段定位，其余用常量名定位（行号由脚本补）。 */
+export function definitionSite(entry: ThresholdEntry): { file: string; anchor: string } {
+  if (entry.inline !== undefined) return { file: entry.inline.file, anchor: entry.inline.source }
+  return { file: entry.definedBy.file, anchor: entry.definedBy.name }
+}
+
+/** 覆盖检查用的常量名；内联量与设计类条目返回 null。 */
+export function constNameOf(entry: ThresholdEntry): string | null {
+  if (entry.constName !== undefined) return entry.constName
+  if (entry.inline !== undefined) return null
+  return entry.definedBy.name
+}

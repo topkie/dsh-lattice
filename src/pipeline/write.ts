@@ -139,7 +139,12 @@ export const DEFAULT_THRESHOLDS: WriteThresholds = {
 const LEX_CANDIDATES = 8
 /** 无向量时先取多少个 topic 参与词面预筛。 */
 const WORD_ONLY_CANDIDATES = 64
-const DEFAULT_TOP_N = 24
+export const DEFAULT_TOP_N = 24
+/**
+ * 无向量预筛的候选放大倍数：词面筛掉一批之后还要留够 decidePlacement 的输入。
+ * 导出是为了让阈值登记表引用真值而不是复制一份。
+ */
+export const WORD_ONLY_TOP_N_FACTOR = 2
 
 /**
  * 取词表索引（DF）。**每次调用都重建，不做缓存。**
@@ -177,9 +182,9 @@ export function invalidateVocab(_ctx: WriteCtx): void {
  */
 const topicLexCache = new WeakMap<DatabaseSync, Map<number, Set<string>>>()
 /** 单个成员贡献给 topic 指纹的正文字符数。 */
-const FINGERPRINT_CHARS = 400
+export const FINGERPRINT_CHARS = 400
 /** 单个 topic 最多取多少个成员的指纹。 */
-const FINGERPRINT_MEMBERS = 40
+export const FINGERPRINT_MEMBERS = 40
 
 function topicLexOf(ctx: WriteCtx, topicId: number): Set<string> {
   let per = topicLexCache.get(ctx.db)
@@ -543,7 +548,7 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
         .map((c) => ({ c, lex: lexOf(c.id) }))
         .filter((x) => x.lex > 0)
         .sort((a, b) => b.lex - a.lex)
-        .slice(0, (ctx.topN ?? DEFAULT_TOP_N) * 2)
+        .slice(0, (ctx.topN ?? DEFAULT_TOP_N) * WORD_ONLY_TOP_N_FACTOR)
       candidates = lexed.map((x) => x.c)
     }
     const placed = decidePlacement(usable ? vec : null, candidates, lexOf, ctx.thresholds)

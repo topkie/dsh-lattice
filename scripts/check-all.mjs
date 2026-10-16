@@ -35,6 +35,10 @@ const STEPS = [
   ['lint', 'node_modules/eslint/bin/eslint.js', ['.']],
   // 只检查源码与文档：`--check .` 会把 dist/ 的构建产物也扫进来，那些不该受格式约束。
   ['format', 'node_modules/prettier/bin/prettier.cjs', ['--check', ...FORMAT_GLOBS]],
+  // 阈值登记覆盖：源码里新增了数值常量、却既没登记也没进豁免清单时，以非零码退出。
+  // 排在这里是因为它只读 src/ 与 dist/（build 已产出），不需要模型与网络 —— 与其余静态检查同类。
+  // **为什么必须进门禁**：不进门禁的检查，与一句写在文档里的话，区别只是多一个文件（§1.3 防呆第 11 条）。
+  ['thresholds', 'scripts/print-thresholds.mjs', []],
   // test 也要挂替身：它只替换**可选依赖**（编码器），让降级用例确定地走降级路径。
   // 不挂的话，有网络的机器上编码器会真的加载成功，那组用例的语义就变了。
   ['test', 'test/run.mjs', [], ['--import', './test/stubs/register.mjs']],
