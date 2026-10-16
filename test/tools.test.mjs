@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
 import { closeRuntime } from '../dist/state.js'
 import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC, isWeakMatch, LOW_RELEVANCE_HINT } from '../dist/tools/index.js'
+import { briefMinFor } from '../dist/pipeline/calibrate.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 
 let dir = ''
@@ -256,11 +257,25 @@ describe('低相关提示', () => {
     assert.equal(isWeakMatch(meta(LOW_RELEVANCE_HINT - 0.01)), true)
   })
 
-  it('阈值必须落在实测的两端之间', () => {
+  it('兜底阈值必须落在实测的两端之间', () => {
     // 实测（279 条基准库）：相关 gold 20 条 top1 最低 0.524；无关 4 条最高 0.398。
-    // 这条断言是为了防止阈值被随手改动 —— 它挪出空隙就没有依据了。
+    // 这条断言守的是**兜底值**（库小到没法标定时用的那个）；
+    // **实际生效的线按库规模重标**，它在 1374 库上是 0.525 —— 已经超出这个区间，
+    // 而那不算违反：那两端的实测取自 279 条库，不是 1374 条库。
     assert.ok(LOW_RELEVANCE_HINT > 0.398, '必须高于无关查询的上界')
     assert.ok(LOW_RELEVANCE_HINT < 0.524, '必须低于相关查询的下界')
+  })
+
+  it('判据用的是传进来的那条线，不是那个兜底常量', () => {
+    // 这条是 2026-10-17 处置清单 A1 的回归：此前 isWeakMatch 只读 LOW_RELEVANCE_HINT，
+    // 而 lattice_recall 实际应当用 assembleView() 返回的 briefMin（按库规模重标）。
+    // 取本库（1374 条）实际生效的线，构造一个落在两条线之间的余弦 ——
+    // 按兜底值判「相关」（不提示），按本库的线判「弱相关」（提示）。
+    const actual = briefMinFor(1374, LOW_RELEVANCE_HINT)
+    assert.ok(actual > LOW_RELEVANCE_HINT, '本库的线应当高于兜底值（否则这条用例就没意义）')
+    const between = (LOW_RELEVANCE_HINT + actual) / 2
+    assert.equal(isWeakMatch(meta(between)), false, '按兜底值：不提示')
+    assert.equal(isWeakMatch(meta(between), actual), true, '按本库的线：提示')
   })
 
   it('达到阈值不提示', () => {

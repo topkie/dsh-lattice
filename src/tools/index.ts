@@ -48,13 +48,18 @@ function textOutput() {
 }
 
 /**
- * 低于这个值就在结果上标一句「可能不相关」。**只是提示，不拦截** —— 判断权交回调用方。
+ * 「库小到没法标定」时的**兜底**提示线 —— 按库规模重标后的那条线不在这里。
  *
- * 取值与「摘录档」的下界同源（view.ts 的 TIER_BRIEF_MIN）：两者回答的是同一个问题
- * ——「这次的匹配算不算相关」。分头定两个数，只会让它们慢慢分叉。
+ * 实际生效的线由 `pipeline/calibrate.ts` 的锚点表给出（`briefMinForDb()` 现取），
+ * 并随 `assembleView()` 的结果一起返回；调用方要传的是那个值。
  *
  * 原值是 0.68，实测**永不触发**：gold 集的 top1 中位数就有 0.683。一个永不触发的
  * 提示与没有提示是一回事，却看起来还在工作 —— 那比没有更糟。
+ *
+ * ⚠️ **这里此前分叉过一次**：本常量绑的是 `TIER_BRIEF_MIN`（0.45），而实际生效的线在
+ * 1374 库上是 0.525 —— 两者差 0.075，落在这个区间里的召回会被判「相关」并**不提示**。
+ * 上面原本写着「分头定两个数，只会让它们慢慢分叉」，而它自己就是这个形态。
+ * 2026-10-17 修正：`isWeakMatch()` 改为接受 `briefMin`，调用处传 `view.briefMin`。
  */
 export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
 
@@ -64,9 +69,9 @@ export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
  * 抽成纯函数是为了能直接测判据本身 —— 否则要构造「库里有一条毫不相关的记忆」
  * 这类场景，而真实模型下那条记忆总会得到一个不算低的相似度，测不出边界。
  */
-export function isWeakMatch(meta: RecallMeta): boolean {
+export function isWeakMatch(meta: RecallMeta, briefMin: number = LOW_RELEVANCE_HINT): boolean {
   if (meta.vectorMissing) return false // 纯词面模式没有余弦可依，不做判断
-  return meta.topCosine < LOW_RELEVANCE_HINT
+  return meta.topCosine < briefMin
 }
 
 /** 所有权的可读说法。目录里给的是给人看的词，不是字段值。 */
@@ -269,7 +274,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       // 低于提示线时再补一句「可能不相关」。这里只标注、不拦截 —— 见 LOW_RELEVANCE_HINT。
       if (!recalled.meta.vectorMissing && recalled.hits.length > 0) {
         const c = recalled.meta.topCosine
-        const hint = isWeakMatch(recalled.meta) ? '，可能不相关' : ''
+        // 传本库当前生效的那条线（`view` 就在上面一行），而不是兜底值 —— 两者在 1374 库上差 0.075。
+        const hint = isWeakMatch(recalled.meta, view.briefMin) ? '，可能不相关' : ''
         notes.push('（最高相似度 ' + c.toFixed(2) + hint + '）')
       }
       // 记一次命中。召回本身是只读语义，这一步失败不该让召回失败 —— 但也绝不假装成功：
