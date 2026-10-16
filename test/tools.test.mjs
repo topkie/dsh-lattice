@@ -253,15 +253,15 @@ describe('lattice_expand', () => {
     assert.ok(out.includes('没有 id 为'), '输出: ' + out)
   })
 
-  it('缺 atom_id 时由上游参数校验拦下，错误信息可读', async () => {
-    // 必填参数由宿主的 defineTool 校验（parameters 里标了 required: true），不会走到 execute。
-    await assert.rejects(
-      () => tool('lattice_expand').execute({}),
-      (err) => {
-        assert.equal(err.code, 'INVALID_ARGS')
-        assert.ok(String(err.message).includes('atom_id'), '错误信息应指出缺哪个参数: ' + err.message)
-        return true
-      },
+  it('lattice_expand 把 atom_id 声明为必填 —— 调用前的校验归宿主', () => {
+    // 我们只声明 schema；调用前的参数校验由宿主负责（见 docs/PRINCIPLES.md 边界三）。
+    // 这里断言的是「声明经契约转换后的结果」，而不是「宿主会不会按它拦下」——
+    // 后者是对方的契约，断言它会让红灯指向我们没坏的地方。
+    const t = tool('lattice_expand')
+    assert.equal(t.parameters?.properties?.atom_id?.type, 'number')
+    assert.ok(
+      t.parameters?.required?.includes('atom_id'),
+      'atom_id 应当出现在 required 里：' + JSON.stringify(t.parameters?.required),
     )
   })
 })
