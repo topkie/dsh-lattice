@@ -272,8 +272,7 @@ parameters: {
 
 ```
 src/
-  index.ts        插件入口：契约导出、配置、生命周期
-  config.ts       配置 schema 与默认值
+  index.ts        插件入口：契约导出、**配置 schema 与默认值**、生命周期、只读路由
   db/             存储层：schema、连接与迁移、仓储、检索
   encoder/        向量编码：模型加载、批处理、可用性探测与降级
   pipeline/       业务管线：写入、召回、注入组装、维护
