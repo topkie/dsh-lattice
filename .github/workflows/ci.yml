@@ -22,6 +22,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # 直接跑脚本而不是 `pnpm <script>`：本机实测 `pnpm run` 会因 pnpm 自身的
       # 依赖预检查而失败，换成显式命令可以绕开这一类不确定性。
+      # dist/ 被 .gitignore 忽略，而测试 import 的是它 —— 不先构建，干净检出上测试必报模块找不到。
+      - run: node node_modules/typescript/bin/tsc -p tsconfig.json
       - run: node node_modules/typescript/bin/tsc --noEmit
       - run: node node_modules/eslint/bin/eslint.js .
       - run: node node_modules/prettier/bin/prettier.cjs --check "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" ".github/**/*.yml"
