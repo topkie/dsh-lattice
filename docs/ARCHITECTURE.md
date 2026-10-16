@@ -39,11 +39,15 @@
 atom          记忆本体（唯一真相源）
   ├─ embedding  float32[512] 的 BLOB，L2 归一化
   ├─ topic_id   主属主题（唯一）
-  └─ flags      位标志：待拆分 / 歧义 / 未归类 …
+  └─ flags      位标志（设计上留给「待拆分 / 歧义 / 未归类」）—— **当前恒为 0，无写入方**
 topic         主题，存 sum_vec 与 n_atoms，中心向量查询时现算
+domain        topic 的上层聚类，只做导航与配额
 entry         检索入口：term + bigram 索引列 + 权重 + 来源
 atom_topic    主属（权重 1.0）与次属（0.4~0.6）
 edge          带类型与置信度的关联边
+atom_pair     atom 两两相似对（重聚类时填；供图扩展与去重查询用）
+forgotten     已删除记忆的墓碑（v4 起有；库里**不存正文**，只留指纹与摘要）
+meta          构建元信息（来源、入口规则版本、构建时间）
 atom_search   检索侧物化表 → atom_fts（trigram）
               entry        → entry_fts（unicode61 + CJK bigram）
 ```
@@ -66,7 +70,7 @@ SQLite 的 FTS5 `trigram` 分词器按 3 字符滑窗建索引，**对长度 ≤
 | 向量 | `atom.embedding` 与查询向量的余弦 | 粗筛能力强，细分能力有限 |
 | Entry | `entry_fts`（bigram） | 短查询的主力 |
 | 正文 | `atom_fts`（trigram） | 长查询与细节命中 |
-| 图 | 一跳边扩展 | 补多跳 |
+| 图 | 一跳边扩展 | 补多跳。**当前恒为 0** —— 它只走 `atom↔atom` 边，而写入只产 `atom→topic` 边 |
 
 融合后按归属关系加权（主属 > 仅次属 > 仅图路），取前 N 条交注入层。
 
