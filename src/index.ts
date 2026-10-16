@@ -4,12 +4,22 @@
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
 //   2. 注册四个工具：ping（健康检查）、write、recall、expand
 //
+// 外加三条**只读**路由给浏览器半取数用（见 apply 里的注释与文件尾的 handler）：
+//   /api/lattice-ping-mini  库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
+//   /api/lattice-atoms      目录：分页 + 过滤，与 lattice_list 同一条数据路径
+//   /api/lattice-search     搜索：与 lattice_recall 同一条数据路径，但**不记命中**
+// 三条都只读：界面的写入口（删除）是 T20，不在这里。
+//
 // **只有工具，没有 hook**：禁用 LLM 后「轮次结束自动沉淀」必然要调 LLM 做结构化，
 // 与本插件的定位冲突。写入与召回都必须是显式动作。
 
 import { readFileSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
-import { resolveDataDir, type RuntimeConfig } from './state.js'
+import { getRuntime, resolveDataDir, runtimeEncode, type RuntimeConfig } from './state.js'
+import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
+import { recall } from './pipeline/search.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -28,6 +38,27 @@ const VERSION: string = (() => {
     return '0.0.0'
   }
 })()
+
+/**
+ * 浏览器半 fetch 的只读路径。
+ *
+ * 与浏览器半 `lib/client.js` 里的 `PING_URL` 必须同值 —— 两侧各写一遍是有意的：
+ * 浏览器半是发布产物（不参与 tsc 构建、不能 import 本文件），共享一个常量需要一个
+ * 构建步骤，而那正是本次要避免的东西。改这里就要改那里。
+ */
+const MINI_ROUTE_PATH = '/api/lattice-ping-mini'
+
+/**
+ * 目录路由：分页 + 过滤，界面上的「列表」。
+ *
+ * 与搜索分成两条而不是一条带开关的路由：两者回答的是不同的问题 ——
+ * 「库里有什么」不需要查询词、要能翻页；「定位到某一条」需要查询词、按相关性排。
+ * 合成一条会让参数表变成两种语义的并集，比两条路由更难读。
+ */
+const ATOMS_ROUTE_PATH = '/api/lattice-atoms'
+
+/** 搜索路由：一条查询进去，若干条命中出来。 */
+const SEARCH_ROUTE_PATH = '/api/lattice-search'
 
 /**
  * 插件配置 schema。
@@ -74,17 +105,52 @@ export const Config = z.object({
 })
 
 /**
+ * 本插件用到的宿主服务切片。
+ *
+ * 为什么手写窄接口：这两个服务由宿主插件提供（`tools` 来自 dsh-tools，`webServer` 来自
+ * dsh-host-webserver），它们的服务类型不在本仓库的编译范围内 —— 与本插件同装的只有
+ * cordis 本身。写成接口而不是 `any`，是为了让「插件依赖宿主的哪一部分」可读、可查；
+ * 真正的契约由**运行期**保证：拿不到服务时下面的守卫会直接返回（见 apply 里那两处）。
+ *
+ * 与 `Context.get()` 的关系：_getImpl 的返回就是 `any`（reflect.d.ts），所以这两个断言
+ * 不是在推翻宿主的类型，而是在给一个本来就没有类型的位置补上本插件自己的口径。
+ */
+interface HostServices {
+  /** 工具注册表；register 的入参形状由模块声明（src/modules.d.ts）给出。 */
+  tools: { register(definition: unknown): unknown }
+  /** 宿主 Web 服务；本插件只用 exact 路由这一小块。 */
+  webServer: { register(route: { kind: string; path: string; handler: RouteHandler }): () => void }
+}
+
+/**
+ * 读一个宿主服务：拿不到就返回 undefined（由调用方决定是跳过还是等注入）。
+ *
+ * 唯一的 `as` 在这里，而不是散在每个消费点上：`ctx.get()` 的返回本来就是 `any`
+ * （reflect.d.ts），能给的类型只有本插件自己声明的 HostServices —— 把转换收在一处，
+ * 读的人一眼能看到「哪些名字属于宿主、名字写错时哪个函数负责兜底」。
+ */
+function hostService<K extends keyof HostServices>(ctx: Context, name: K): HostServices[K] | undefined {
+  return ctx.get(name) as HostServices[K] | undefined
+}
+
+/** 插件路由的处理器签名。宿主按 (req, res) 调用，用的是 node:http 的对象。 */
+type RouteHandler = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+
+/**
  * 插件入口。Cordis 在插件激活时调用一次。
  *
  * 注意：这里只做**注册**，不做重活——模型加载、索引构建等放到首次调用时懒执行，
  * 避免拖慢宿主启动。
+ *
+ * `config` 的类型仍是 `unknown`：它的形状由本文件的 Config schema 定义，而 z 的表在编译期
+ * 是宽口径（见 src/modules.d.ts）—— 所以下面读 cfg.xxx 时每个取值都自己给了默认值。
  */
-export function apply(ctx: any, config: any): void {
-  const cfg = config ?? {}
+export function apply(ctx: Context, config: unknown): void {
+  const cfg = (config ?? {}) as Record<string, unknown>
   if (cfg.enabled === false) return
 
-  const tools = ctx?.get?.('tools')
-  if (tools === undefined || tools === null) return
+  const tools = hostService(ctx, 'tools')
+  if (tools === undefined) return
 
   // 三个业务工具。注册只是挂上定义，真正的库连接与模型加载都等到第一次调用
   // （见 state.ts 的 getRuntime / runtimeEncode）—— 注册路径上不做重活。
@@ -103,12 +169,64 @@ export function apply(ctx: any, config: any): void {
     viewBudget: Number(cfg.viewBudget ?? 6000),
     topN: Number(cfg.topN ?? 24),
     resources: {
-      mmapSize: cfg.mmapSize > 0 ? Number(cfg.mmapSize) : undefined,
-      cacheSize: cfg.cacheSize > 0 ? Number(cfg.cacheSize) : undefined,
-      busyTimeout: cfg.busyTimeout > 0 ? Number(cfg.busyTimeout) : undefined,
+      mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,
+      cacheSize: Number(cfg.cacheSize ?? 0) > 0 ? Number(cfg.cacheSize) : undefined,
+      busyTimeout: Number(cfg.busyTimeout ?? 0) > 0 ? Number(cfg.busyTimeout) : undefined,
     },
   }
   for (const t of buildTools(runtimeCfg)) tools.register(t)
+
+  // ── 浏览器半的座位（M3-T19 最小验证） ─────────────────────────────────────────
+  //
+  // 这段代码本身不是功能，是**验证**：宿主的设置页里能不能出现一个属于本插件的区块、
+  // 区块里的 fetch 能不能打到本插件后端的路由。路由只读、无请求体，返回库的规模。
+  //
+  // 为什么**不**把 'webServer' 写进本文件的 inject：本文件的 inject 是整个插件的
+  // **激活条件** —— 加进去之后，没有 Web 载体的 profile 里插件根本不激活，连工具一起没。
+  //
+  // 为什么**也**不是「ctx.get('webServer') 拿一次，拿不到就算了」：cordis 的 ctx.get
+  // 读的是一次快照，且只认**已激活**的提供者（reflect.ts 的 _getImpl 在 strict 下要求
+  // impl.fiber.state === ACTIVE），而 loader 是**并发**启动所有顶层条目的
+  // （plugin-loader 的 config/group.ts：Promise.all 一把 create）。webServer 的 fiber 要等
+  // [Service.init] 里 server.listen 落地才转 ACTIVE，于是 apply 走到那里时常常拿到
+  // undefined —— 静默跳过、路由永不注册。M3-T19 重启实测的 404 就是这个形态；
+  // 复现见开发笔记的探针 t19-route-registration.mjs（真 cordis 4.0.4，场景 1）。
+  //
+  // ctx.inject(deps, callback) 起的是一个**子 fiber**（registry.ts：inject 就是
+  // plugin({ inject, apply })），激活条件只挂在子 fiber 上：webServer 缺席时它停在 PENDING、
+  // 零副作用，父插件照常激活；webServer 一出现它才执行回调把路由挂上；它是父 fiber 的一个
+  // effect，父插件卸载时随之一并收走 —— 所以不必把 'webServer' 写进模块级 inject。
+  // 回调拿到的子上下文与父上下文同型；webServer 在这里**必然存在**（它就是激活条件），
+  // 所以用 hostService 取一次并断言非空 —— 与 apply 开头那处「拿不到就跳过」不同，
+  // 这里拿不到只可能是宿主契约变了，那时早失败比挂一条路由到 undefined 上好。
+  ctx.inject(['webServer'], (ctx: Context) => {
+    const webServer = hostService(ctx, 'webServer')!
+    // 三条路由同生同灭，所以共用**一个** effect、返回一个合并的 disposer：
+    // 分开写会长出三段一模一样的样板。ping 那条仍然是实测通过的基线，只是
+    // 外形跟着一起规整，函数体（miniPing）不动。
+    ctx.effect(() => {
+      const disposers = [
+        webServer.register({
+          kind: 'exact',
+          path: MINI_ROUTE_PATH,
+          handler: (req, res) => miniPing(runtimeCfg, req, res),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: ATOMS_ROUTE_PATH,
+          handler: (req, res) => atomsRoute(runtimeCfg, req, res),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: SEARCH_ROUTE_PATH,
+          handler: (req, res) => searchRoute(runtimeCfg, req, res),
+        }),
+      ]
+      return () => {
+        for (const dispose of disposers) dispose()
+      }
+    }, 'dsh-lattice: web routes')
+  })
 
   tools.register(
     defineTool({
@@ -124,9 +242,9 @@ export function apply(ctx: any, config: any): void {
       async execute() {
         // 报告**实际会使用的**资源参数，而不是配置里的 0 —— 否则健康检查看不出真实取值。
         const res = deriveResourceParams(0, {
-          mmapSize: cfg.mmapSize > 0 ? cfg.mmapSize : undefined,
-          cacheSize: cfg.cacheSize > 0 ? cfg.cacheSize : undefined,
-          busyTimeout: cfg.busyTimeout > 0 ? cfg.busyTimeout : undefined,
+          mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,
+          cacheSize: Number(cfg.cacheSize ?? 0) > 0 ? Number(cfg.cacheSize) : undefined,
+          busyTimeout: Number(cfg.busyTimeout ?? 0) > 0 ? Number(cfg.busyTimeout) : undefined,
         })
         return JSON.stringify({
           ok: true,
@@ -153,4 +271,198 @@ export function apply(ctx: any, config: any): void {
       },
     }),
   )
+}
+
+/** 写一个 JSON 响应。插件自己的路由拿不到宿主任何免费保护，头也自己写。 */
+function jsonOut(res: ServerResponse, status: number, body: unknown): void {
+  const text = JSON.stringify(body)
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(text),
+  })
+  res.end(text)
+}
+
+/**
+ * 浏览器半唯一的取数口：库现在有多少条 atom。
+ *
+ * **只读**：不碰编码器、不写库、不改状态；走的是与 lattice_list 同一条读取路径
+ * （state.ts 的 getRuntime + pipeline/list.ts 的 listAtoms），没有另造一套。
+ *
+ * 栅栏只保留「本机回环」一条。为什么少了另外两条（对照本机同类的双面插件）：
+ * 那两条是给**写**路由防 CSRF 用的 —— 要求 POST 与 application/json，是为了挡掉
+ * 跨站的「简单请求」。本路由无请求体、且只读：跨站页面即使发得出去，也读不到响应
+ * （插件路由不带任何 CORS 头）。回环这条仍然要留：宿主对插件路由不做鉴权
+ * （见 dsh-host-webserver 的说明），而这条路由会把记忆库的规模报给任何能连上的人。
+ */
+function miniPing(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): void {
+  const remote = req?.socket?.remoteAddress ?? ''
+  const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+  if (!loopback) {
+    jsonOut(res, 403, { ok: false, error: 'forbidden', message: '仅允许本机回环请求' })
+    return
+  }
+  if (req.method !== 'GET') {
+    jsonOut(res, 405, { ok: false, error: 'method', message: '仅支持 GET' })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    jsonOut(res, 200, {
+      ok: true,
+      plugin: name,
+      version: VERSION,
+      atoms: listAtoms(rt.db, { limit: 1 }).total,
+    })
+  } catch (e) {
+    // 读库失败要说出来 —— 页面上一句「取数失败」比空白更能定位问题。
+    jsonOut(res, 500, { ok: false, error: 'read-failed', message: String((e as Error)?.message ?? e) })
+  }
+}
+
+/** 异常的短说法。三条路由共用一句「把失败说出来」，不共用格式。 */
+function reasonOf(e: unknown): string {
+  return String((e as Error)?.message ?? e)
+}
+
+/**
+ * 只读路由的栅栏：非回环 403、非 GET 405。顺序是先回环后方法 —— 外来的请求连
+ * 「你用什么方法」都不该问。
+ *
+ * 为什么只有这两道（对照 §44 给写端点准备的那套）：另两道（要求 POST + application/json）
+ * 是给**写**路由防 CSRF 的，本组路由无请求体、只读，跨站页面即使发得出去也读不到响应
+ * （插件路由不带任何 CORS 头）。回环这道仍然必须留：宿主对插件路由不做鉴权
+ * （见 dsh-host-webserver 的说明），而这三条路由会把整个记忆库报给任何能连上的人。
+ *
+ * 与 miniPing 里那段是有意的重复：那条路由是 T19 实测通过的基线，本轮不动它的函数体。
+ */
+function guardReadOnly(req: IncomingMessage, res: ServerResponse): boolean {
+  const remote = req?.socket?.remoteAddress ?? ''
+  const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+  if (!loopback) {
+    jsonOut(res, 403, { ok: false, error: 'forbidden', message: '仅允许本机回环请求' })
+    return false
+  }
+  if (req.method !== 'GET') {
+    jsonOut(res, 405, { ok: false, error: 'method', message: '仅支持 GET' })
+    return false
+  }
+  return true
+}
+
+/**
+ * 取查询串。
+ *
+ * 宿主只用 **pathname** 匹配路由（dsh-host-webserver 的 handle：先按 pathname 查表，
+ * 查询串不参与匹配），所以 exact 路由天然带着自己的查询串进来，不必自己切分。
+ */
+function queryOf(req: IncomingMessage): URLSearchParams {
+  try {
+    return new URL(String(req?.url ?? '/'), 'http://localhost').searchParams
+  } catch {
+    return new URLSearchParams()
+  }
+}
+
+/**
+ * 整数参数：没给就用默认值，给了但不像整数也退回默认值（不猜），最后钳进 [lo, hi]。
+ *
+ * 钳位不是礼貌：分页参数直接进 SQL 的 LIMIT/OFFSET，而 URL 是任何能连上的人都能拼的。
+ */
+function intParam(params: URLSearchParams, key: string, fallback: number, lo: number, hi: number): number {
+  const raw = params.get(key)
+  const n = raw === null || raw.trim() === '' ? fallback : Number(raw)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(hi, Math.max(lo, Math.floor(n)))
+}
+
+/**
+ * 目录：库里有什么。分页 + 过滤，数据全部来自 listAtoms（与 lattice_list 同一条路径，
+ * 连页大小上限都是同一个 LIST_MAX_LIMIT）—— 这里是**转发**，不是另一套查询。
+ */
+function atomsRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): void {
+  if (!guardReadOnly(req, res)) return
+  const params = queryOf(req)
+  try {
+    const rt = getRuntime(cfg)
+    const r = listAtoms(rt.db, {
+      kind: params.get('kind') ?? '',
+      origin: params.get('origin') ?? '',
+      scope: params.get('scope') ?? '',
+      limit: intParam(params, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT),
+      offset: intParam(params, 'offset', 0, 0, Number.MAX_SAFE_INTEGER),
+    })
+    // limit / offset 原样回给前端：翻页要按**服务端实际用的**页大小算，不能由前端猜。
+    jsonOut(res, 200, { ok: true, total: r.total, offset: r.offset, limit: r.limit, rows: r.rows })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'read-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 搜索：一条查询，若干条命中。走 recall —— 与 lattice_recall 同一条路径，同一套融合与归属加权。
+ *
+ * **不调 recordRecall**（这是与工具侧唯一的、有意的差别）：那个计数器记的是「被召回并
+ * **进入了注入**」，不是「有人在界面上搜了一下」。界面搜索要是也计数，用户自己翻几次
+ * 就会把这个数顶上去，而它正是「该管哪条」要看的信号之一 —— 数一旦被自己污染，
+ * 归属显示就退回到「一堆等权文本」。
+ *
+ * 命中条数上限复用 LIST_MAX_LIMIT：搜索结果与目录共用一个上限，界面一屏也放不下更多。
+ */
+async function searchRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!guardReadOnly(req, res)) return
+  const params = queryOf(req)
+  const q = String(params.get('q') ?? '').trim()
+  if (q === '') {
+    jsonOut(res, 400, { ok: false, error: 'query', message: '缺少查询词 q' })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const topN = intParam(params, 'limit', cfg.topN, 1, LIST_MAX_LIMIT)
+    // 编码失败不该让整条搜索失败：退到纯词面召回，并把降级原因如实报出去
+    // （与工具侧同一条原则：失败不留白，不能让人以为「搜不到」就是「库里没有」）。
+    let queryVec: Float32Array | null = null
+    let encodeError: string | null = null
+    try {
+      queryVec = await runtimeEncode(cfg, q)
+    } catch (e) {
+      encodeError = reasonOf(e)
+    }
+    const recalled = recall(rt.db, q, queryVec, {
+      topN,
+      scope: params.get('scope') || undefined,
+    })
+    // recall 的命中只带 origin / supersededBy；「被取回几次、最后什么时候」要向目录模块要。
+    const facts = new Map(
+      listAtomsByIds(
+        rt.db,
+        recalled.hits.map((h) => h.id),
+      ).map((row) => [row.id, row]),
+    )
+    jsonOut(res, 200, {
+      ok: true,
+      query: q,
+      hits: recalled.hits.map((h) => {
+        const fact = facts.get(h.id)
+        return {
+          id: h.id,
+          summary: h.summary,
+          origin: h.origin,
+          supersededBy: h.supersededBy,
+          topicId: h.topicId,
+          score: h.score,
+          final: h.final,
+          affiliation: h.affiliation,
+          kind: fact?.kind ?? '',
+          scope: fact?.scope ?? '',
+          recallHits: fact?.recallHits ?? 0,
+          lastRecalledAt: fact?.lastRecalledAt ?? null,
+        }
+      }),
+      meta: { ...recalled.meta, encodeError },
+    })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'search-failed', message: reasonOf(e) })
+  }
 }

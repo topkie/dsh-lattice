@@ -48,6 +48,29 @@ export interface ListResult {
   limit: number
 }
 
+/** 目录行的 SELECT 列表：listAtoms 与 listAtomsByIds 共用，免得两处字段慢慢分叉。 */
+const LIST_COLUMNS =
+  'id, kind, summary, origin, scope, project_key, topic_id, superseded_by, created_at, ' +
+  'recall_hits, last_recalled_at'
+
+/** 一行原始记录 → 目录行。字段映射只有这一处（列名 → 驼峰字段）。 */
+function toListRow(r: Record<string, unknown>): ListRow {
+  return {
+    id: Number(r.id),
+    kind: String(r.kind),
+    summary: String(r.summary),
+    origin: String(r.origin),
+    scope: String(r.scope),
+    projectKey: r.project_key === null || r.project_key === undefined ? null : String(r.project_key),
+    topicId: r.topic_id === null || r.topic_id === undefined ? null : Number(r.topic_id),
+    supersededBy: r.superseded_by === null || r.superseded_by === undefined ? null : Number(r.superseded_by),
+    createdAt: Number(r.created_at),
+    recallHits: Number(r.recall_hits),
+    lastRecalledAt:
+      r.last_recalled_at === null || r.last_recalled_at === undefined ? null : Number(r.last_recalled_at),
+  }
+}
+
 /**
  * 按筛选条件列目录。**只读**：不排序相关性、不碰编码器、不写库。
  *
@@ -82,31 +105,28 @@ export function listAtoms(db: DatabaseSync, opts: ListOptions = {}): ListResult 
   const limit = Math.min(LIST_MAX_LIMIT, Math.max(1, Math.floor(opts.limit ?? LIST_DEFAULT_LIMIT)))
   const offset = Math.max(0, Math.floor(opts.offset ?? 0))
   const rows = db
-    .prepare(
-      'SELECT id, kind, summary, origin, scope, project_key, topic_id, superseded_by, created_at, ' +
-        'recall_hits, last_recalled_at FROM atom' +
-        clause +
-        ' ORDER BY id DESC LIMIT ? OFFSET ?',
-    )
+    .prepare('SELECT ' + LIST_COLUMNS + ' FROM atom' + clause + ' ORDER BY id DESC LIMIT ? OFFSET ?')
     .all(...args, limit, offset) as Array<Record<string, unknown>>
-  return {
-    rows: rows.map((r) => ({
-      id: Number(r.id),
-      kind: String(r.kind),
-      summary: String(r.summary),
-      origin: String(r.origin),
-      scope: String(r.scope),
-      projectKey: r.project_key === null || r.project_key === undefined ? null : String(r.project_key),
-      topicId: r.topic_id === null || r.topic_id === undefined ? null : Number(r.topic_id),
-      supersededBy:
-        r.superseded_by === null || r.superseded_by === undefined ? null : Number(r.superseded_by),
-      createdAt: Number(r.created_at),
-      recallHits: Number(r.recall_hits),
-      lastRecalledAt:
-        r.last_recalled_at === null || r.last_recalled_at === undefined ? null : Number(r.last_recalled_at),
-    })),
-    total,
-    offset,
-    limit,
-  }
+  return { rows: rows.map(toListRow), total, offset, limit }
+}
+
+/**
+ * 按 id 批量取目录行 —— 同一套字段映射，只换 WHERE。
+ *
+ * 为什么需要它：搜索结果由 recall 产出，而 RecallHit 只带 origin / supersededBy，
+ * 不带「被取回几次、最后一次是什么时候」—— 归属显示会缺一半。这里用一次 IN 查询补齐，
+ * 而不是让调用方（插件入口）自己写 SQL：ListRow 的投影归本模块所有，散出去两处就会分叉。
+ *
+ * 只读。空数组直接返回空（不生成非法的 `IN ()`）；顺序按 id 倒序，与 listAtoms 一致；
+ * 入参里有不存在的 id 时，返回条数会少于入参条数。
+ */
+export function listAtomsByIds(db: DatabaseSync, ids: readonly number[]): ListRow[] {
+  // 去重并剔掉非法值：调用方给的往往是召回结果的 id 列表，不保证干净。
+  const clean = [...new Set(ids)].filter((n) => Number.isInteger(n) && n > 0)
+  if (clean.length === 0) return []
+  const placeholders = clean.map(() => '?').join(', ')
+  const rows = db
+    .prepare('SELECT ' + LIST_COLUMNS + ' FROM atom WHERE id IN (' + placeholders + ') ORDER BY id DESC')
+    .all(...clean) as Array<Record<string, unknown>>
+  return rows.map(toListRow)
 }

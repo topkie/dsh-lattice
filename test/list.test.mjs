@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
-import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms } from '../dist/pipeline/list.js'
+import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from '../dist/pipeline/list.js'
 import { recall } from '../dist/pipeline/search.js'
 
 let dbFile = ''
@@ -92,6 +92,31 @@ describe('目录：分页与过滤', () => {
     )
     assert.equal(listAtoms(db, { kind: '不存在' }).total, 0)
     assert.equal(listAtoms(db, { kind: '' }).total, 3)
+  })
+})
+
+describe('目录：按 id 批量取（搜索结果的归属显示要用）', () => {
+  it('按 id 取回与 listAtoms 同形的行，顺序 id 倒序', () => {
+    for (let i = 1; i <= 5; i++) seed(i, { origin: i === 2 ? 'user' : 'model' })
+    const rows = listAtomsByIds(db, [2, 4, 1])
+    assert.deepEqual(
+      rows.map((r) => r.id),
+      [4, 2, 1],
+    )
+    // 与目录行同形：归属显示要的字段一个都不能少
+    const one = rows.find((r) => r.id === 2)
+    assert.equal(one.origin, 'user')
+    assert.equal(one.supersededBy, null)
+    assert.equal(typeof one.recallHits, 'number')
+    assert.ok('lastRecalledAt' in one)
+    assert.equal(one.kind, '结论')
+  })
+
+  it('空入参、非法 id、不存在的 id 都不炸', () => {
+    seed(1, {})
+    assert.deepEqual(listAtomsByIds(db, []), [])
+    assert.deepEqual(listAtomsByIds(db, [0, -3, 1.5, NaN]), [])
+    assert.equal(listAtomsByIds(db, [1, 1, 999]).length, 1)
   })
 })
 

@@ -10,10 +10,12 @@
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "lib",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -44,6 +46,10 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
     },
     "marketplace": {
       "profiles": [
