@@ -79,6 +79,7 @@ function missingTables(text, tables) {
  */
 const NON_REPO = new Map([
   ['snapshot.json', '`snapshot-baseline.mjs` 的产物，落在 `.probe/snap/<名字>/` 下（`.probe/` 被忽略）'],
+  ['AGENTS.local.md', '本机私有的开发约定补充，**不进版本控制**（`AGENTS.md` 第五节规定的载体）'],
 ])
 
 /** 全仓库收集文件名（不含目录），用于「文档只写了文件名」的情形。 */
@@ -114,6 +115,10 @@ for (const file of docFiles()) {
   for (const c of candidates(text)) {
     if (!looksLikePath(c)) continue
     if (NON_REPO.has(c)) continue
+    // 规则式跳过：`.probe/` 整个目录都是运行产物（快照、副本、一次性问句），
+    // 它被 `.gitignore` 覆盖，**不该要求文档提到的每个路径都真实存在**。
+    // —— 逐条加白名单会退化成「什么都不查」，所以这里用规则而不是再列两条。
+    if (c.includes('.probe/')) continue
     const key = rel + '|' + c
     if (seen.has(key)) continue
     seen.add(key)
