@@ -27,7 +27,8 @@ jobs:
       - run: node node_modules/typescript/bin/tsc --noEmit
       - run: node node_modules/eslint/bin/eslint.js .
       - run: node node_modules/prettier/bin/prettier.cjs --check "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" ".github/**/*.yml"
-      - run: node test/run.mjs
+      # 与本地门禁同一条入口，包括替身参数 —— 否则两边跑的降级路径不同。
+      - run: node --import ./test/stubs/register.mjs test/run.mjs
 
       # 真实模型验证不进 CI：要下载模型、耗时数十秒，且必须是网络可用时才跑。
       # 它们由维护者在合并前手动执行（详见 docs/DEVELOPMENT.md）。

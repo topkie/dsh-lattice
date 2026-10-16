@@ -34,7 +34,9 @@ const STEPS = [
   ['lint', 'node_modules/eslint/bin/eslint.js', ['.']],
   // 只检查源码与文档：`--check .` 会把 dist/ 的构建产物也扫进来，那些不该受格式约束。
   ['format', 'node_modules/prettier/bin/prettier.cjs', ['--check', ...FORMAT_GLOBS]],
-  ['test', 'test/run.mjs', []],
+  // test 也要挂替身：它只替换**可选依赖**（编码器），让降级用例确定地走降级路径。
+  // 不挂的话，有网络的机器上编码器会真的加载成功，那组用例的语义就变了。
+  ['test', 'test/run.mjs', [], ['--import', './test/stubs/register.mjs']],
 ]
 
 /**
@@ -66,14 +68,14 @@ async function main() {
   console.log(checkBranch())
   let failed = 0
   const t0 = Date.now()
-  for (const [name, entry, args] of STEPS) {
+  for (const [name, entry, args, pre = []] of STEPS) {
     if (!existsSync(entry)) {
       console.error('SKIP ' + name + '：找不到 ' + entry + '（先装依赖）')
       failed++
       continue
     }
     const t = Date.now()
-    const r = spawnSync(NODE, [entry, ...args], { stdio: 'inherit' })
+    const r = spawnSync(NODE, [...pre, entry, ...args], { stdio: 'inherit' })
     const ms = Date.now() - t
     if (r.status === 0) {
       console.log('OK   ' + name.padEnd(10) + ms + ' ms')
