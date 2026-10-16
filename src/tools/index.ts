@@ -17,7 +17,7 @@ import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
-import { ForgottenError, writeAtom } from '../pipeline/write.js'
+import { ForgottenError, writeReviewed } from '../pipeline/write.js'
 import { getRuntime, runtimeEncode, type Runtime, type RuntimeConfig } from '../state.js'
 
 /** 库现状一行——放在召回结果前面，让模型知道这个库有多大、值不值得再查。 */
@@ -109,13 +109,17 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     name: 'lattice_write',
     description:
       '记住一件事。写入后会自动编码、定位主题并生成检索入口。' +
-      '仅在内容值得跨会话复用时调用：结论、坑、步骤、参数；一次对话里临时说过的话不要写。',
+      '仅在内容值得跨会话复用时调用：结论、坑、步骤、参数；一次对话里临时说过的话不要写。' +
+      '写入侧有一层按「修复成本」分级的审核：正文短于 12 个字符的碎片会被拒收（请把它并进它解释的那条记忆），' +
+      '长于 600 字的会按句自动切成多条分别写入；与库里已有内容重复或高度相似时只给一条提示，不阻止写入。',
     // 注意形状：parameters 是「属性名 → 值 schema」的映射，**不是** {type, properties}。
     // 必填写成属性上的 required: true。写错会在 defineTool 时就抛错，整个插件加载失败。
     parameters: {
       text: {
         type: 'string',
-        description: '记忆正文。一句话讲清一个结论，不要塞进多个主题。',
+        description:
+          '记忆正文。一句话讲清一个结论，不要塞进多个主题。' +
+          '至少要是一句完整的话（短于 12 个字符会被写入侧审核拒收）。',
         required: true,
       },
       kind: {
@@ -151,9 +155,12 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const hint = typeof args?.topic_hint === 'number' ? args.topic_hint : undefined
       const sup =
         typeof args?.supersedes === 'number' && Number.isFinite(args.supersedes) ? args.supersedes : undefined
-      let r
+      let out
       try {
-        r = await writeAtom(rt.write, {
+        // 写入侧审核层（M3-T22）在 writeReviewed 里：长度类**自动处理**（过短拦下 / 过长切分），
+        // 重复与高相似只产生提示。两者的产出都只经这一个返回值出去 —— 不写库、不建队列、
+        // 不产生需要人处理的待办（§11.1：插件不做判断，只提供判断所需的信息）。
+        out = await writeReviewed(rt.write, {
           text,
           kind: str(args?.kind, '结论'),
           scope: str(args?.scope, 'global'),
@@ -168,28 +175,62 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         if (e instanceof ForgottenError) return describeForgetRejection(e)
         throw e
       }
-      const action = r.action === 'joined' ? '并入已有主题' : '新建主题'
-      const reason = r.created === 'ambiguous' ? '（两个候选接近，已标记待定）' : ''
-      const lines = [
-        '已写入 atom #' + r.atomId + '：' + action + ' #' + r.topicId + reason,
-        '入口 ' +
-          r.entries.length +
-          ' 条' +
-          (refs.length > 0 ? '（其中显式声明 ' + refs.length + ' 条）' : ''),
-      ]
-      if (r.hintMiss !== undefined) {
-        lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按几何定位处理。')
+
+      const lines: string[] = []
+      if (out.length.note !== null) lines.push(out.length.note.message)
+      // 长度审核拦下：确实一条都没写。此时上面的说明就是全部反馈 —— 调用方据此改写，
+      // 而不是以为写成功了（与防写回同一条纪律）。
+      if (out.results.length === 0) return lines.join('\n')
+
+      const multi = out.results.length > 1
+      out.results.forEach((r, i) => {
+        const action = r.action === 'joined' ? '并入已有主题' : '新建主题'
+        const reason = r.created === 'ambiguous' ? '（两个候选接近，已标记待定）' : ''
+        lines.push(
+          (multi ? '第 ' + (i + 1) + '/' + out.results.length + ' 条：' : '') +
+            '已写入 atom #' +
+            r.atomId +
+            '：' +
+            action +
+            ' #' +
+            r.topicId +
+            reason,
+        )
+        lines.push(
+          '入口 ' +
+            r.entries.length +
+            ' 条' +
+            (refs.length > 0 ? '（其中显式声明 ' + refs.length + ' 条）' : ''),
+        )
+        if (r.hintMiss !== undefined) {
+          lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按几何定位处理。')
+        }
+        // 重复 / 高相似的提示挂在这里。**写入已经发生**，提示只是让调用方知道
+        // 「库里另有一条与它重合」—— 处置权在它手上。
+        for (const n of r.review ?? []) lines.push(n.message)
+      })
+      if (multi) {
+        lines.push('（原文被切分，topic_hint 未沿用：各段各自落位，以免把几件事硬塞进同一个主题。）')
       }
+
       // 取代关系只落在这里：写入侧的事务内固定 O(1) 行数，多一条 UPDATE 就多一份
       // 写锁持有时间，而这不是热路径。
+      // 切分后「本条」是多条 atom，取代关系只能落在一条上 —— 落在第一条，并把落在
+      // 哪一条写进反馈，免得调用方以为三段都建立了取代关系。
       if (sup !== undefined) {
+        const target = out.results[0]!
         const u = rt.db
           .prepare('UPDATE atom SET superseded_by = ?, updated_at = ? WHERE id = ? AND id <> ?')
-          .run(r.atomId, Date.now(), sup, r.atomId)
+          .run(target.atomId, Date.now(), sup, target.atomId)
         lines.push(
           Number(u.changes) === 0
             ? '注意：要取代的记忆 #' + sup + ' 不存在，未建立取代关系。'
-            : '已把 #' + sup + ' 标记为被本条取代（旧条不会删除）。',
+            : '已把 #' +
+                sup +
+                ' 标记为被 #' +
+                target.atomId +
+                (multi ? '（切分后的第一条）' : '本条') +
+                ' 取代（旧条不会删除）。',
         )
       }
       return lines.join('\n')

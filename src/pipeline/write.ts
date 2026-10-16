@@ -31,6 +31,15 @@ import {
   type ForgetThresholds,
   type ForgottenEvidence,
 } from './forget.js'
+import {
+  DEFAULT_REVIEW_THRESHOLDS,
+  duplicateNote,
+  findDuplicate,
+  reviewLength,
+  type LengthReview,
+  type ReviewNote,
+  type ReviewThresholds,
+} from './review.js'
 
 /** 落位动作。rejected（双峰拒绝且写入方未指定主属）由上层处理，见文件末尾说明。 */
 export type WriteAction = 'joined' | 'created'
@@ -93,6 +102,16 @@ export interface WriteResult {
    * 「当时到底比了没有」。
    */
   forgotten?: { scanned: number; truncated: boolean }
+  /**
+   * 写入侧审核给出的提示（M3-T22）。**只有当重复 / 高相似判据命中时才有** ——
+   * 长度类的结论不走这里（它改变的是「写几条」，由 `writeReviewed` 交给调用方）。
+   *
+   * 这一列存在本身就是那条约束的证词：审核的产出**只有一个去处**，就是这个返回值。
+   * 它不写库、不建队列、不产生需要人处理的待办。
+   */
+  review?: ReviewNote[]
+  /** 这次比对了主属主题里的多少条；只在真的比过（scanned > 0）时带。 */
+  reviewScan?: { scanned: number; truncated: boolean }
 }
 
 /**
@@ -148,6 +167,8 @@ export interface WriteCtx {
    * 所以正常部署下这个字段根本不需要给（§44：复用已有判据，不发明新阈值）。
    */
   forget?: ForgetThresholds
+  /** 写入侧审核的阈值（M3-T22）。省略时用 review.ts 的默认值。 */
+  review?: ReviewThresholds
 }
 
 /**
@@ -518,7 +539,12 @@ export function createWriteCtx(
   thresholds: Partial<WriteThresholds> = {},
   extra: Partial<WriteCtx> = {},
 ): WriteCtx {
-  return { db, thresholds: { ...DEFAULT_THRESHOLDS, ...thresholds }, ...extra }
+  return {
+    db,
+    thresholds: { ...DEFAULT_THRESHOLDS, ...thresholds },
+    review: DEFAULT_REVIEW_THRESHOLDS,
+    ...extra,
+  }
 }
 
 function readTopicOf(db: DatabaseSync, atomId: number): number {
@@ -621,6 +647,15 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   }
 
   const topicId = decision.kind === 'join' ? decision.topicId : -1
+
+  // ⑤ 重复 / 高相似：**只提示，不阻止**（M3-T22 的第二级）。
+  //
+  // 位置选在落位之后、提交之前：此刻才知道主属主题，而比对范围恰好就是它的成员。
+  // 这一段只读库、不写库，也**不改变 decision** —— 写入路径的行为只受长度那一级影响。
+  // 新建主题时 topicId 为 -1，findDuplicate 直接返回「没得比」，不产生任何查询。
+  const dup = findDuplicate(ctx.db, text, vec, topicId, ctx.review)
+  const reviewNotes: ReviewNote[] = []
+  if (dup.hit !== null) reviewNotes.push(duplicateNote(dup.hit, dup.truncated))
   const atomId = commitWrite(
     ctx,
     {
@@ -656,7 +691,47 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   if (forgottenCheck.scanned > 0) {
     result.forgotten = { scanned: forgottenCheck.scanned, truncated: forgottenCheck.truncated }
   }
+  if (reviewNotes.length > 0) result.review = reviewNotes
+  if (dup.scanned > 0) result.reviewScan = { scanned: dup.scanned, truncated: dup.truncated }
 
   afterWrite(ctx, result.topicId, atomId, entries.length)
   return result
+}
+
+/** 一次「经审核的写入」的全部产物。 */
+export interface ReviewedWrite {
+  /** 长度审核的结论。`action='reject'` 时 `results` 必为空。 */
+  length: LengthReview
+  /** 真正落库的每一条；切分时多于一条，顺序即段序。 */
+  results: WriteResult[]
+}
+
+/**
+ * 写入入口（M3-T22）：先过长度审核，再逐段落到 `writeAtom`。
+ *
+ * **为什么长度审核在这一层而不是 `writeAtom` 里**：`writeAtom` 的契约是「写一条」，
+ * 而「切分」的结论是「写几条」—— 它是调用方的决定，不是单条写入的内部状态。
+ * 放进 `writeAtom` 会让它要么返回不定条数的结果（破坏现有的单一返回值契约），
+ * 要么在内部递归自己（事务纪律之外多一层不可见的循环）。
+ *
+ * **审核不改变单条写入的行为**：`writeAtom` 该怎么做还怎么做，这一层只决定
+ * 「调它几次」与「要不要调」。所以「正常写入」的路径上，审核的净成本只有
+ * `reviewLength` 里的几次字符串长度比较 —— 真实开销全在重复检测那一段，
+ * 而它只在并入已有主题时才走（见 `findDuplicate`）。
+ */
+export async function writeReviewed(ctx: WriteCtx, input: WriteInput): Promise<ReviewedWrite> {
+  const length = reviewLength(input.text, ctx.review)
+  if (length.action === 'reject') return { length, results: [] }
+
+  const split = length.action === 'split'
+  const results: WriteResult[] = []
+  for (const seg of length.segments) {
+    // 切分后**不沿用 topic_hint**：一段长文本里的几件事本来就不该被硬塞进同一个主题，
+    // 沿用它等于把「原文是一整块」这个假设原样带进切分结果，而那正是切分要拆掉的东西。
+    // 单条写入（action='keep'）时原样透传，行为与改动前逐字一致。
+    results.push(
+      await writeAtom(ctx, { ...input, text: seg, topicHint: split ? undefined : input.topicHint }),
+    )
+  }
+  return { length, results }
 }

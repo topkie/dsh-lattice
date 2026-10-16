@@ -65,6 +65,12 @@ import {
 } from './pipeline/write.js'
 import { LOW_RELEVANCE_HINT } from './tools/index.js'
 import { MAX_ATOM_CHARS, MIN_ATOM_CHARS } from './migrate/split.js'
+import {
+  REVIEW_MAX_CHARS,
+  REVIEW_MAX_SEGMENTS,
+  REVIEW_MIN_CHARS,
+  REVIEW_SCAN_LIMIT,
+} from './pipeline/review.js'
 import { VEC_DIM } from './util/vec.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
@@ -1239,6 +1245,73 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '切分时一条 atom 的最大字符数（超过即按句子再切）',
     calibration: { evidence: '**无记录**（同 MIN_ATOM_CHARS）' },
     variesWith: ['同上'],
+  },
+  // ───────────────── 写入侧审核（pipeline/review.ts，M3-T22）─────────────────
+  {
+    name: 'REVIEW_MIN_CHARS',
+    area: '写入',
+    value: () => REVIEW_MIN_CHARS,
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MIN_CHARS' },
+    affects: '写入侧审核「自动处理·过短」：正文短于它的写入被拦下、不落库',
+    calibration: {
+      evidence:
+        '**不是标定值，是一次分布核对**。基准库（1374 atom）正文字符数分布里，低于 20 字的只有 2 条' +
+        '（0.15%），且两条都是 `---` 这种不可能被召回的空壳；第 3 短的一条（29 字）已经是一句完整结论。' +
+        '真机库 2026-10-17 现取 14 条、最短 81 字，**样本量不足以定下界**。所以这条线的依据是' +
+        '「在基准库上只抓空壳」+「一句合法中文结论的下界约 15 字」，**不是运行语料上的标定**。' +
+        '刻意**不复用 MIN_ATOM_CHARS（80）**：那是迁移切卡片小节的界，搬到写入侧会拦掉合法的短参数记忆' +
+        '（「本机代理端口是 7890。」只有十几个字）—— 那正是本表开头要治的「阈值取自一个场景、用在另一个场景」',
+      at: '2026-10-17',
+    },
+    variesWith: ['「一句话讲一件事」这条写入约定的实际长度分布', '语言', '正文里是否允许单句参数'],
+    diverges: '**设计文档 §7 没有这个键**；`lattice_write` 的入参契约里也没有这条下限',
+  },
+  {
+    name: 'REVIEW_MAX_CHARS',
+    area: '写入',
+    value: () => REVIEW_MAX_CHARS,
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MAX_CHARS' },
+    affects: '写入侧审核「自动处理·过长」：正文长于它的写入按句自动切分后分别写入',
+    calibration: {
+      evidence:
+        '**与 migrate/split.ts 的 MAX_ATOM_CHARS 是同一个数、同一个界**（review.ts 直接引用，不复制值）：' +
+        '两条路径上一条 atom 受同一组约束 —— FTS 索引体积 + 落位会被平均掉。该界本身**无标定记录**，' +
+        '见 MAX_ATOM_CHARS 那一行',
+    },
+    variesWith: ['同 MAX_ATOM_CHARS（atom 正文长度分布、FTS 索引体积、落位质量）'],
+    constName: null,
+    otherSites: ['src/migrate/split.ts 的 MAX_ATOM_CHARS 是它的真相源'],
+    diverges: '**设计文档 §7 没有这个键**',
+  },
+  {
+    name: 'REVIEW_MAX_SEGMENTS',
+    area: '写入',
+    value: () => REVIEW_MAX_SEGMENTS,
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MAX_SEGMENTS' },
+    affects: '一次写入最多自动切成多少条；超过则整条不写入，交回调用方自己拆',
+    calibration: {
+      evidence:
+        '**无标定记录，是结构性上界**：每段都要过一次编码器（本机实测单条写入 p50 约 180 ms，编码占大头），' +
+        '段数不设上限等于让一次工具调用把写入路径变成秒级卡顿。取 8 的依据是「一条记忆里不该装着 8 件以上的事」' +
+        '—— 超过这个量，输入已经是文档而不是记忆，切了也不对',
+    },
+    variesWith: ['编码器单次耗时', '宿主对一次工具调用入参长度的上限'],
+    diverges: '**设计文档 §7 没有这个键**',
+  },
+  {
+    name: 'REVIEW_SCAN_LIMIT',
+    area: '写入',
+    value: () => REVIEW_SCAN_LIMIT,
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_LIMIT' },
+    affects: '重复 / 高相似检测一次最多比多少个同主题成员（**只读，不写库**）',
+    calibration: {
+      evidence:
+        '**无标定记录，是结构性上界**：这一路要读成员正文与向量指纹，不设上限就等于让写入耗时随库规模线性增长。' +
+        '200 条足以覆盖「同一主题下的近期成员」；到上限时不静默 —— 结果里带 scanned / truncated，' +
+        '调用方分得清「比过了不重复」与「没比完」',
+    },
+    variesWith: ['单个主题的成员数分布', 'atom 正文的平均长度'],
+    diverges: '**设计文档 §7 没有这个键**',
   },
   // ──────────────────────── 资源参数（util/memory.ts）─────────────────────────
   {

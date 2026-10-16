@@ -153,7 +153,10 @@ describe('lattice_write', () => {
   })
 
   it('指向不存在的主题时回退并提示，不阻塞写入', async () => {
-    const out = await tool('lattice_write').execute({ text: '一条普通记忆。', topic_hint: 999 })
+    const out = await tool('lattice_write').execute({
+      text: '一条普通记忆，用来验证指向不存在的主题时会回退。',
+      topic_hint: 999,
+    })
     assert.ok(out.includes('已写入'), '输出: ' + out)
     assert.ok(out.includes('#999'), '应当提示 hint 不存在，输出: ' + out)
   })
@@ -165,6 +168,29 @@ describe('lattice_write', () => {
   })
 })
 
+describe('写入侧审核：工具返回值（M3-T22）', () => {
+  // 这一组走的是**真实入口**：apply() 注册出来的 lattice_write → writeReviewed → 返回值组装。
+  // 判据是「反馈只走工具返回值」，所以断言点全在那段文本上，外加「库里确实没有多出东西」。
+
+  it('过短：返回值里说清未写入与为什么，且库里一条都没多', async () => {
+    const out = await tool('lattice_write').execute({ text: '好' })
+    assert.ok(out.includes('未写入'), '输出: ' + out)
+    assert.ok(out.includes('合并'), '要给出出路，输出: ' + out)
+    assert.equal(out.includes('已写入 atom'), false, '不能既说未写入又说已写入')
+    const listed = await tool('lattice_list').execute({})
+    assert.ok(listed.includes('atom 0') || listed.includes('没有'), '库里不该有任何 atom，输出: ' + listed)
+  })
+
+  it('过长：返回值逐条报出切分结果，条数与库里的 atom 数一致', async () => {
+    const text = '甲'.repeat(300) + '。' + '乙'.repeat(300) + '。' + '丙'.repeat(300) + '。'
+    const out = await tool('lattice_write').execute({ text })
+    assert.ok(out.includes('自动切成 3 条'), '输出: ' + out)
+    assert.ok(out.includes('第 1/3 条'), '输出: ' + out)
+    assert.ok(out.includes('第 3/3 条'), '输出: ' + out)
+    assert.equal((out.match(/已写入 atom #/g) ?? []).length, 3, '输出: ' + out)
+    assert.ok(out.includes('topic_hint 未沿用'), '切分后不沿用 hint 这件事要说出来，输出: ' + out)
+  })
+})
 describe('lattice_recall', () => {
   it('空库时明确说没找到，而不是返回空串', async () => {
     const out = await tool('lattice_recall').execute({ query: '任意查询' })
@@ -173,7 +199,7 @@ describe('lattice_recall', () => {
   })
 
   it('结果带库现状一行，便于判断库有多大', async () => {
-    await tool('lattice_write').execute({ text: '一条记忆。' })
+    await tool('lattice_write').execute({ text: '一条用于测试的记忆，正文是完整的一句话。' })
     const out = await tool('lattice_recall').execute({ query: '记忆' })
     assert.ok(/库：atom \d+ \/ topic \d+/.test(out), '输出: ' + out)
   })
