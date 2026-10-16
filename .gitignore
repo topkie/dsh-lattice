@@ -12,3 +12,6 @@ test/_*.db-shm
 # agent 工具的本地补充约定文件
 AGENTS.local.md
 CLAUDE.local.md
+
+# git worktree（并行子体各自的工作目录）
+.worktrees/
