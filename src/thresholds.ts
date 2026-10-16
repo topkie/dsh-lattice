@@ -63,7 +63,6 @@ import {
   FINGERPRINT_MEMBERS,
   WORD_ONLY_TOP_N_FACTOR,
 } from './pipeline/write.js'
-import { LOW_RELEVANCE_HINT } from './tools/index.js'
 import { MAX_ATOM_CHARS, MIN_ATOM_CHARS } from './migrate/split.js'
 import {
   REVIEW_MAX_CHARS,
@@ -1038,7 +1037,11 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   {
     name: 'LOW_RELEVANCE_HINT',
     area: '注入',
-    value: () => LOW_RELEVANCE_HINT,
+    // 取的是 view.ts 的 TIER_BRIEF_MIN —— tools/index.ts 里的 LOW_RELEVANCE_HINT 就是它的别名。
+    // **不 import tools/index.ts**：那个模块要宿主的 peerDependencies（@deepseek-ai/*），
+    // 而本表是只描述阈值的元数据，不该因此多出一个「必须先装好宿主依赖」的前提
+    // （否则新克隆的仓库在 pnpm install 之前跑门禁，这一步会红在与阈值登记无关的理由上）。
+    value: () => TIER_BRIEF_MIN,
     definedBy: { file: 'src/tools/index.ts', name: 'LOW_RELEVANCE_HINT' },
     affects: 'isWeakMatch：低于此值在召回结果前标一句「可能不相关」（只提示不拦截）',
     calibration: {
