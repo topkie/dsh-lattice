@@ -13,9 +13,12 @@
 
 ## 一、开工第一件事是建分支
 
-`git checkout -b <type>/<slug>` —— **不是先读代码**。
+**从 `main` 签出**：`git checkout main && git checkout -b <type>/<slug>` —— **不是先读代码**。
 
 已有记录表明：知道这条规矩，仍然会在主干上从改代码一路做到提交。
+也有过「停在任务分支上直接 `checkout -b`」—— 新分支会带上那条分支的提交，
+squash 时把不相干的改动一并带进来。
+
 命名与合并方式见 [CONTRIBUTING.md](CONTRIBUTING.md#分支与合并)。
 
 ## 二、门禁必须带着分支名跑
