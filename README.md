@@ -76,6 +76,7 @@ dsh plugin --profile <profile> add dsh-lattice
 | [**设计原则**](docs/PRINCIPLES.md) | **根本约束：职责边界、行为边界、数据边界**。与之冲突的改动一律不做 |
 | [架构](docs/ARCHITECTURE.md) | 记忆模型、存储布局、检索与写入流程 |
 | [开发指南](docs/DEVELOPMENT.md) | 环境、命令、模块划分、关键约束 |
+| [迁移规范](docs/MIGRATION.md) | 从其他记忆库迁入时的组织、流程、验收与回滚 |
 | [贡献指南](CONTRIBUTING.md) | 提交流程与代码约定 |
 | [变更日志](CHANGELOG.md) | 版本历史 |
 
