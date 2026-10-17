@@ -48,16 +48,44 @@ export const TIER_SCALE_STABLE_ATOMS = 192
  *
  * 这张表**不是**对 8 个点的曲线拟合，而是把每个点上实测到的那个切点原样登记；
  * 点与点之间的插值是「规模是连续量」这一事实的近似，不是一条被拟合出来的规律。
+ *
+ * **2026-10-18 复核（标定路线一期验证，结论见开发笔记 probes/calib-routes/一期结论.md）**：
+ *
+ * 1. 每个点附了 `ci`（30 次重复的 95% 重抽样区间）。**k <= 96 的三个点，区间宽大于它们到
+ *    1374 的漂移** —— 那三点之间的先后次序在噪声里，读不出含义；k >= 192 才可辨。
+ * 2. **1374 的零宽区间是伪精度**（满库无降采样，100 个 seed 全同），不要把它当"很准"。
+ * 3. 因此这张表实际承载的信息约等于**两级台阶**（小库 ≈0.47–0.51 / 大库 ≈0.525），而台阶
+ *    值本身由 1–2 条查询决定（逐条去掉一条查询，切点动 0.02 量级）。
+ * 4. **若要「压缩成 2–3 档」，那是改默认行为**，须单独判定（锚点表是公开行为的一部分）；
+ *    本轮只登记不确定性，不动取值。
  */
-export const TIER_SCALE_ANCHORS: readonly { atoms: number; briefMin: number }[] = [
-  { atoms: 12, briefMin: 0.466 },
-  { atoms: 24, briefMin: 0.47 },
-  { atoms: 48, briefMin: 0.492 },
-  { atoms: 96, briefMin: 0.514 },
-  { atoms: 192, briefMin: 0.514 },
-  { atoms: 384, briefMin: 0.514 },
-  { atoms: 768, briefMin: 0.514 },
-  { atoms: 1374, briefMin: 0.525 },
+export interface TierScaleAnchor {
+  /** 规模（atom 条数）。 */
+  atoms: number
+  /** 该规模上实测的最优切点。 */
+  briefMin: number
+  /**
+   * 该点的 95% 重抽样区间：只抽 30 次重复（原始实验的做法）× 400 次重抽。
+   *
+   * **它不是精度，而是「这个点本身有多不确定」** —— k <= 96 时区间宽（0.022–0.070）与
+   * 该点到 1374 的漂移同量级甚至更大（比值 0.52–1.13），那三点之间的先后在噪声里；
+   * k >= 192 之后才达到 2.2–4.5 倍。
+   *
+   * **1374 的零宽区间是伪精度**：满库没有降采样，100 个 seed 完全相同。它的真实不确定度
+   * 只能按查询算 —— 逐条去掉一条查询，切点会动 0.02 量级。
+   */
+  ci: readonly [number, number]
+}
+
+export const TIER_SCALE_ANCHORS: readonly TierScaleAnchor[] = [
+  { atoms: 12, briefMin: 0.466, ci: [0.447, 0.517] },
+  { atoms: 24, briefMin: 0.47, ci: [0.46, 0.521] },
+  { atoms: 48, briefMin: 0.492, ci: [0.478, 0.521] },
+  { atoms: 96, briefMin: 0.514, ci: [0.497, 0.52] },
+  { atoms: 192, briefMin: 0.514, ci: [0.511, 0.517] },
+  { atoms: 384, briefMin: 0.514, ci: [0.511, 0.517] },
+  { atoms: 768, briefMin: 0.514, ci: [0.514, 0.517] },
+  { atoms: 1374, briefMin: 0.525, ci: [0.525, 0.525] },
 ]
 
 /**
