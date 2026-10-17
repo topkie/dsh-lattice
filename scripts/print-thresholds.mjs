@@ -509,8 +509,17 @@ for (const [name, reason] of Object.entries(EXEMPT_NON_NUMERIC)) {
   )
 }
 if (QUIET) {
-  // --quiet：只留结论，供脚本消费
-  const keep = out.filter((l) => l.startsWith('- **属于阈值但未登记') || l.startsWith('- **超出标定场景'))
+  // --quiet：只留结论，供脚本消费。
+  //
+  // 「无法比较：读不到库」必须留在白名单里，哪怕它不是告警：--quiet 的用途就是给脚本消费，
+  // 而那一行是该模式下唯一能区分「全部落在标定场景内」与「这一次根本没比成」的东西。
+  // 少了它，读不到库的机器会得到一份看起来一切正常的输出 —— 静默失效的经典形态。
+  const keep = out.filter(
+    (l) =>
+      l.startsWith('- **属于阈值但未登记') ||
+      l.startsWith('- **超出标定场景') ||
+      l.startsWith('- 无法比较：'),
+  )
   console.log(keep.join('\n'))
 } else {
   console.log(out.join('\n'))
