@@ -17,6 +17,17 @@ describe('按库规模重标定精简档下界', () => {
     for (const a of TIER_SCALE_ANCHORS) assert.equal(briefMinFor(a.atoms, FALLBACK), a.briefMin)
   })
 
+  it('每个锚点带 95% 区间，且区间包含该点的实测值', () => {
+    // 只守**形态**：区间有序、且把 briefMin 包在里面。数值来源（这个 ci 是不是抄对了）
+    // 由 dsh-lattice-devnotes/probes/calib-routes/E-intervals/run.mjs 复核 —— 它要重抽 400 次，
+    // 不适合进 CI；但若有人改了 briefMin 却忘了同步 ci，这条会红。
+    for (const a of TIER_SCALE_ANCHORS) {
+      const [lo, hi] = a.ci
+      assert.ok(lo <= hi, a.atoms + '：ci 的下界不得大于上界')
+      assert.ok(lo <= a.briefMin && a.briefMin <= hi, a.atoms + '：ci 必须包含该点的 briefMin')
+    }
+  })
+
   it('锚点表自身有序、且起点就是最小可标定规模', () => {
     assert.equal(BOTTOM.atoms, TIER_SCALE_MIN_ATOMS)
     for (let i = 1; i < TIER_SCALE_ANCHORS.length; i++) {
