@@ -1,0 +1,36 @@
+{
+  "sha": "97e3ab4",
+  "set": "internal-44",
+  "n": 20,
+  "recall@5": 0.75,
+  "recall@12": 0.95,
+  "p50_ms": 7.28,
+  "p95_ms": 15.13,
+  "atoms": 1374,
+  "superseded": 0,
+  "ci95": {
+    "recall5": [
+      0.55,
+      0.95
+    ],
+    "recall12": [
+      0.85,
+      1
+    ]
+  },
+  "minResolvable": 0.05,
+  "hits5": 15,
+  "hits12": 19,
+  "nTotal": 44,
+  "topN": 24,
+  "model": "Xenova/bge-small-zh-v1.5",
+  "querySet": {
+    "sha256": "fb462a04ea6315103ef2bdc95cea56f629a1d4fe84ee80ff5bc293986aa6c9a6",
+    "queries": 44,
+    "scored": 20
+  },
+  "bootstrap": {
+    "B": 10000,
+    "seed": 20261018
+  }
+}
