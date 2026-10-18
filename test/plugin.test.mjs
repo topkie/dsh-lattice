@@ -93,7 +93,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把四条路由挂上去（三条只读 + 一条写）', () => {
+  it('宿主提供 webServer 时把六条路由挂上去（四条只读 + 两条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -109,12 +109,15 @@ describe('插件契约', () => {
     assert.deepEqual([...inject], ['tools'], '模块级 inject 不得包含 webServer')
     assert.deepEqual(ctx.injected, [['webServer']], '只对 webServer 做条件注入')
 
-    // M3-T19 加了目录与搜索（共三条只读），M3-T20 加了删除（唯一的写端点）。
+    // M3-T19 加了目录与搜索（共三条只读），M3-T20 加了删除（写端点），
+    // M4-T44 加了日志导出（只读）与日志清空（写端点）。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
-    assert.equal(routes.length, 4, '三条只读路由 + 一条写路由都应挂上')
+    assert.equal(routes.length, 6, '四条只读路由 + 两条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-atoms',
       '/api/lattice-forget',
+      '/api/lattice-log-clear',
+      '/api/lattice-log-export',
       '/api/lattice-ping-mini',
       '/api/lattice-search',
     ])

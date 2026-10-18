@@ -56,6 +56,13 @@ interface TransformersModule {
 
 let state: EncoderState = 'idle'
 let lastError: string | null = null
+/**
+ * 最近一次失败的**错误类名或错误码**（不是消息原文）。
+ *
+ * 为什么单存一份：消息可能含模型缓存路径与主机名，而日志模块只允许短 token
+ * （见 src/log/policy.ts）。降级埋点要的是「哪一类失败」，不是「失败说了什么」。
+ */
+let lastErrorCode: string | null = null
 let extractor: FeatureExtractor | null = null
 let loading: Promise<boolean> | null = null
 /** 已加载的模型标识。切换模型时必须重新加载 —— 否则会静默沿用旧模型。 */
@@ -66,15 +73,32 @@ export function encoderState(): EncoderState {
   return state
 }
 
-/** 最近一次失败原因（成功时为 null）。 */
+/** 最近一次失败原因（成功时为 null）。**这是消息原文，不要写进日志。** */
 export function encoderError(): string | null {
   return lastError
+}
+
+/** 最近一次失败的错误类名或错误码（成功时为 null）；可安全写进日志。 */
+export function encoderErrorCode(): string | null {
+  return lastErrorCode
+}
+
+/** 异常 → 短 token：优先 `code`，其次类名。 */
+function codeOf(err: unknown): string {
+  if (err !== null && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code
+    if (typeof code === 'string' && code !== '') return code
+    const name = (err as { name?: unknown }).name
+    if (typeof name === 'string' && name !== '') return name
+  }
+  return 'Error'
 }
 
 /** 复位（测试与配置热更新时使用）。 */
 export function resetEncoder(): void {
   state = 'idle'
   lastError = null
+  lastErrorCode = null
   extractor = null
   loading = null
   loadedModel = null
@@ -110,9 +134,11 @@ export async function ensureEncoder(opts: EncoderOptions): Promise<boolean> {
       state = 'ready'
       loadedModel = opts.model
       lastError = null
+      lastErrorCode = null
       return true
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)
+      lastErrorCode = codeOf(err)
       extractor = null
       loadedModel = opts.model
       state = 'unavailable'
@@ -148,6 +174,7 @@ export async function encodeBatch(texts: string[], opts: EncoderOptions): Promis
     return sliceVectors(out.data, dim, texts.length)
   } catch (err) {
     lastError = err instanceof Error ? err.message : String(err)
+    lastErrorCode = codeOf(err)
     return texts.map(() => null)
   }
 }

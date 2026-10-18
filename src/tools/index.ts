@@ -18,7 +18,13 @@ import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
 import { ForgottenError, writeReviewed } from '../pipeline/write.js'
-import { getRuntime, runtimeEncode, type Runtime, type RuntimeConfig } from '../state.js'
+import {
+  getRuntime,
+  noteRecallDegradations,
+  runtimeEncode,
+  type Runtime,
+  type RuntimeConfig,
+} from '../state.js'
 
 /** 库现状一行——放在召回结果前面，让模型知道这个库有多大、值不值得再查。 */
 function libraryLine(rt: Runtime): string {
@@ -274,6 +280,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (q === '') return '查询为空。'
       const vq = await runtimeEncode(cfg, q)
       const recalled = recall(rt.db, q, vq, { topN: cfg.topN })
+      // 降级留痕：只入队，不阻塞召回（见 src/log/index.ts 的队列与批量窗口）。
+      noteRecallDegradations(recalled.meta)
       const view = assembleView(rt.db, recalled, { budget: num(args?.budget, cfg.viewBudget) })
       const notes: string[] = [libraryLine(rt)]
       if (recalled.meta.vectorMissing) notes.push('（编码器不可用，本次为纯词面召回）')

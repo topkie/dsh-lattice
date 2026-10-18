@@ -13,8 +13,10 @@ import type { DatabaseSync } from 'node:sqlite'
 import { ensureMeta, META_BUILDER, META_ENTRY_RULE, META_SCHEMA_VERSION } from './db/meta.js'
 import { openVault } from './db/open.js'
 import { SCHEMA_VERSION } from './db/schema.js'
-import { encode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
+import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
+import { closeLog, configureLog, logEvent } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
+import type { RecallMeta } from './pipeline/search.js'
 import { createWriteCtx, type WriteCtx, type WriteThresholds } from './pipeline/write.js'
 
 /** 插件传给运行时的配置（已解析默认值的形状）。 */
@@ -60,6 +62,9 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
   if (current !== null) return current
   const dir = resolveDataDir(cfg.dataDir)
   mkdirSync(dir, { recursive: true })
+  // 日志库与记忆库同目录、不同文件。这里只登记 dataDir，不碰磁盘 ——
+  // 建日志库要等第一条降级事件（见 src/log/index.ts 的 LogStore 懒打开）。
+  configureLog(dir)
   const file = join(dir, 'lattice.db')
   const { db } = openVault(file, { resources: cfg.resources })
   stampVault(db)
@@ -87,28 +92,76 @@ function stampVault(db: DatabaseSync): void {
   ensureMeta(db, META_BUILDER, 'runtime')
 }
 
+/** 上一次报过的编码器失败原因。按**状态变化**记日志，避免同一原因把日志库刷满。 */
+let lastEncoderFailure: string | null = null
+
 /** 编码器是否可用（供工具决定是否走纯词面路径）。 */
 export async function runtimeEncoderReady(cfg: RuntimeConfig): Promise<boolean> {
   if (cfg.encoderEnabled === false) return false
-  return ensureEncoder({
+  const ok = await ensureEncoder({
     model: cfg.encoderModel,
     remoteHost: cfg.encoderMirror || undefined,
     cacheDir: cfg.encoderCacheDir || undefined,
   })
+  noteEncoderState(ok)
+  return ok
 }
 
 /** 编码一段查询文本；不可用时返回 null（由调用方走纯词面）。 */
 export async function runtimeEncode(cfg: RuntimeConfig, text: string): Promise<Float32Array | null> {
   if (cfg.encoderEnabled === false) return null
   if (!(await runtimeEncoderReady(cfg))) return null
-  return encode(text, {
+  const vec = await encode(text, {
     model: cfg.encoderModel,
     remoteHost: cfg.encoderMirror || undefined,
     cacheDir: cfg.encoderCacheDir || undefined,
   })
+  // 加载成功、但这一条编码失败（输出形状异常等）同样是降级，照样留痕。
+  noteEncoderState(vec !== null)
+  return vec
 }
 
-/** 关闭运行时（测试与热更新用）。 */
+/**
+ * 编码器状态变化 → 一条 encoder.unavailable。
+ *
+ * 为什么按变化记而不是逐次记：加载失败后进程会停在 unavailable，而每次召回都会走到
+ * 这里。逐次记会让日志库被同一个已知状态刷满（单文件阈值只有 4 MB），
+ * 真正的新故障反而被挤掉。恢复可用时清掉游标，下一次故障重新记。
+ *
+ * 只记错误码/类名（encoderErrorCode），**不记消息原文**：消息里可能有模型缓存路径。
+ */
+function noteEncoderState(ok: boolean): void {
+  if (ok) {
+    lastEncoderFailure = null
+    return
+  }
+  const reason = encoderErrorCode() ?? 'unknown'
+  if (lastEncoderFailure === reason) return
+  lastEncoderFailure = reason
+  logEvent('warn', 'encoder.unavailable', { reason })
+}
+
+/** 上一次召回的三类降级状态（同样按变化记）。 */
+let lastRecallDegraded = { vectorMissing: false, lexicalDegraded: false, shortTermMiss: false }
+
+/**
+ * 召回降级埋点：只读 RecallMeta 里的布尔，**不接触查询文本**。
+ *
+ * 工具召回与界面搜索两条路径各调一次；logEvent 只入队，不在召回路径上加同步 IO。
+ * 状态回到正常时不记事件（日志里没有「一切正常」这一档），只把游标复位。
+ */
+export function noteRecallDegradations(meta: RecallMeta): void {
+  if (meta.vectorMissing && !lastRecallDegraded.vectorMissing) logEvent('warn', 'recall.vector_missing')
+  if (meta.lexicalDegraded && !lastRecallDegraded.lexicalDegraded) logEvent('warn', 'recall.lexical_degraded')
+  if (meta.shortTermMiss && !lastRecallDegraded.shortTermMiss) logEvent('warn', 'recall.short_term_miss')
+  lastRecallDegraded = {
+    vectorMissing: meta.vectorMissing,
+    lexicalDegraded: meta.lexicalDegraded,
+    shortTermMiss: meta.shortTermMiss,
+  }
+}
+
+/** 关闭运行时（测试与热更新用）。日志库一起关：先 flush 再 close。 */
 export function closeRuntime(): void {
   try {
     current?.db.close()
@@ -116,4 +169,8 @@ export function closeRuntime(): void {
     /* 已关闭 */
   }
   current = null
+  // 游标随运行时一起复位：换库后「第一次失败」必须能重新留下痕迹。
+  lastEncoderFailure = null
+  lastRecallDegraded = { vectorMissing: false, lexicalDegraded: false, shortTermMiss: false }
+  closeLog()
 }

@@ -4,13 +4,15 @@
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
 //   2. 注册四个工具：ping（健康检查）、write、recall、expand
 //
-// 外加四条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
-//   /api/lattice-ping-mini  库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
-//   /api/lattice-atoms      目录：分页 + 过滤，与 lattice_list 同一条数据路径
-//   /api/lattice-search     搜索：与 lattice_recall 同一条数据路径，但**不记命中**
-//   /api/lattice-forget     **删除**：物理删除 + 留痕（§44）。四条里唯一的写端点
+// 外加六条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
+//   /api/lattice-ping-mini    库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
+//   /api/lattice-atoms        目录：分页 + 过滤，与 lattice_list 同一条数据路径
+//   /api/lattice-search       搜索：与 lattice_recall 同一条数据路径，但**不记命中**
+//   /api/lattice-log-export   降级日志导出：只读，返回 CSV 附件（M4-T44）
+//   /api/lattice-forget       **删除**：物理删除 + 留痕（§44）。写端点
+//   /api/lattice-log-clear    清空降级日志：写端点，要求 { confirm: true }（M4-T44）
 //
-// 前三条只读，栅栏只留「本机回环」一道；最后一条是写端点，三道（回环 + POST +
+// 四条只读路由的栅栏只留「本机回环」一道；两条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
 //
 // `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
@@ -23,7 +25,14 @@ import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
-import { getRuntime, resolveDataDir, runtimeEncode, type RuntimeConfig } from './state.js'
+import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
+import {
+  getRuntime,
+  noteRecallDegradations,
+  resolveDataDir,
+  runtimeEncode,
+  type RuntimeConfig,
+} from './state.js'
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
 import { recall } from './pipeline/search.js'
 import { forgetAtom } from './pipeline/forget.js'
@@ -75,6 +84,17 @@ const SEARCH_ROUTE_PATH = '/api/lattice-search'
  * 在界面上点出来。
  */
 const FORGET_ROUTE_PATH = '/api/lattice-forget'
+
+/**
+ * 降级日志的导出路由：只读。
+ *
+ * 为什么放在界面上而不是工具里：导出是给人看的动作；模型侧多一个「读日志」的工具
+ * 会扩大工具面（六工具已定案），也会把日志内容塞进上下文 —— 两者都不是设计要的。
+ */
+const LOG_EXPORT_ROUTE_PATH = '/api/lattice-log-export'
+
+/** 清空日志：写端点。破坏性动作只能由用户从界面发起（与删除同一条纪律）。 */
+const LOG_CLEAR_ROUTE_PATH = '/api/lattice-log-clear'
 
 /**
  * 请求体上限。删除请求只有一个整数 id，几百字节足够。
@@ -200,6 +220,10 @@ export function apply(ctx: Context, config: unknown): void {
   }
   for (const t of buildTools(runtimeCfg)) tools.register(t)
 
+  // 日志库随插件卸载一起收走：先 flush 队列再关连接（见 src/log/index.ts 的 closeLog）。
+  // 放在这里而不是 webServer 的子 fiber 里：没有界面的 profile 也要正常关闭日志库。
+  ctx.effect(() => () => closeLog(), 'dsh-lattice: log flush')
+
   // ── 浏览器半的座位（M3-T19 最小验证） ─────────────────────────────────────────
   //
   // 这段代码本身不是功能，是**验证**：宿主的设置页里能不能出现一个属于本插件的区块、
@@ -247,8 +271,18 @@ export function apply(ctx: Context, config: unknown): void {
         }),
         webServer.register({
           kind: 'exact',
+          path: LOG_EXPORT_ROUTE_PATH,
+          handler: (req, res) => logExportRoute(runtimeCfg, req, res),
+        }),
+        webServer.register({
+          kind: 'exact',
           path: FORGET_ROUTE_PATH,
           handler: (req, res) => forgetRoute(runtimeCfg, req, res),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: LOG_CLEAR_ROUTE_PATH,
+          handler: (req, res) => logClearRoute(runtimeCfg, req, res),
         }),
       ]
       return () => {
@@ -475,6 +509,8 @@ async function searchRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
       topN,
       scope: params.get('scope') || undefined,
     })
+    // 界面搜索也是一条召回路径，降级同样留痕（只入队，不加 IO）。
+    noteRecallDegradations(recalled.meta)
     // recall 的命中只带 origin / supersededBy；「被取回几次、最后什么时候」要向目录模块要。
     const facts = new Map(
       listAtomsByIds(
@@ -624,5 +660,76 @@ async function forgetRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
     })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'forget-failed', message: reasonOf(e) })
+  }
+}
+
+/** 本地日期 YYYYMMDD，用于导出文件名（不带时间：同一天多次导出靠浏览器去重）。 */
+function dayStamp(now = new Date()): string {
+  const pad = (n: number): string => (n < 10 ? '0' + n : String(n))
+  return String(now.getFullYear()) + pad(now.getMonth() + 1) + pad(now.getDate())
+}
+
+/**
+ * 导出降级日志：CSV 附件。
+ *
+ * **只读**：不 flush、不建库、不写任何一行（见 src/log/export.ts 的三条约束）。
+ * 因此导出前后主库 data_version 不变；代价是最近几十毫秒内还没落盘的行不在文件里，
+ * 这是刻意选的：用户点导出时看到的应当是磁盘上已经有的东西。
+ *
+ * 表头固定四列（ts / level / event / detail）。detail 是已经白名单化的 JSON，
+ * 导出侧不再增删字段 —— 用户拿到的与库里存的一致。
+ */
+function logExportRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): void {
+  if (!guardReadOnly(req, res)) return
+  try {
+    const dir = resolveDataDir(cfg.dataDir)
+    configureLog(dir)
+    const out = exportLogCsv(dir)
+    const name = 'lattice-log-' + dayStamp() + '.csv'
+    res.writeHead(200, {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-length': Buffer.byteLength(out.csv),
+      'content-disposition': 'attachment; filename="' + name + '"',
+    })
+    res.end(out.csv)
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'log-export-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 清空降级日志。
+ *
+ * 三道写栅栏之外还要求请求体带 `{"confirm": true}`：界面上有二次确认，这里再要一个
+ * 显式字段 —— 误调一个删日志的端点不该只靠「路径写对了吗」来防。
+ *
+ * 只删日志目录下本模块管理的文件；主库与记忆数据不受影响。失败时返回可读错误，
+ * 日志库保持可用（下一次写会自动重建或沿用原文件），不出现「删了一半还报成功」。
+ */
+async function logClearRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  if (raw.confirm !== true) {
+    jsonOut(res, 400, {
+      ok: false,
+      error: 'confirm-required',
+      message: '清空日志需要请求体带 {"confirm": true}',
+    })
+    return
+  }
+  try {
+    const dir = resolveDataDir(cfg.dataDir)
+    configureLog(dir)
+    const r = clearLog(dir)
+    jsonOut(res, 200, { ok: true, removed: r.removed })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'log-clear-failed', message: reasonOf(e) })
   }
 }
