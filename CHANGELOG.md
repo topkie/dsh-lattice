@@ -15,7 +15,14 @@
   （declared / extracted / learned）
 - 召回管线：四路融合（向量 / 入口 / 正文 / 图）+ 归属加权，三段式注入组装
   （锚 / 入口 / 路）与按顺序降级的裁剪
-- 宿主工具：`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand` / `lattice_list`
+- 宿主工具：`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand` / `lattice_list` /
+  `lattice_feedback`
+- **校准样本库**：模型对召回的反馈（`lattice_feedback`，`ref` 是上次召回【锚】段的 1-based
+  序号）与自动收集的负样本，写入一个**独立的** SQLite 文件（`<dataDir>/samples/recall-sample.db`），
+  只存查询向量与命中的 atom id，**不存查询原文**；保留 90 天且总量 1 万条，「明显无关」一档另设
+  2000 条上限，换编码模型时旧样本标失效不删。样本不写 `edge`、不写主库、不触发重标；
+  写入经内存队列延后落盘，召回路径上没有同步 IO。`lattice_ping` 报样本条数；
+  配置项 `samplesEnabled`（默认开）可关掉自动收集，显式反馈不受影响
 - **标定工具链独立成包 `lattice-calib`**：伪查询抽样、库内几何量 S、切点扫描、τ/S 越界判定、
   重标与标定快照写入从插件剥离，作为一个独立仓库发布、按 semver 被插件依赖。
   插件运行时因此**只依赖本项目自研的这一个包**（该包自身零第三方依赖）——

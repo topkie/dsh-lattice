@@ -383,6 +383,18 @@ describe('校准样本库与 lattice_feedback（判据 12）', () => {
       assert.deepEqual(JSON.parse(rows[0].hit_ids), [7])
     })
 
+    it('落盘延后：入队那一下不写库，下一轮事件循环才落盘', async () => {
+      configureSamples(dir, { enabled: true, model: 'm1' })
+      collectAutoNegative({ query: 'q-a', meta: meta(), vec: null, hitIds: [] })
+      await flushSamplesAsync()
+      assert.equal(sampleRows().length, 1)
+      collectAutoNegative({ query: 'q-b', meta: meta(), vec: null, hitIds: [] })
+      // 同步断言：此刻还没轮到 setImmediate，库里的行数必须还是 1。
+      assert.equal(sampleRows().length, 1, '召回路径上不得同步落盘')
+      await flushSamplesAsync()
+      assert.equal(sampleRows().length, 2)
+    })
+
     it('不与上一条重复：同一查询第二次被挡下', () => {
       configureSamples(dir, { enabled: true, model: 'm1' })
       const a = collectAutoNegative({ query: '同一条查询', meta: meta(), vec: null, hitIds: [] })
@@ -489,6 +501,21 @@ describe('校准样本库与 lattice_feedback（判据 12）', () => {
       } finally {
         store.close()
       }
+    })
+
+    it('vec 存的是向量字节：512 维就是 2048 字节，与原文无关', () => {
+      const store = new SampleStore(dir, { retainDays: 90, maxRows: 10000, negObviousMax: 2000 })
+      try {
+        const vec = new Float32Array(512)
+        vec[0] = 1
+        vec[511] = 0.5
+        store.append([row({ vec })])
+      } finally {
+        store.close()
+      }
+      const db = openSamples()
+      const r = db.prepare('SELECT length(vec) AS n FROM recall_sample').get()
+      assert.equal(Number(r.n), 512 * 4, 'vec 必须是定长 float32 BLOB（不存原文）')
     })
 
     it('换编码模型：旧样本标失效，不删', () => {

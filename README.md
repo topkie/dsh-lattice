@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 
-> **状态：核心链路可用，接口仍可能变动。** 存储、编码、写入、召回、注入组装与五个工具
+> **状态：核心链路可用，接口仍可能变动。** 存储、编码、写入、召回、注入组装与六个工具
 > 都已实现并有测试覆盖；用户界面（列表 / 搜索 / 删除）与写入侧审核层也已落地。
 > 维护闭环里还有两项在做（重聚类、1 跳图扩展）。
 
@@ -69,6 +69,7 @@ dsh plugin --profile <profile> add dsh-lattice
 | `tauNew` | `0.5` | 新建主题的余弦阈值（0.2~0.8） |
 | `viewBudget` | `6000` | 单次注入的字符预算 |
 | `topN` | `24` | 交注入层的候选数 |
+| `samplesEnabled` | `true` | 校准样本的自动收集（负样本）；关掉后显式 `lattice_feedback` 仍可用 |
 
 > 落位判定需要**余弦与词面同时达标**：同一大类内部，不同主题的余弦可能高到 0.73，
 > 而同一主题最低约 0.75，仅凭余弦会静默合并不同主题。

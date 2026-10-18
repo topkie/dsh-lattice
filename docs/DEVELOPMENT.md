@@ -148,7 +148,8 @@ node scripts/snapshot-baseline.mjs [--db .probe/baseline/lattice.db] [--label <�
 | `lattice_recall` | 按需取回 | 返回组装好的三段式文本，不是裸数组 |
 | `lattice_expand` | 展开全文 / 列兄弟 | 召回只给了摘要或截断正文时用 |
 | `lattice_list` | 列目录 | 「库里有什么」；只读、按写入顺序倒序、**总是分页**（上限 50），可按 kind / origin / scope / topic 过滤 |
-| `lattice_ping` | 健康检查 | 报出解析后的数据目录、资源参数与工具清单 |
+| `lattice_feedback` | 反馈上次召回 | `{ kind, ref }`：`ref` 是【锚】段的 1-based 序号；只写独立样本库，不写 edge / 主库、不触发重标 |
+| `lattice_ping` | 健康检查 | 报出解析后的数据目录、资源参数、工具清单与样本条数（`samples: { total, positive, negative }`） |
 
 ### parameters 的形状（踩过）
 
@@ -162,7 +163,7 @@ parameters: {
 ```
 
 写成 JSON Schema 包装会在 `defineTool` 调用时抛 `JsonSchemaError` —— 而那是**插件加载路径**，
-结果是整个插件加载失败、四个工具全部不可用。改参数 schema 后务必跑一次工具测试。
+结果是整个插件加载失败、全部工具都不可用。改参数 schema 后务必跑一次工具测试。
 
 ### 低相关的处理（实测教训）
 
@@ -278,6 +279,7 @@ src/
   pipeline/       业务管线：写入、召回、注入组装、维护
   tools/          暴露给宿主的工具
   log/            降级日志：独立数据库、事件白名单、缓冲、轮换清理、导出与清空
+  samples/        校准样本：独立数据库、会话级「最近一次召回」、自动收集与淘汰规则
   util/           纯函数工具：文本、向量、聚类、日志
 ```
 
@@ -286,6 +288,11 @@ src/
 反向依赖一律禁止。此外，`db` / `encoder` / `pipeline` 必须是**不依赖宿主 API 的
 纯 Node 模块**——这样它们可以脱离宿主独立测试，也保证将来替换宿主接口时改动收敛在
 `index.ts` 与 `tools/` 两处。
+
+`samples/` 与 `log/` 同形：旁路数据，只依赖 Node 内置模块（外加 `util/` 的向量编码与
+资源推导），并向 `log/` 借一个 `logEvent` 记写失败；它对 `pipeline/` 只 import 一个
+**类型**（`RecallMeta`，编译后不存在），不在运行时反向依赖业务管线。它对外暴露
+「记一条样本 / 报条数 / 记最近一次召回」三件事，写入一律先在内存排队。
 
 `log/` 是叶子模块：只依赖 Node 内置模块（外加 `util/` 的资源推导），不反向依赖
 `pipeline` / `tools`。它对外只暴露一个写入口 `logEvent`（入队即返回）；召回路径上
