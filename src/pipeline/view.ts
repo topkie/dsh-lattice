@@ -13,7 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
 import { GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
-import { TOPIC_LABEL_CHARS } from './write.js'
+import { TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -100,16 +100,18 @@ export const DEFAULT_ENTRY_LINE_MAX = 160
 export const DEFAULT_PATH_LINES = 15
 
 /**
- * 路段每行摘要的截断长度。
+ * 路段每行摘要的截断长度：20 个词。
  *
- * 路只提供线索，所以比锚段更短；它与 ANCHOR_SUMMARY_CHARS(64)、DEMOTED_ANCHOR_CHARS(60)
- * 是三个**不同角色**的截断，不是同一个数的三份拷贝（值也不相同）。
+ * 路只提供线索，所以比锚段更短；它与 ANCHOR_SUMMARY_CHARS（16 个词）、
+ * DEMOTED_ANCHOR_CHARS（15 个词）是三个**不同角色**的截断，不是同一个数的三份拷贝
+ * （词数也不同）。三个数都按「一行给几个词 × TERM_CHARS」折算，不再各写一个字符数 ——
+ * 此前 80 / 64 / 60 三个字符数彼此只差几个字符，读者看不出它们其实是同一量纲上的三档。
  */
-export const PATH_SUMMARY_CHARS = 80
-/** 锚降级为摘要时的截断长度（摘录档整段走这条）。 */
-export const ANCHOR_SUMMARY_CHARS = 64
-/** 空间不足时把单条锚降级为短摘要所截断的长度（与上一条是两条不同分支）。 */
-export const DEMOTED_ANCHOR_CHARS = 60
+export const PATH_SUMMARY_CHARS = 20 * TERM_CHARS
+/** 锚降级为摘要时的截断长度：16 个词（摘录档整段走这条）。 */
+export const ANCHOR_SUMMARY_CHARS = 16 * TERM_CHARS
+/** 空间不足时把单条锚降级为短摘要所截断的长度：15 个词（与上一条是两条不同分支）。 */
+export const DEMOTED_ANCHOR_CHARS = 15 * TERM_CHARS
 
 /**
  * 注入档位：按匹配质量决定这次给多少。

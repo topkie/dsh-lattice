@@ -106,6 +106,7 @@ import {
   FINGERPRINT_MEMBERS,
   NEAR_EDGE_CONFIDENCE,
   SEARCH_BODY_MAX_CHARS,
+  TERM_CHARS,
   TOPIC_LABEL_CHARS,
   WORD_ONLY_TOP_N_FACTOR,
 } from './pipeline/write.js'
@@ -455,6 +456,22 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['单个 topic 的成员数分布（大 topic 多时指纹代表性下降）'],
   },
   {
+    name: 'TERM_CHARS',
+    area: '注入',
+    value: () => TERM_CHARS,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'TERM_CHARS' },
+    affects:
+      '注入行按「词」折算时的字符宽度：主题标签 4 词、单条降级摘要 15 词、摘录档锚摘要 16 词、' +
+      '路段摘要 20 词，都乘本值得到字符数',
+    calibration: {
+      evidence:
+        '**折算单位，不是阈值**：4 取「一个词最多四个汉字」的口径（与 entries.ts 的 MAX_HAN_TERM 同源，' +
+        '但不复用那个常量）。T45 批三把四个截断长度从各自写死的 16/60/64/80 改成「词数 × 本值」，' +
+        '取值未变；四个词数本身是显示判断，没有标定记录',
+    },
+    variesWith: ['注入层一行给几个词（各段角色不同）'],
+  },
+  {
     name: 'TOPIC_LABEL_CHARS',
     area: '落位',
     value: () => TOPIC_LABEL_CHARS,
@@ -466,7 +483,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**无记录**。两处此前各自写死 16（写入侧 slice(0, 16)、显示侧 clip(t.label, 16)）——' +
         'T45 批一判定为**同义**并合并为一个常量：存进去的宽度与显示的宽度必须是同一个量，' +
-        '否则改一处就会出现「标签存 16、显示裁 20」这类分叉',
+        '否则改一处就会出现「标签存 16、显示裁 20」这类分叉。' +
+        'T45 批三起由 TERM_CHARS × 4 个词派生，取值仍是 16',
     },
     variesWith: ['主题标签在注入层显示多宽', '摘要长度分布'],
     otherSites: ['src/pipeline/view.ts 入口行 `clip(t.label, TOPIC_LABEL_CHARS)`（同源，不再是第二份数字）'],
@@ -1395,12 +1413,13 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '注入',
     value: () => PATH_SUMMARY_CHARS,
     definedBy: { file: 'src/pipeline/view.ts', name: 'PATH_SUMMARY_CHARS' },
-    affects: '路段每行摘要的截断长度',
+    affects: '路段每行摘要的截断长度：20 个词',
     calibration: {
       evidence:
-        '**无记录**，源码无注释。与 ANCHOR_SUMMARY_CHARS(64) / DEMOTED_ANCHOR_CHARS(60) 是' +
-        '三个**不同角色**的截断（路只提供线索、锚是正文、降级锚是兜底）；值也不同，' +
-        'T45 批一判定为**不同义**，不合并',
+        '**无记录**（词数是显示判断，不是标定结果）。与 ANCHOR_SUMMARY_CHARS（16 词）/ ' +
+        'DEMOTED_ANCHOR_CHARS（15 词）是三个**不同角色**的截断（路只提供线索、锚是正文、' +
+        '降级锚是兜底）；T45 批一判定为**不同义**，不合并。T45 批三起按 TERM_CHARS 折算，' +
+        '取值仍是 80',
     },
     variesWith: ['路段在注入里的角色（纯线索）'],
   },
@@ -1411,7 +1430,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/view.ts', name: 'ANCHOR_SUMMARY_CHARS' },
     affects: '锚段降级为摘要时的截断长度：16 个词（st.anchorToSummary 分支）',
     calibration: {
-      evidence: '**无记录**（词数是显示判断，不是标定结果）。T45 批三起按 TERM_CHARS 折算，取值仍是 64',
+      evidence:
+        '**无记录**（词数是显示判断，不是标定结果）。T45 批三起按 TERM_CHARS 折算，取值仍是 64',
     },
     variesWith: ['摘要长度分布（extractSummary 的 48 是它的上游）'],
   },
@@ -1420,11 +1440,12 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '注入',
     value: () => DEMOTED_ANCHOR_CHARS,
     definedBy: { file: 'src/pipeline/view.ts', name: 'DEMOTED_ANCHOR_CHARS' },
-    affects: '空间不足时把锚降级为短摘要所截断的长度（与 64 那条是两条不同分支）',
+    affects: '空间不足时把锚降级为短摘要所截断的长度：15 个词（与 16 词那条是两条不同分支）',
     calibration: {
       evidence:
-        '**无记录**。与同一段的 64 只差 4 个字符，**看不出为什么要有两个数**；' +
-        '两者值不同，合并即改变注入文本，T45 批一不做（属「恰好近似」，不是同源）',
+        '**无记录**（词数是显示判断，不是标定结果）。与同一段的 16 词只差 1 个词；' +
+        '两者值不同，合并即改变注入文本，T45 批一不做（属「恰好近似」，不是同源）。' +
+        'T45 批三起按 TERM_CHARS 折算，取值仍是 60',
     },
     variesWith: ['同上；这个值更像历史遗留'],
   },

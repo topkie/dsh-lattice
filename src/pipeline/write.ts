@@ -279,13 +279,25 @@ export const FINGERPRINT_CHARS = 400
 export const FINGERPRINT_MEMBERS = 40
 
 /**
- * 新建 topic 时，标签从摘要里取多少个字符。
+ * 注入行按「词」折算时的字符宽度：一个词条按最多 4 个汉字计。
+ *
+ * 注入层四个截断长度（主题标签 4 词、单条降级摘要 15 词、摘录档锚摘要 16 词、路段摘要
+ * 20 词）都是「给几个词 × 本值」。此前它们各自写死成 16 / 60 / 64 / 80 四个字符数，
+ * 读代码看不出属于同一量纲，改一处也不知道另一处该不该跟。
+ *
+ * 4 的口径与 entries.ts 的 MAX_HAN_TERM 一致（真词极少超过四字），但**不复用那个常量**：
+ * 那是候选资格的上限，这里是显示宽度的折算单位，两者的改动理由不同。
+ */
+export const TERM_CHARS = 4
+
+/**
+ * 新建 topic 时，标签从摘要里取多少个字符：4 个词。
  *
  * 与注入层显示侧（pipeline/view.ts 入口行里的 `clip(t.label, ...)`）是**同一个量**：
  * 标签写进去时截到这么宽，读出来时也按这么宽裁。此前两处各自写 16，改一处就会
  * 让「存进去的标签」与「显示的标签」宽度分家。
  */
-export const TOPIC_LABEL_CHARS = 16
+export const TOPIC_LABEL_CHARS = 4 * TERM_CHARS
 
 /**
  * 写 near 边时的默认 confidence（有真实相似度时用相似度顶替）。
