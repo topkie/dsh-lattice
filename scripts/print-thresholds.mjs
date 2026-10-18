@@ -358,6 +358,10 @@ if (MD) {
   say('|---|---|---|---|---|---|---|')
 }
 const designRows = []
+// D3：分叉必须有解释。zod 默认值与设计文档不同时，登记项里必须有 diverges 说明原因 ——
+// 「存在分叉」本身不是问题（文档可能没同步），「分叉没人解释」才是：读表的人会在这里停下来，
+// 然后自己去猜。判据不是「不一致就红」，那会永久红。
+const unexplainedDiverges = []
 for (const entry of THRESHOLDS) {
   if (entry.design === undefined) continue
   const d = entry.design
@@ -395,6 +399,15 @@ for (const entry of THRESHOLDS) {
       : sameDefault
         ? '一致'
         : '**不一致**：文档 ' + designInCodeUnits + ' ｜ 代码 ' + codeDefault
+  if (
+    entry.zod !== undefined &&
+    Math.abs(entry.zod.default - designInCodeUnits) > 1e-9 &&
+    entry.diverges === undefined
+  ) {
+    unexplainedDiverges.push(
+      entry.name + '（设计 ' + designInCodeUnits + ' ｜ zod ' + entry.zod.default + '）',
+    )
+  }
   designRows.push({ name: entry.name, verdict })
   const cells = [
     entry.name,
@@ -414,6 +427,15 @@ if (!MD) {
   say('不一致 ' + inconsistent.length + ' 行：' + inconsistent.map((r) => r.name).join('、'))
 }
 
+say('')
+say('## 分叉未解释（非零退出的条件之一）')
+say('')
+if (unexplainedDiverges.length === 0) {
+  say('- 无：所有与设计文档不同的 zod 默认值都写了 diverges')
+} else {
+  say('**以下阈值的 zod 默认值与设计文档不同，而登记项没有 diverges** —— 读表的人会停在这里：')
+  for (const x of unexplainedDiverges) say('- 分叉未解释 ' + x)
+}
 say('')
 say('## 设计文档有、代码里没有的配置')
 say('')
@@ -518,6 +540,7 @@ if (QUIET) {
     (l) =>
       l.startsWith('- **属于阈值但未登记') ||
       l.startsWith('- **超出标定场景') ||
+      l.startsWith('- 分叉未解释') ||
       l.startsWith('- 无法比较：'),
   )
   console.log(keep.join('\n'))
@@ -528,5 +551,13 @@ if (QUIET) {
 if (unregistered.length > 0 || missingAnchors.length > 0) {
   console.error('')
   console.error('覆盖核对未通过：有未登记常量或定位失败的登记项。')
+  process.exit(1)
+}
+
+if (unexplainedDiverges.length > 0) {
+  console.error('')
+  console.error('分叉未解释：以下阈值的 zod 默认值与设计文档不同，但登记项里没有 diverges。')
+  console.error("写法：在该项的登记里加 diverges: '…为什么不同…'（读者要的是原因，不是差值）。")
+  for (const x of unexplainedDiverges) console.error('  ' + x)
   process.exit(1)
 }
