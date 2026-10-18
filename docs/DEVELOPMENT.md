@@ -416,7 +416,7 @@ src/
 | `scripts/verify-recall.mjs` | 召回闭环：已知查询能否命中它该命中的那条记忆 |
 | `scripts/verify-view.mjs` | 注入组装：各段实际字符占比与裁剪是否按顺序触发 |
 | `scripts/verify-tools.mjs` | 工具端到端：注册、写入、召回、展开、健康检查（真实模型） |
-| `scripts/verify-scope-write.mjs` | scope 端到端：真实编码器写入不同 scope、再按 scope 召回，验隔离（6 项判据） |
+| `scripts/verify-scope-write.mjs` | scope 端到端：真实编码器写入不同 scope 与 `project_key`，再按 scope 召回 / 列目录 / 组装注入文本，验隔离（**10 项判据**，以脚本末尾那句「结论：scope 隔离成立（10 项全通过）」为准）。临时库建在 `--dir`（默认 `.probe/t24-scope`）、跑完删除，`--keep` 留档 —— 不需要用户的真实库 |
 | `scripts/verify-entry-quality.mjs` | 入口词质量：`--before` 快照 vs 按当前代码重建入口，比噪声与 Recall |
 | `scripts/verify-entry-filter.mjs` | 入口过滤的净效应：只剔除噪声词、不重排，看 Recall 是否下降（`--before` 必填） |
 | `scripts/verify-recall-baseline.mjs` | 召回回归：指定库上的 Recall@12 / @24 与平均注入字符（`--db` 必填） |
