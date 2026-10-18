@@ -250,7 +250,7 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
     assert.ok(countOf(dir) >= 1)
   })
 
-  it('目录不可写：召回照常、不抛错，log.write_failed 限频一条', () => {
+  it('目录不可写：召回照常、不抛错，log.write_failed 限频一条', async () => {
     // 用「同名文件占住 logs 目录」构造不可写：mkdir 会失败，且与 Windows 权限无关。
     writeFileSync(join(dir, 'logs'), 'not a directory')
     const rt = getRuntime(runtimeCfg(dir))
@@ -259,6 +259,11 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
       noteRecallDegradations({ vectorMissing: true, lexicalDegraded: false, shortTermMiss: false })
       recall(rt.db, '缓存', null, { topN: 24 })
     })
+    // 工具侧的真实召回路径也照常：编码器不可用 + 日志目录不可写，仍须返回文本。
+    const recallTool = toolSet().find((t) => t.name === 'lattice_recall')
+    const text = await recallTool.execute({ query: '缓存' })
+    assert.equal(typeof text, 'string')
+    assert.ok(text.length > 0)
     for (let i = 0; i < 5; i++) {
       logEvent('warn', 'recall.short_term_miss')
       flushLog()
@@ -493,6 +498,30 @@ function routeSet() {
     topN: 24,
   })
   return routes
+}
+
+/** 用本用例的 dataDir 激活插件，取回注册的工具（不看路由）。 */
+function toolSet() {
+  const registered = []
+  const ctx = {
+    get(k) {
+      return k === 'tools' ? { register: (tool) => registered.push(tool) } : undefined
+    },
+    effect: (fn) => fn(),
+    inject: () => {},
+  }
+  apply(ctx, {
+    enabled: true,
+    dataDir: dir,
+    encoderEnabled: true,
+    encoderModel: 'Xenova/bge-small-zh-v1.5',
+    tauJoin: 0.75,
+    tauLex: 0.05,
+    tauNew: 0.38,
+    viewBudget: 6000,
+    topN: 24,
+  })
+  return registered
 }
 
 function fakeRes() {
