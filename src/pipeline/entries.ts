@@ -221,24 +221,16 @@ function isUsableTerm(term: string, stat?: TermStat): boolean {
 }
 
 /**
- * 判「边界自由度为零」所需的**单侧最少观测次数**。
- *
- * 判据线在零，但「恒定」这个结论要有证据才下。只有一两次观测的候选，两侧都恰好只见过
- * 一种邻居是常态 —— 写库测试里「代理」在两条 atom 的语料上就是 leftSeen=1 / rightSeen=1，
- * 照此判它就是碎片。观测数达到本值之后，「总是跟在同一个字后面」才不再是抽样偶然。
- *
- * 取 2 是量出来的，也是**能被测试守住的最小值**：写库测试里「代理」在两条 atom 的语料上
- * 是 leftSeen=1 / rightSeen=1，取 2 就放它过去。取 3 与取 2 在基准库上对纯 Entry 路 gold
- * 召回完全同分（实现报告的证据一节），所以取小的一端 —— 判据能少拦就少拦。
- */
-export const MIN_NEIGHBOR_EVIDENCE = 2
-
-/**
  * 边界自由度是否非零 —— 这是 v4 用来顶替单字虚词表的那条判据。
  *
  * **判据线在零，不是调出来的阈值。** 返回 false 只有一种情形：左右邻汉字**都只观测到
- * 一种取值**（且两侧观测数都不少于 MIN_NEIGHBOR_EVIDENCE）。这就是「边界自由度为零」，
- * 是判据本身的定义。
+ * 一种取值**，且两侧都**观测到过第二次**。这就是「边界自由度为零」，是判据本身的定义。
+ *
+ * 「观测到过第二次」不是另一个阈值，而是证据的**形态**：只观测到一次时，「邻居恒定」是
+ * 必然的 —— 任何一次出现都只有一个左邻、一个右邻。要让「总是跟在同一个字后面」成为一条
+ * 结论，至少要有一次重复观测可供比较。这里判的是「有没有可比较的重复」，不是「次数够不
+ * 够多」—— 后者需要一个次数阈值，前者不需要。旧实现记的是两侧次数再与 2 比较，两者在
+ * 本判据真正生效的那条路径上（两侧都恒定）是同一件事，见下方旧实现注释。
  *
  * **为什么敢在候选资格上做硬判（而不是像 FRAGMENT_PENALTY 那样只降权）**
  *
@@ -248,8 +240,8 @@ export const MIN_NEIGHBOR_EVIDENCE = 2
  *
  * **与 §五 第四条（不确定处不做二值判断）的关系**：那条管的是**注入给多少**，判错时只损失
  * 相邻档位的效率；这里是**候选资格**，十六个槽位本身就是一个必须二选一的约束，硬判不违反
- * 它。而真正「不确定」的那批（观测数不足以下「边界自由度为零」这个结论）仍走降权，
- * 见 extractedEntries 里 `!st.leftVaried || !st.rightVaried` 那一行。
+ * 它。而真正「不确定」的那批（还没有重复观测，下不了「边界自由度为零」这个结论）仍走
+ * 降权，见 extractedEntries 里 `!st.leftVaried || !st.rightVaried` 那一行。
  *
  * **实测的强度差别（这是本次最要紧的一条）**：在 279 atom 基准库的 8685 个纯汉字二字型上，
  * 旧字表挡 5379 条（61.93%），本判据只挡 460 条（5.30%）—— 判据本身**没有**字表那么强的
@@ -268,8 +260,9 @@ export const MIN_NEIGHBOR_EVIDENCE = 2
 function hasBoundaryFreedom(stat: TermStat | undefined): boolean {
   if (stat === undefined) return true
   if (stat.leftVaried || stat.rightVaried) return true
-  // 两侧都被观测到「恒定」——但观测太少时不下这个结论，见 MIN_NEIGHBOR_EVIDENCE。
-  return stat.leftSeen < MIN_NEIGHBOR_EVIDENCE || stat.rightSeen < MIN_NEIGHBOR_EVIDENCE
+  // 两侧都只观测到一种取值。此时「恒定」这个结论只在两侧都有过一次重复观测时才成立；
+  // 任一侧只有单次观测，结论不成立 —— 和旧实现里「次数不足 2」放行的结果逐条一致。
+  return !(stat.leftRepeated && stat.rightRepeated)
 }
 
 /** 一个词元在语料里的全部统计。 */
@@ -288,14 +281,15 @@ export interface TermStat {
   /** 右邻汉字是否不止一种。口径同 leftVaried。 */
   rightVaried: boolean
   /**
-   * 左侧 / 右侧**观测到**的汉字邻居次数（是次数，不是种类数）。0 表示这一侧没有观测。
+   * 这一侧是否**观测到过第二次**（不是次数）。false 表示这一侧只观测到过一次，或一次也没有。
    *
-   * 用途只有一个：让「恒定」这个结论只在有证据时下。出现一两次的候选，两侧都恰好只见过
-   * 一种邻居是常态（「代理」在只有两条 atom 的库里就是如此），拿这种观测判碎片，
-   * 等于把小语料上的真词一起扔掉。
+   * 用途只有一个：让「恒定」这个结论只在有可比较的重复观测时下。只出现一次的候选，
+   * 两侧都恰好只见过一种邻居是常态（「代理」在只有两条 atom 的库里就是如此），
+   * 拿这种观测判碎片，等于把小语料上的真词一起扔掉。只记「有没有重复」而不记次数，
+   * 是因为判据要的是证据形态，不是计数阈值。
    */
-  leftSeen: number
-  rightSeen: number
+  leftRepeated: boolean
+  rightRepeated: boolean
 }
 
 /**
@@ -323,29 +317,44 @@ export interface VocabIndex {
   stat?(term: string): TermStat | undefined
 }
 
-/** 累积中的统计：只需保留前两个不同的邻居，就足以判断「是否只有一种」。 */
+/**
+ * 累积中的统计。
+ *
+ * 邻居这一侧只留三样东西：第一种取值、**有没有见过不同的取值**、**有没有第二次观测**。
+ * 不保留第二种取值的样本，也不保留观测次数 —— 判据要问的两个问题分别是「取值是否只有
+ * 一种」与「这个结论有没有可比较的重复观测」，两者都是布尔量。旧实现保留两个取值槽位
+ * （第二个不同值即判为多样）与两个计数，再用样本数 2 与次数 2 去判；这里改成直接记
+ * 那两个布尔量，两个「2」随之消失。
+ */
 interface MutableStat {
   df: number
   tf: number
+  /** 这一侧观测到的第一种邻居（'' 表示还没有观测）。 */
   left1: string
-  left2: string | null
   right1: string
-  right2: string | null
-  /** 两侧各观测到多少次汉字邻居（只用来判断「恒定」这个结论有没有证据）。 */
-  leftN: number
-  rightN: number
+  /** 这一侧是否见过与第一种不同的邻居。 */
+  leftOther: boolean
+  rightOther: boolean
+  /** 这一侧是否观测到过第二次（不区分第二次是不是同一种取值）。 */
+  leftRepeated: boolean
+  rightRepeated: boolean
 }
 
 function noteNeighbor(s: MutableStat, side: string, ch: string): void {
-  if (side === 'left') {
-    s.leftN++
-    if (s.left1 === '') s.left1 = ch
-    else if (s.left1 !== ch && s.left2 === null) s.left2 = ch
+  const first = side === 'left' ? s.left1 : s.right1
+  if (first === '') {
+    if (side === 'left') s.left1 = ch
+    else s.right1 = ch
     return
   }
-  s.rightN++
-  if (s.right1 === '') s.right1 = ch
-  else if (s.right1 !== ch && s.right2 === null) s.right2 = ch
+  // 第二次及以后的观测：可能重复同一种邻居，也可能换了一种。
+  if (side === 'left') {
+    s.leftRepeated = true
+    if (ch !== s.left1) s.leftOther = true
+  } else {
+    s.rightRepeated = true
+    if (ch !== s.right1) s.rightOther = true
+  }
 }
 
 /** 把一条正文的二字组统计并进词表。按码点走，避免劈开代理对。 */
@@ -356,7 +365,16 @@ function accumulate(text: string, into: Map<string, MutableStat>): void {
     const term = String(cps[i]) + String(cps[i + 1])
     let s = into.get(term)
     if (s === undefined) {
-      s = { df: 0, tf: 0, left1: '', left2: null, right1: '', right2: null, leftN: 0, rightN: 0 }
+      s = {
+        df: 0,
+        tf: 0,
+        left1: '',
+        right1: '',
+        leftOther: false,
+        rightOther: false,
+        leftRepeated: false,
+        rightRepeated: false,
+      }
       into.set(term, s)
     }
     s.tf++
@@ -389,10 +407,10 @@ export function buildVocabIndex(db: DatabaseSync): VocabIndex {
       return {
         df: s.df,
         tf: s.tf,
-        leftVaried: s.left1 === '' || s.left2 !== null,
-        rightVaried: s.right1 === '' || s.right2 !== null,
-        leftSeen: s.leftN,
-        rightSeen: s.rightN,
+        leftVaried: s.left1 === '' || s.leftOther,
+        rightVaried: s.right1 === '' || s.rightOther,
+        leftRepeated: s.leftRepeated,
+        rightRepeated: s.rightRepeated,
       }
     },
   }

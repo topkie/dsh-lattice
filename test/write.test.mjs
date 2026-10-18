@@ -385,7 +385,7 @@ describe('写入管线：入口生成', () => {
     assert.ok(recs.every((r) => r.weight > 0 && r.weight <= 0.6))
   })
 
-  it('边界自由度为零的碎片出局，观测不足的候选不被硬判', () => {
+  it('边界自由度为零的碎片出局，没有重复观测的候选不被硬判', () => {
     // v4 的候选资格判据：左右邻汉字都只观测到一种取值 -> 出局。这里手工喂词表，
     // 因为要构造的正是「观测到恒定」那一档，写库反而要造很多条正文。
     const mk = (t, extra = {}) => ({
@@ -393,23 +393,23 @@ describe('写入管线：入口生成', () => {
       tf: 1,
       leftVaried: true,
       rightVaried: true,
-      leftSeen: 5,
-      rightSeen: 5,
+      leftRepeated: true,
+      rightRepeated: true,
       ...extra,
     })
     const stats = new Map([
-      // 「值阈」永远是左「位」右「值」——两侧都恒定，且有足够观测 -> 判为碎片
+      // 「值阈」永远是左「位」右「值」——两侧都恒定，且两侧都有重复观测 -> 判为碎片
       ['值阈', mk('值阈', { leftVaried: false, rightVaried: false })],
       // 「代理」在一侧恒定，另一侧多样 -> 不硬判（留在候选池里由降权处理）
       ['代理', mk('代理', { rightVaried: false })],
-      // 只有一两次观测的候选：恒定还可能是抽样偶然 -> 不硬判
-      ['新建', mk('新建', { leftVaried: false, rightVaried: false, leftSeen: 1, rightSeen: 2 })],
+      // 只有一次观测的候选：恒定还可能是抽样偶然（没有重复观测可比） -> 不硬判
+      ['新建', mk('新建', { leftVaried: false, rightVaried: false, leftRepeated: false })],
     ])
     const vocab = { df: (t) => (t === '值阈' ? 5 : 0), total: () => 100, stat: (t) => stats.get(t) }
     const terms = extractedEntries('值阈代理新建的说明。', vocab, 16).map((r) => r.term)
-    assert.ok(!terms.includes('值阈'), '两侧都恒定且有观测的候选必须出局')
+    assert.ok(!terms.includes('值阈'), '两侧都恒定且有重复观测的候选必须出局')
     assert.ok(terms.includes('代理'), '只有一侧恒定的候选不该被硬判')
-    assert.ok(terms.includes('新建'), '观测不足时不下「恒定」这个结论')
+    assert.ok(terms.includes('新建'), '没有重复观测时不下「恒定」这个结论')
   })
 
   it('整段中文（原文切片）不作为入口', () => {

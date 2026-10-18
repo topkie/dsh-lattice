@@ -33,7 +33,6 @@ import {
   MAX_TERM,
   MAX_HAN_TERM,
   FRAGMENT_PENALTY,
-  MIN_NEIGHBOR_EVIDENCE,
   MILLIS_PER_DAY,
   LEARNED_FEATURE_TERMS,
   LEARNED_COOLDOWN_HOURS,
@@ -561,24 +560,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['仅在换用别的 IDF 变体时'],
   },
   {
-    name: 'NEIGHBOR_SAMPLE（内联）',
-    area: '入口',
-    value: () => 2,
-    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
-    affects: '判断「左右邻是否只有一种取值」时保留的邻居样本数（第二个不同值即判定为多样）',
-    inline: {
-      file: 'src/pipeline/entries.ts',
-      source: 'else if (s.left1 !== ch && s.left2 === null) s.left2 = ch',
-    },
-    calibration: {
-      evidence:
-        'D11-4 与 entries.ts:111-121 注释：**人工标注的 60 个样本**上，「两侧邻居都多于一种」把真词与' +
-        '碎片分开到 96.7%（AUC 0.973）。标定语料是那 60 个二字组样本，不是整库',
-      at: '2026-10-15',
-    },
-    variesWith: ['语料领域（邻居多样性的基线）', '上游切词规则'],
-  },
-  {
     name: 'EXTRACT_WEIGHT_CEIL',
     area: '入口',
     value: () => ENTRY_WEIGHT.extracted,
@@ -622,7 +603,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/entries.ts', name: 'hasBoundaryFreedom' },
     constName: null,
     inline: { file: 'src/pipeline/entries.ts', source: 'function hasBoundaryFreedom(' },
-    affects: '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值、且两侧都有过重复观测，即出局',
+    affects:
+      '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值、且两侧都有过重复观测，即出局',
     calibration: {
       evidence:
         '2026-10-17 实现报告：**判据线是「零」本身，不是扫描出来的**。279 atom 基准库上本判据' +
@@ -634,7 +616,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '判为「不可分辨」而不是「零贡献」，理由只在样本量 —— 同一次端到端测量里 @12 的 5% 之差' +
         '（1 条）同样被判为不可判定；用同一个样本对前者谨慎、对后者干脆是双标。' +
         '保留它的依据：实测无误杀（反向差集 216 条全是碎片），且删掉它会让字表留下的两个调用点' +
-        '完全失守（候选池变松是一个独立的设计决定，需单独论证）。**待扩库后复测**',
+        '完全失守（候选池变松是一个独立的设计决定，需单独论证）。**待扩库后复测**。' +
+        'T45 批三把「证据」从计数改成形态：不再记两侧观测次数再与 2 比较，而是记「有没有第二次' +
+        '观测」—— 在本判据生效的路径上两者逐条等价（探针见实现报告）',
       at: '2026-10-17',
     },
     variesWith: ['语料规模（邻居观测的多少）', '上游切词规则', '语料语言'],
@@ -642,21 +626,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '**已知不等价**：几何量放回了一批 v3 会挡的高频泛词（不是 / 一个 / 什么 / 需要 / 用户 / ' +
       '内容 / 问题…）——它们两侧都多样，几何量分不开。「这个词是不是词」与「这个词有没有主题' +
       '信息」是两个量，本判据只管前者',
-  },
-  {
-    name: 'MIN_NEIGHBOR_EVIDENCE',
-    area: '入口',
-    value: () => MIN_NEIGHBOR_EVIDENCE,
-    definedBy: { file: 'src/pipeline/entries.ts', name: 'MIN_NEIGHBOR_EVIDENCE' },
-    affects: '判「边界自由度为零」所需的单侧最少邻居观测次数；不足则不下这个结论，只降权',
-    calibration: {
-      evidence:
-        '2026-10-17 实现报告：基准库上取 2 与取 3 对纯 Entry 路 gold 召回**完全同分**，' +
-        '取 2 只多留少量 df<=2 的候选。取 2 的另一个理由是 test/write.test.mjs 里的写库场景：' +
-        '两条 atom 时「代理」是 leftSeen=1 / rightSeen=1，取 2 才放它过去',
-      at: '2026-10-17',
-    },
-    variesWith: ['语料规模（每条 atom 的平均长度）', '上游切词规则'],
   },
   {
     name: 'MIN_VOCAB_FOR_DF',
