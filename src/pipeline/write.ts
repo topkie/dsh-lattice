@@ -45,6 +45,16 @@ import {
 export type WriteAction = 'joined' | 'created'
 
 /** 新建 topic 的原因，供健康指标与调参使用。 */
+/**
+ * `atom.flags` 的位定义（M4-T36）。**位值一旦写进库就不能改** —— 改它等于把历史行解释错。
+ *
+ * bit0 留给「待拆分」（`pending_split` 候选）：那一层还没实现，所以现在没有写入方。
+ * 定义先占位，是因为 DDL 里那一位已经在设计文档中被命名，不能临时改叫别的。
+ */
+export const FLAG_SPLIT_PENDING = 1
+export const FLAG_AMBIGUOUS = 2
+export const FLAG_UNCLASSIFIED = 4
+
 export type CreateReason = 'far' | 'ambiguous'
 
 /** 写入契约。除 text 外全部可省——全默认也必须能工作。 */
@@ -120,6 +130,8 @@ export interface WriteResult {
   review?: ReviewNote[]
   /** 这次比对了主属主题里的多少条；只在真的比过（scanned > 0）时带。 */
   reviewScan?: { scanned: number; truncated: boolean }
+  /** 落库的位标志（T36）。回执里据此给一句摘要，模型不必去读中文猜。 */
+  flags?: number
 }
 
 /**
@@ -465,6 +477,8 @@ interface CommitRow {
   origin: string
   nearId: number | null
   nearConf: number | null
+  /** 落库时写进 atom.flags 的位（见 FLAG_*）。 */
+  flags: number
 }
 
 /** 在事务内落库，固定 O(1) 行数。返回 atom id。 */
@@ -483,7 +497,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
   const insertAtom = db.prepare(
     `INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key,
                       source, source_ref, origin, polarity, flags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
   )
   const insertAtomTopic = db.prepare(
     'INSERT INTO atom_topic(atom_id, topic_id, weight, origin) VALUES (?, ?, ?, ?)',
@@ -523,6 +537,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
         row.source,
         row.sourceRef,
         row.origin,
+        row.flags,
         now,
         now,
       ).lastInsertRowid,
@@ -724,6 +739,13 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
       origin: normalizeOrigin(input.origin),
       nearId,
       nearConf,
+      // 落库的位：只有「新建」才有理由标 —— 并入已有主题说明归属已确认。
+      // far 标「未归类」、ambiguous 标「歧义」；两者都是**说明**，不参与任何打分（判据 4）。
+      flags: !newTopic
+        ? 0
+        : decision.kind === 'create' && decision.reason === 'ambiguous'
+          ? FLAG_AMBIGUOUS
+          : FLAG_UNCLASSIFIED,
     },
     entries,
   )
@@ -746,6 +768,10 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   }
   if (reviewNotes.length > 0) result.review = reviewNotes
   if (dup.scanned > 0) result.reviewScan = { scanned: dup.scanned, truncated: dup.truncated }
+  // 位标志交给回执（判据 6）：只给数，不给解释 —— 解释在工具层统一写一处。
+  if (newTopic)
+    result.flags =
+      decision.kind === 'create' && decision.reason === 'ambiguous' ? FLAG_AMBIGUOUS : FLAG_UNCLASSIFIED
 
   afterWrite(ctx, result.topicId, atomId, entries.length)
   return result

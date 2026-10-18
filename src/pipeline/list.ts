@@ -21,6 +21,8 @@ export interface ListOptions {
   scope?: string
   origin?: string
   topicId?: number
+  /** 按位过滤：`flags & 该值` 非 0 即命中（位定义见 write.ts 的 FLAG_*）。 */
+  flags?: number
   limit?: number
   offset?: number
 }
@@ -38,6 +40,8 @@ export interface ListRow {
   createdAt: number
   recallHits: number
   lastRecalledAt: number | null
+  /** 位标志（歧义 / 未归类 / 待拆分）。只读展示，不参与打分。 */
+  flags: number
 }
 
 export interface ListResult {
@@ -51,7 +55,7 @@ export interface ListResult {
 /** 目录行的 SELECT 列表：listAtoms 与 listAtomsByIds 共用，免得两处字段慢慢分叉。 */
 const LIST_COLUMNS =
   'id, kind, summary, origin, scope, project_key, topic_id, superseded_by, created_at, ' +
-  'recall_hits, last_recalled_at'
+  'recall_hits, last_recalled_at, flags'
 
 /** 一行原始记录 → 目录行。字段映射只有这一处（列名 → 驼峰字段）。 */
 function toListRow(r: Record<string, unknown>): ListRow {
@@ -68,6 +72,7 @@ function toListRow(r: Record<string, unknown>): ListRow {
     recallHits: Number(r.recall_hits),
     lastRecalledAt:
       r.last_recalled_at === null || r.last_recalled_at === undefined ? null : Number(r.last_recalled_at),
+    flags: r.flags === null || r.flags === undefined ? 0 : Number(r.flags),
   }
 }
 
@@ -97,6 +102,12 @@ export function listAtoms(db: DatabaseSync, opts: ListOptions = {}): ListResult 
   if (opts.topicId !== undefined) {
     where.push('topic_id = ?')
     args.push(opts.topicId)
+  }
+  if (opts.flags !== undefined && opts.flags !== 0) {
+    // 按位过滤而不是等值：一个 atom 可以同时有多个标记，等值匹配会让「查歧义」漏掉
+    // 同时被标了「未归类」的行。
+    where.push('(flags & ?) <> 0')
+    args.push(opts.flags)
   }
   const clause = where.length > 0 ? ' WHERE ' + where.join(' AND ') : ''
   const total = Number(

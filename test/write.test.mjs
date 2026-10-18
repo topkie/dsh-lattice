@@ -143,9 +143,10 @@ describe('写入管线：落位（向量 + 词面双票）', () => {
     const nearEdge = db.prepare("SELECT dst_id FROM edge WHERE kind = 'near' AND src_id = ?").get(r.atomId)
     assert.equal(Number(nearEdge.dst_id), r.nearId, 'D1：nearId 必须就是 near 边的目标')
 
-    // 只改了回执，没改存储：flags 仍是 0（判据的另一半）。
+    // D1 当时的判据是「只改回执、不写 flags」；**T36 落地后存储有意改变**（ambiguous 置歧义位）。
+    // 那条历史语义保留在这里的注释里，而 flags 的完整判据归 test/flags.test.mjs —— 两处各写一套就会分叉。
     const flags = db.prepare('SELECT flags FROM atom WHERE id = ?').get(r.atomId)
-    assert.equal(Number(flags.flags), 0, 'D1 只改回执，不写 flags')
+    assert.equal(Number(flags.flags) & 2, 2, 'T36 起：ambiguous 落「歧义」位')
   })
 
   it('远到低于 τ_new 时新建且不留 near 边', async () => {

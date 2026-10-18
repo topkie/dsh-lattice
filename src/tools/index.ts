@@ -239,6 +239,15 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         if (r.hintMiss !== undefined) {
           lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按几何定位处理。')
         }
+        // 位标志摘要（T36 判据 6）：给出**可核对的说法**，不让模型靠读中文猜。
+        // 位定义在 write.ts 的 FLAG_*，与 ARCHITECTURE 一一对应。
+        if (r.flags !== undefined && r.flags !== 0) {
+          const tags: string[] = []
+          if ((r.flags & 2) !== 0) tags.push('歧义（两个候选接近）')
+          if ((r.flags & 4) !== 0) tags.push('未归类')
+          if ((r.flags & 1) !== 0) tags.push('待拆分')
+          lines.push('标记：' + tags.join('；') + '（flags=' + r.flags + '）')
+        }
         // 重复 / 高相似的提示挂在这里。**写入已经发生**，提示只是让调用方知道
         // 「库里另有一条与它重合」—— 处置权在它手上。
         for (const n of r.review ?? []) lines.push(n.message)
@@ -435,6 +444,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       },
       scope: { type: 'string', description: '项目键；给定时连同全局记忆一起列出' },
       topic: { type: 'number', description: '只看某个主题下的记忆' },
+      flags: {
+        type: 'number',
+        description: '只看带某个标记的记忆（按位）：1 待拆分 / 2 歧义 / 4 未归类',
+      },
       limit: { type: 'number', description: '本页条数，默认 20，上限 50' },
       offset: { type: 'number', description: '从第几条开始，用于翻页' },
     },
@@ -445,11 +458,13 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const origin = str(args?.origin)
       const scope = str(args?.scope)
       const topic = typeof args?.topic === 'number' ? args.topic : undefined
+      const flags = typeof args?.flags === 'number' && Number.isFinite(args.flags) ? args.flags : undefined
       const r = listAtoms(rt.db, {
         kind,
         origin,
         scope,
         topicId: topic,
+        flags,
         limit: num(args?.limit, LIST_DEFAULT_LIMIT),
         offset: num(args?.offset, 0),
       })

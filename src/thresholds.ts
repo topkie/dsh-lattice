@@ -75,6 +75,7 @@ import {
   TRIM_PATHS_LIMIT,
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
+import { FLAG_AMBIGUOUS, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './pipeline/write.js'
 import {
   BUSY_TIMEOUT_FLOOR_MS,
   BUSY_TIMEOUT_MULTIPLIER,
@@ -2066,6 +2067,36 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-18',
     },
     variesWith: ['事件循环被占住的时长', '单条样本的内存占用'],
+  },
+  {
+    name: 'FLAG_SPLIT_PENDING',
+    area: '写入',
+    value: () => FLAG_SPLIT_PENDING,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_SPLIT_PENDING' },
+    affects: 'atom.flags 的 bit0：待拆分（pending_split 候选）。那一层未实现，当前无写入方',
+    calibration: {
+      evidence: '位定义来自设计报告对 flags 的命名（待拆分 / 歧义 / 未归类）。**位值一旦落库就不能改**',
+      at: '2026-10-18',
+    },
+    variesWith: ['（不应变：改它等于把历史行解释错）'],
+  },
+  {
+    name: 'FLAG_AMBIGUOUS',
+    area: '写入',
+    value: () => FLAG_AMBIGUOUS,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_AMBIGUOUS' },
+    affects: 'atom.flags 的 bit1：落位时两个候选接近、没把握',
+    calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
+    variesWith: ['（不应变）'],
+  },
+  {
+    name: 'FLAG_UNCLASSIFIED',
+    area: '写入',
+    value: () => FLAG_UNCLASSIFIED,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_UNCLASSIFIED' },
+    affects: 'atom.flags 的 bit2：与任何已有主题都不像（未归类）',
+    calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
+    variesWith: ['（不应变）'],
   },
   // ──────────────────────── 重标触发（calibration/trigger.ts）────────────────────────
   {
