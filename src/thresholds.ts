@@ -114,8 +114,12 @@ import { SUMMARY_CHARS } from './util/text.js'
 import {
   REVIEW_MAX_CHARS,
   REVIEW_MAX_SEGMENTS,
+  REVIEW_MEMBER_SCAN_MS,
   REVIEW_MIN_CHARS,
+  REVIEW_SCAN_BUDGET_MS,
   REVIEW_SCAN_LIMIT,
+  REVIEW_SEGMENT_MS,
+  REVIEW_WRITE_BUDGET_MS,
 } from './pipeline/review.js'
 import { VEC_DIM } from './util/vec.js'
 import { DEFAULT_ALIGN_COS } from './cluster/align.js'
@@ -1536,13 +1540,14 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => REVIEW_MAX_SEGMENTS,
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MAX_SEGMENTS' },
     affects: '一次写入最多自动切成多少条；超过则整条不写入，交回调用方自己拆',
+    display: '8（= 写入预算 1000 ms ÷ 单段实测 125 ms）',
     calibration: {
       evidence:
-        '**无标定记录，是结构性上界**：每段都要过一次编码器（本机实测单条写入 p50 约 180 ms，编码占大头），' +
-        '段数不设上限等于让一次工具调用把写入路径变成秒级卡顿。取 8 的依据是「一条记忆里不该装着 8 件以上的事」' +
-        '—— 超过这个量，输入已经是文档而不是记忆，切了也不对',
+        '**结构性上界**，T45 批三起由「时间预算 ÷ 单段实测耗时」派生：REVIEW_WRITE_BUDGET_MS(1000) / ' +
+        'REVIEW_SEGMENT_MS(125) = 8。单段实测值见 REVIEW_SEGMENT_MS 条目（2026-10-18，1374 atom 库副本，' +
+        '111–148 ms）。旧口径的「一条记忆里不该装着 8 件以上的事」与时间预算给出同一个整数，两条同时成立',
     },
-    variesWith: ['编码器单次耗时', '宿主对一次工具调用入参长度的上限'],
+    variesWith: ['单段写入耗时（编码器与词表重建）', '一次工具调用的时延预算'],
     diverges: '**设计文档 §7 没有这个键**',
   },
   {
@@ -1551,14 +1556,69 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => REVIEW_SCAN_LIMIT,
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_LIMIT' },
     affects: '重复 / 高相似检测一次最多比多少个同主题成员（**只读，不写库**）',
+    display: '200（= 扫描预算 10 ms ÷ 单条实测 0.05 ms）',
     calibration: {
       evidence:
-        '**无标定记录，是结构性上界**：这一路要读成员正文与向量指纹，不设上限就等于让写入耗时随库规模线性增长。' +
-        '200 条足以覆盖「同一主题下的近期成员」；到上限时不静默 —— 结果里带 scanned / truncated，' +
-        '调用方分得清「比过了不重复」与「没比完」',
+        '**结构性上界**，T45 批三起由「扫描预算 ÷ 单条实测耗时」派生：REVIEW_SCAN_BUDGET_MS(10) / ' +
+        'REVIEW_MEMBER_SCAN_MS(0.05) = 200。单条实测见 REVIEW_MEMBER_SCAN_MS 条目（2026-10-18，' +
+        '0.038–0.045 ms/条）。旧口径的「200 条足以覆盖同一主题下的近期成员」与时间预算给出同一个整数',
     },
     variesWith: ['单个主题的成员数分布', 'atom 正文的平均长度'],
     diverges: '**设计文档 §7 没有这个键**',
+  },
+  {
+    name: 'REVIEW_WRITE_BUDGET_MS',
+    area: '写入',
+    value: () => REVIEW_WRITE_BUDGET_MS,
+    display: '1000 ms',
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_WRITE_BUDGET_MS' },
+    affects: '一次写入（切分 + 逐段落库）的时间预算；只用来换算切分段数上限',
+    calibration: {
+      evidence: '**产品侧时延预算，不是语料标定**：一次工具调用最多花 1 秒。没有实测出处，取值是判断',
+    },
+    variesWith: ['宿主对一次工具调用的时延预期'],
+  },
+  {
+    name: 'REVIEW_SEGMENT_MS',
+    area: '写入',
+    value: () => REVIEW_SEGMENT_MS,
+    display: '125 ms（本机实测的单段写入耗时）',
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SEGMENT_MS' },
+    affects: '把写入预算换算成段数：1000 / 125 = 8',
+    calibration: {
+      evidence:
+        '**实测**：2026-10-18 在 1374 条 atom 的库副本上，8 次单段写入 111–148 ms（每段含一次编码与' +
+        '一次全量词表重建，后者约 113 ms）。取 125 ms。换机器/库规模会变，届时上限自动跟着变',
+      at: '2026-10-18',
+    },
+    variesWith: ['编码器速度', '词表重建耗时（库规模）'],
+  },
+  {
+    name: 'REVIEW_SCAN_BUDGET_MS',
+    area: '写入',
+    value: () => REVIEW_SCAN_BUDGET_MS,
+    display: '10 ms',
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_BUDGET_MS' },
+    affects: '重复检测的时间预算；只用来换算一次比对多少条成员',
+    calibration: {
+      evidence: '**产品侧时延预算，不是语料标定**：重复检测加在每次写入上，只给它 10 ms',
+    },
+    variesWith: ['宿主对一次工具调用的时延预期'],
+  },
+  {
+    name: 'REVIEW_MEMBER_SCAN_MS',
+    area: '写入',
+    value: () => REVIEW_MEMBER_SCAN_MS,
+    display: '0.05 ms（本机实测的单条比对耗时，向上取整）',
+    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MEMBER_SCAN_MS' },
+    affects: '把扫描预算换算成条数：10 / 0.05 = 200',
+    calibration: {
+      evidence:
+        '**实测**：2026-10-18 在基准库最大主题（37 个成员）上 findDuplicate 单次 1.663 ms，均摊 0.045 ms/条；' +
+        '纯比对循环（bigram-Jaccard + 512 维余弦）0.038 ms/条。取 0.05（向上取整，宁可少扫）',
+      at: '2026-10-18',
+    },
+    variesWith: ['成员正文长度', '向量维度'],
   },
   // ──────────────────────── 资源参数（util/memory.ts）─────────────────────────
   {
