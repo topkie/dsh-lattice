@@ -178,6 +178,22 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     assert.equal(rt.calibration.state, 'uncalibrated')
   })
 
+  it('P1-2：关掉自动收集后，已有样本仍能支撑重标', async () => {
+    const rt = getRuntime(cfgOf())
+    seedAtoms(rt.db, 192)
+    await addPositives(10)
+    await addNegatives(6)
+    assert.equal(sampleStats().positive, 10)
+    closeRuntime()
+
+    // 关掉自动收集（samplesEnabled=false）：样本库里的旧样本不该因此消失。
+    const rt2 = getRuntime({ ...cfgOf(), samplesEnabled: false })
+    const outcome = await maybeRecalibrate()
+    assert.notEqual(outcome, 'no_positive', '关自动收集不等于清空样本库')
+    assert.equal(outcome, 'recalibrated')
+    assert.equal(rt2.calibration.state, 'calibrated')
+  })
+
   it('P0-1：算 S 失败不记冷却，条件恢复后能立刻重标', async () => {
     const rt = getRuntime(cfgOf())
     seedZeroAtoms(rt.db, 192)

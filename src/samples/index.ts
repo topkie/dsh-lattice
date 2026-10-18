@@ -235,7 +235,10 @@ export interface CalibrationSampleRow {
 }
 
 export function loadCalibrationSamples(limit: number): CalibrationSampleRow[] {
-  if (!state.enabled || state.dataDir === '') return []
+  // **不看 state.enabled**（审核发现 F3-2 / P1-2）：`samplesEnabled` 关掉的是「自动收集」，
+  // 不是「样本库不存在」。此前这里一起挡掉，于是关掉自动收集会让重标失去正样本来源 ——
+  // 而文档对这个开关的承诺是「只停自动收集」。真要清空样本库走界面上的清空入口。
+  if (state.dataDir === '') return []
   try {
     if (state.store === null) state.store = new SampleStore(state.dataDir, state.limits)
     return state.store.readForCalibration(limit)
