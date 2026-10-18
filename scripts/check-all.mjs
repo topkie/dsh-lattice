@@ -45,6 +45,9 @@ const STEPS = [
   // 它们都能活很久，因为没有任何检查会做「文档里的标识符能不能在代码里找到」这件事。
   // 这一类是机械可判的（路径与表名都能直接查），与「表述是否准确」不同（后者要人判断）。
   ['docs', 'scripts/check-docs.mjs', []],
+  // 日志写入口边界：除 src/log/ 外不得出现日志库文件名或 INSERT INTO log（裁决 #25 第 3 条）。
+  // 与 docs 同类：只读源码、不需要模型与网络，必须进门禁 —— 不进门禁的约束等于一句话。
+  ['log-boundary', 'scripts/check-log-boundary.mjs', []],
   // test 也要挂替身：它只替换**可选依赖**（编码器），让降级用例确定地走降级路径。
   // 不挂的话，有网络的机器上编码器会真的加载成功，那组用例的语义就变了。
   ['test', 'test/run.mjs', [], ['--import', './test/stubs/register.mjs']],

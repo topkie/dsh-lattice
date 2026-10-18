@@ -1,0 +1,117 @@
+// 日志模块的**写入口白名单**：什么事件、什么字段可以落库。
+//
+// 为什么白名单长成一张表、而不是散在调用点：日志库是唯一会把插件运行痕迹落到磁盘的地方，
+// 而「不写用户内容」这条约束不能靠每个调用点自觉 —— 调用点越多，漏一个就是一条查询文本
+// 进了库。表在这里，过滤也在这里：**不在这张表里的事件与字段一律丢弃**，调用点写错了
+// 也不会出库。
+//
+// 两条硬规则（都能构造失败）：
+//   1. 事件名必须在 EVENT_DETAIL_KEYS 里；不在就整条丢弃。不做「降级成别的名字」——
+//      那会把「写错了」伪装成「写对了」，而日志的价值恰恰在于它记的是真发生过的事。
+//   2. detail 只收表里列出的键，且值只能是数字、布尔或**短 token**（错误类名 / 错误码）。
+//      字符串不匹配 token 形状时替换成 'other'：这是最后一道闸，挡住「调用方顺手把错误
+//      消息原文（可能含查询文本或路径）塞进 reason」这种最可能发生的泄漏。
+//
+// 据此，查询文本、atom 正文与 id、文件路径、模型名都没有进入这张表的路径 —— 不是靠
+// 调用方「记得不要传」，而是传了也落不下去。
+
+/** 日志等级：只保留两档。notice 级别的「一切正常」不需要日志库。 */
+export type LogLevel = 'warn' | 'error'
+
+/** 待落盘的一行。ts 由队列在入队时给定（「当场」= 入队时刻）。 */
+export interface LogRow {
+  ts: number
+  level: LogLevel
+  event: string
+  detail: string | null
+}
+
+/**
+ * 事件白名单：事件名 → 该事件 detail 里允许出现的字段。
+ *
+ * 与设计草案第三节逐条对应；**新增事件必须先改这里**，否则写入会被静默丢弃。
+ * 字段值为空数组表示该事件只记「发生了」，不带任何细节。
+ */
+export const EVENT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
+  // 编码器加载或调用失败。只记错误类名 / 错误码，不记错误消息（消息可能含模型路径）。
+  'encoder.unavailable': ['reason'],
+  // 本次召回没有查询向量（纯词面）。原因在 encoder.unavailable 或配置里。
+  'recall.vector_missing': [],
+  // 词面两路全空、仅向量路有结果。
+  'recall.lexical_degraded': [],
+  // 查询含两字词、入口层零命中 —— 通常意味着索引或切词出了问题。
+  'recall.short_term_miss': [],
+  // 图路建边失败。
+  'graph.unavailable': ['reason'],
+  // 启动时标定快照缺失 / 版本不符或损坏 / 重标失败 / 重标完成 / 本库未标定。
+  'calib.snapshot_missing': [],
+  'calib.snapshot_invalid': ['field'],
+  'calib.recalibrate_failed': ['stage', 'reason'],
+  'calib.recalibrate_done': ['atoms', 'samples', 'ms', 'changed'],
+  'calib.unlocalized': ['reason'],
+  // 日志自身写失败（限频 1 次/分钟）。它也会走白名单，原因同样只记错误码。
+  'log.write_failed': ['reason'],
+}
+
+/** 允许落库的等级。 */
+export const LOG_LEVELS: readonly LogLevel[] = ['warn', 'error']
+
+/**
+ * 字符串值的合法形状：以字母开头、只含字母数字与 `_.:-`、最长 64。
+ *
+ * 错误类名（TypeError）、错误码（ENOENT / MODULE_NOT_FOUND）、状态枚举（never / small_db）
+ * 都落在这个形状里；查询文本、路径、模型名落不进去。**这是本轮唯一的字符串通道**，
+ * 所以「短 token」这条限制本身就是隐私边界。
+ */
+const SAFE_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/
+
+/** detail 序列化后的字符上限。白名单字段本就短，这里只是兜住异常调用。 */
+export const DETAIL_MAX_CHARS = 512
+
+/** 单个字段值的安全化：不合法就换成 'other'（**不拼接、不截断原文**）。 */
+function cleanValue(value: unknown): number | boolean | string | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : undefined
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') return SAFE_VALUE.test(value) ? value : 'other'
+  return undefined
+}
+
+/**
+ * 把一次调用过滤成可落盘的一行；不合格返回 null（整条丢弃，不抛错）。
+ *
+ * 不抛错是刻意的：日志是旁路，它不能因为调用方传错而影响召回或写入。
+ */
+export function sanitizeEvent(level: unknown, event: unknown, detail: unknown): Omit<LogRow, 'ts'> | null {
+  if (level !== 'warn' && level !== 'error') return null
+  if (typeof event !== 'string') return null
+  if (!Object.prototype.hasOwnProperty.call(EVENT_DETAIL_KEYS, event)) return null
+  const allowed = EVENT_DETAIL_KEYS[event] ?? []
+  const out: Record<string, number | boolean | string> = {}
+  if (detail !== null && typeof detail === 'object' && !Array.isArray(detail)) {
+    const raw = detail as Record<string, unknown>
+    for (const key of allowed) {
+      if (!Object.prototype.hasOwnProperty.call(raw, key)) continue
+      const value = cleanValue(raw[key])
+      if (value !== undefined) out[key] = value
+    }
+  }
+  const text = Object.keys(out).length === 0 ? null : JSON.stringify(out)
+  if (text !== null && text.length > DETAIL_MAX_CHARS) return null
+  return { level, event, detail: text }
+}
+
+/**
+ * 把异常换成可落库的原因码：优先 `code`（ENOENT / MODULE_NOT_FOUND），其次类名（TypeError）。
+ *
+ * **绝不返回 message**：它是唯一可能携带查询文本、路径或模型名的字段。
+ * 两个值都得再过一个 token 形状检查 —— 外部异常的形状不可信。
+ */
+export function reasonCodeOf(err: unknown): string {
+  if (err !== null && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code
+    if (typeof code === 'string' && SAFE_VALUE.test(code)) return code
+    const name = (err as { name?: unknown }).name
+    if (typeof name === 'string' && SAFE_VALUE.test(name)) return name
+  }
+  return 'unknown'
+}

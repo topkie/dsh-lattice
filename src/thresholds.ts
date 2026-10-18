@@ -101,6 +101,9 @@ import { DEFAULT_MIN_CLUSTER_SIZE } from './cluster/hierarchy.js'
 import { MST_BRIDGE_FACTOR } from './cluster/mst.js'
 import { RECLUSTER_BATCH_ATOMS } from './cluster/rebuild.js'
 import { GRAPH_INFER_MAX_ATOMS, NEAR_COS_MIN, NEAR_K, OUT_DEGREE_CAP } from './graph/infer.js'
+import { LOG_FLUSH_WINDOW_MS, LOG_QUEUE_MAX, LOG_WRITE_FAILED_MIN_INTERVAL_MS } from './log/index.js'
+import { LOG_EXPORT_MAX_BYTES, LOG_EXPORT_MAX_ROWS } from './log/export.js'
+import { LOG_FILE_MAX_BYTES, LOG_KEEP_FILES, LOG_TOTAL_MAX_BYTES } from './log/store.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
 export type ThresholdArea =
@@ -116,6 +119,7 @@ export type ThresholdArea =
   | '显式删除'
   | '重聚类'
   | '图扩展'
+  | '降级日志'
 
 /** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
@@ -1784,6 +1788,115 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-17',
     },
     variesWith: ['机器算力', '单次召回可接受的阻塞时长', '是否改成近邻候选而非全量成对'],
+  },
+  // ────────────────────────────── 降级日志（src/log/）──────────────────────────────
+  //
+  // 这一组的取值来源是 M4 开工裁决 #35（用户裁决），不是语料标定：日志的容量参数
+  // 取决于「降级事件多久发生一次、一条多长」，而本仓库还没有这份实测。
+  // 按本表纪律，这里如实写「未标定」，而不是编一个看起来有依据的场景。
+  {
+    name: 'LOG_FILE_MAX_BYTES',
+    area: '降级日志',
+    value: () => LOG_FILE_MAX_BYTES,
+    definedBy: { file: 'src/log/store.ts', name: 'LOG_FILE_MAX_BYTES' },
+    affects: '写前与启动时检查：当前日志库达到此大小就改名为历史文件并新建（4 MB）',
+    calibration: {
+      evidence:
+        '**未标定**（没有日志事件速率的实测）：裁决 #35 定 4 MB，理由「降级事件稀疏，' +
+        '4 MB 约能放数万条」；与「保留 5 个」正好拼成 20 MB 的总量上限',
+      at: '2026-10-18',
+    },
+    variesWith: ['降级事件产生速率', '单条 detail 的长度', '愿意给日志的磁盘空间'],
+  },
+  {
+    name: 'LOG_KEEP_FILES',
+    area: '降级日志',
+    value: () => LOG_KEEP_FILES,
+    definedBy: { file: 'src/log/store.ts', name: 'LOG_KEEP_FILES' },
+    affects: '清理：历史文件数 + 当前库不超过这个数，超出删最旧的（5 个，含当前库）',
+    calibration: {
+      evidence: '**未标定**：裁决 #35 定 5 个；5 x 4 MB 与总量 20 MB 对齐',
+      at: '2026-10-18',
+    },
+    variesWith: ['单文件阈值', '总量上限', '需要回溯多久的降级历史'],
+  },
+  {
+    name: 'LOG_TOTAL_MAX_BYTES',
+    area: '降级日志',
+    value: () => LOG_TOTAL_MAX_BYTES,
+    definedBy: { file: 'src/log/store.ts', name: 'LOG_TOTAL_MAX_BYTES' },
+    affects: '清理：全部日志文件（含当前库）总大小超过此值就删最旧的历史文件（20 MB）',
+    calibration: {
+      evidence: '**未标定**：裁决 #35 定 20 MB = 5 x 4 MB，与保留文件数对齐',
+      at: '2026-10-18',
+    },
+    variesWith: ['单文件阈值', '保留文件数', '磁盘配额'],
+  },
+  {
+    name: 'LOG_QUEUE_MAX',
+    area: '降级日志',
+    value: () => LOG_QUEUE_MAX,
+    definedBy: { file: 'src/log/index.ts', name: 'LOG_QUEUE_MAX' },
+    affects: '缓冲：内存队列上限 200 条；满了丢最旧并计数，不阻塞、不抛错',
+    calibration: {
+      evidence:
+        '**未标定**（按速率推算，非实测）：裁决 #35 定 200 条 —— 200 条在 50ms 窗口下约' +
+        ' 4000 条/秒的吸收能力，远超降级事件实际速率；同时把单个进程的日志内存钉在几十 KB',
+      at: '2026-10-18',
+    },
+    variesWith: ['降级事件爆发速率', '批量窗口', '单条日志的内存占用'],
+  },
+  {
+    name: 'LOG_FLUSH_WINDOW_MS',
+    area: '降级日志',
+    value: () => LOG_FLUSH_WINDOW_MS,
+    definedBy: { file: 'src/log/index.ts', name: 'LOG_FLUSH_WINDOW_MS' },
+    affects:
+      '缓冲：批量窗口的**上界**。正常路径由 setImmediate 在下一轮事件循环 flush；' +
+      '只有事件循环被占住、队首已等满 50ms 时才当场 flush（不新增定时器）',
+    calibration: {
+      evidence: '**未标定**：裁决 #35 给「setImmediate 或 50ms」，实现取两者中更保守的上界',
+      at: '2026-10-18',
+    },
+    variesWith: ['事件产生速率', '崩溃时允许丢失的时间窗', '宿主的事件循环忙碌程度'],
+  },
+  {
+    name: 'LOG_WRITE_FAILED_MIN_INTERVAL_MS',
+    area: '降级日志',
+    value: () => LOG_WRITE_FAILED_MIN_INTERVAL_MS,
+    definedBy: { file: 'src/log/index.ts', name: 'LOG_WRITE_FAILED_MIN_INTERVAL_MS' },
+    affects: '写失败降级：log.write_failed 的限频间隔（1 次/分钟）',
+    calibration: {
+      evidence: '**未标定**：设计草案第三节给「限频，1 次/分钟」，取 60 000 ms',
+      at: '2026-10-18',
+    },
+    variesWith: ['故障持续时间', '日志库的可用性', '用户对日志噪声的容忍度'],
+  },
+  {
+    name: 'LOG_EXPORT_MAX_ROWS',
+    area: '降级日志',
+    value: () => LOG_EXPORT_MAX_ROWS,
+    definedBy: { file: 'src/log/export.ts', name: 'LOG_EXPORT_MAX_ROWS' },
+    affects: '导出：CSV 最多 10 万行数据，超过截断并在文件尾加 # truncated',
+    calibration: {
+      evidence:
+        '**未标定**：裁决 #35 定 10 万行。按单行约 60~120 字节估算，10 万行约 6~12 MB，' +
+        '与 10 MB 的字节上限互为兜底',
+      at: '2026-10-18',
+    },
+    variesWith: ['单行 detail 的长度', '导出可接受的内存与等待时间'],
+  },
+  {
+    name: 'LOG_EXPORT_MAX_BYTES',
+    area: '降级日志',
+    value: () => LOG_EXPORT_MAX_BYTES,
+    definedBy: { file: 'src/log/export.ts', name: 'LOG_EXPORT_MAX_BYTES' },
+    affects: '导出：CSV 最多 10 MB（含表头），超过截断并加 # truncated',
+    calibration: {
+      evidence: '**未标定**：裁决 #35 定 10 MB；与 10 万行上限谁先到谁截断',
+      at: '2026-10-18',
+    },
+    variesWith: ['单行 detail 的长度', '浏览器/编辑器打开大文件的承受度'],
   },
 ]
 
