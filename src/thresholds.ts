@@ -179,7 +179,14 @@ export interface ThresholdEntry {
   /** 值仍在原处：打印时现取，不改行为。 */
   value: () => ThresholdValue
   /** 定义处（文件 + 常量名）；行号由打印脚本自己定位，不手工维护。 */
-  definedBy: { file: string; name: string }
+  definedBy?: { file: string; name: string }
+  /**
+   * 真值在**外部包**里（T46 拆包后的锚点表就是这种）。
+   *
+   * 与 definedBy 二选一：写 external 的条目不再参与「源码里找同名常量」的核对 ——
+   * 插件里只剩 re-export，找的是那一行的转发，不是定义。路径对外是包名，不写本机路径。
+   */
+  external?: { pkg: string; file: string }
   /** 受该阈值影响的行为。 */
   affects: string
   /** 标定场景；查不到依据时省略（打印为「无记录」）。 */
@@ -1149,7 +1156,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'TIER_SCALE_MIN_ATOMS',
     area: '注入',
     value: () => TIER_SCALE_MIN_ATOMS,
-    definedBy: { file: 'src/pipeline/calibrate.ts', name: 'TIER_SCALE_MIN_ATOMS' },
+    external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
     affects: 'briefMinFor：库小于此规模时不做按规模标定，退回 TIER_BRIEF_MIN（= 0.45）',
     calibration: {
       evidence:
@@ -1163,7 +1170,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'TIER_SCALE_STABLE_ATOMS',
     area: '注入',
     value: () => TIER_SCALE_STABLE_ATOMS,
-    definedBy: { file: 'src/pipeline/calibrate.ts', name: 'TIER_SCALE_STABLE_ATOMS' },
+    external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
     affects: '只用于可观测：低于此规模时，按规模插值出的阈值不可信（调用方据此区分标定值与插值值）',
     calibration: {
       // 这个数不是「标定语料的 atom 数」，而是「阈值稳定所需的最小规模」；
@@ -1180,7 +1187,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'TIER_SCALE_ANCHORS',
     area: '注入',
     value: () => TIER_SCALE_ANCHORS.map((a) => a.atoms + '→' + a.briefMin).join(' / '),
-    definedBy: { file: 'src/pipeline/calibrate.ts', name: 'TIER_SCALE_ANCHORS' },
+    external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
     affects: 'briefMinFor：按库规模给出精简档下界；点与点在 log2(atom 数) 尺度上线性插值，两端夹紧（不外推）',
     calibration: {
       atoms: 1374,
@@ -1960,12 +1967,15 @@ export function currentValue(entry: ThresholdEntry): ThresholdValue {
 /** 定义位置：内联量用片段定位，其余用常量名定位（行号由脚本补）。 */
 export function definitionSite(entry: ThresholdEntry): { file: string; anchor: string } {
   if (entry.inline !== undefined) return { file: entry.inline.file, anchor: entry.inline.source }
-  return { file: entry.definedBy.file, anchor: entry.definedBy.name }
+  if (entry.external !== undefined) return { file: '', anchor: entry.name }
+  return { file: entry.definedBy?.file ?? '', anchor: entry.definedBy?.name ?? entry.name }
 }
 
 /** 覆盖检查用的常量名；内联量与设计类条目返回 null。 */
 export function constNameOf(entry: ThresholdEntry): string | null {
   if (entry.constName !== undefined) return entry.constName
   if (entry.inline !== undefined) return null
-  return entry.definedBy.name
+  // 外部包的常量不在本仓库的数值扫描范围里，登记名进 registered 只会被当成「源码里找不到」。
+  if (entry.external !== undefined) return null
+  return entry.definedBy?.name ?? null
 }

@@ -97,7 +97,9 @@
     "embeddings",
     "rag"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "lattice-calib": "^0.1.0"
+  },
   "optionalDependencies": {
     "@huggingface/transformers": "^3.0.0"
   }

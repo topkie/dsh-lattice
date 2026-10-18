@@ -61,6 +61,8 @@ function linesOf(rel) {
 
 /** 定位行号：内联量用原样片段，其余用常量名。找不到返回 null（不猜）。 */
 function locate(entry) {
+  // 真值在外部包里的条目（external）：本仓库只剩转发，没有可定位的定义行。
+  if (entry.external !== undefined) return null
   const { file, anchor } = definitionSite(entry)
   const lines = linesOf(file)
   const needle = entry.inline !== undefined ? anchor : 'const ' + anchor
@@ -236,8 +238,11 @@ const alerts = []
 for (const entry of THRESHOLDS) {
   const line = locate(entry)
   const { file } = definitionSite(entry)
-  if (line === null) missingAnchors.push(entry.name + ' @ ' + file)
-  const where = file + (line === null ? ':?' : ':' + line)
+  if (line === null && entry.external === undefined) missingAnchors.push(entry.name + ' @ ' + file)
+  const where =
+    entry.external !== undefined
+      ? entry.external.pkg + ':' + entry.external.file + '（外部包）'
+      : file + (line === null ? ':?' : ':' + line)
   const keys = subKeys(entry)
   const val = currentValue(entry)
   const shown =
@@ -302,6 +307,7 @@ const nonNumericRegistered = []
 const staleRegistrations = []
 for (const [name, entry] of registered) {
   if (found.has(name)) continue
+  if (entry.external !== undefined) continue
   const hit = findAnywhere(name)
   if (hit === null) staleRegistrations.push(name + '（' + constNameOf(entry) + '）')
   else nonNumericRegistered.push(name + '（' + hit.file + ':' + hit.line + '，非数值或对象型）')
