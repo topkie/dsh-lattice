@@ -41,7 +41,7 @@ atom          记忆本体（唯一真相源）
   ├─ topic_id   主属主题（唯一）
   └─ flags      位标志（设计上留给「待拆分 / 歧义 / 未归类」）—— **当前恒为 0，无写入方**
 topic         主题，存 sum_vec 与 n_atoms，中心向量查询时现算
-domain        topic 的上层聚类，只做导航与配额
+domain        topic 的上层聚类，只做导航与配额 —— **未实现，当前恒 NULL**（表在，无写入方）
 entry         检索入口：term + bigram 索引列 + 权重 + 来源
 atom_topic    主属（权重 1.0）与次属（0.4~0.6）
 edge          带类型与置信度的关联边
