@@ -2,7 +2,8 @@
 //
 // 事务纪律（设计上的硬约束，不是风格偏好）：
 //   1. 事务内**固定 O(1) 行数**——不聚类、不抽词、不扫描。所有判据在事务外算好，
-//      进事务的只有常量。
+//      进事务的只有常量。唯一例外是声明边的「目标存在 / 自指」：两者都要等新 atom
+//      的 id 落地才能判（见 commitWrite），而它们的条数上限由 OUT_DEGREE_CAP 夹住。
 //   2. 写锁只在毫秒级持有。WAL 只允许单写者，长任务持锁会让整个插件卡死。
 //   3. 事务内绝不调用 encoder。编码是异步且可能耗时数百毫秒的首加载。
 //
@@ -11,6 +12,7 @@
 // 糊掉）。词面的区分度更高，两票都过才允许并入。
 
 import type { DatabaseSync } from 'node:sqlite'
+import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { type AtomKind, normalizeAtomKind, normalizeOrigin } from '../db/schema.js'
 import {
   cosine,
@@ -57,6 +59,123 @@ export const FLAG_UNCLASSIFIED = 4
 
 export type CreateReason = 'far' | 'ambiguous'
 
+/**
+ * 写入方声明的一条关系边（T38）。
+ *
+ * **type 不是白名单**：它是关系标签，不是分类标签。五个推荐值（related / refines /
+ * supersedes / duplicate / requires）写在工具描述里给模型看，插件只校验**形状**
+ * （长度与字符集）。理由：白名单会让「模型想表达的关系不在表里」变成一个写不进去的
+ * 错误，而边只是线索，丢一条线索比丢一条记忆轻得多；形状校验则挡住真正会坏数据的东西
+ * （空串、超长、大写导致的字面量比对失配、非整数 id）。
+ */
+export interface DeclaredEdgeInput {
+  type: string
+  target: number
+}
+
+/** 被拒的声明边：原值 + 拒因。**不阻断写入**，只如实交回调用方。 */
+export interface DeclaredEdgeNote {
+  /** 原样回显的 type（不是字符串时为空串）。 */
+  type: string
+  /** 原样回显的 target（不是正整数时为 null）。 */
+  target: number | null
+  /** 一句话拒因，可直接展示给写入方。 */
+  reason: string
+}
+
+/**
+ * 声明边的 confidence。
+ *
+ * 取 1.0 是「没有证据时给满」——与 near 边的 0.5 相反：声明就是证据本身，它不是从
+ * 相似度推出来的。**它只参与图路内部的排序**（view.ts 的路段按 confidence 降序，
+ * 声明边因此排在推断边之前），不进任何原子的打分 —— 打分只看四路召回的名次
+ * （search.ts 的 fuse），边不产生名次。
+ */
+export const DECLARED_EDGE_CONFIDENCE = 1
+
+/**
+ * 声明边 type 的字符数上限。
+ *
+ * 32 不是标定值，是「够长且不让一条边吃掉正文预算」的护栏：现有五类 kind 最长 10 个
+ * 字符，32 留出两倍余量给项目自定义的关系名。超长的 type 不会让内容写不进去，
+ * 只让这条边不落库（拒因回执）。
+ */
+export const DECLARED_EDGE_TYPE_MAX = 32
+
+/**
+ * type 的字符集：小写字母开头，其后小写字母 / 数字 / 下划线。
+ *
+ * **小写是硬要求**，不是风格：图路按 kind 字面量比对（GRAPH_KINDS 全是小写），
+ * 写成 `Related` 的边会安静地落库、也安静地不进图路 —— 那正是「声明了却没用」的
+ * 失效形态。宁可拒掉并说明，也不做静默归一。
+ */
+const DECLARED_EDGE_TYPE_RE = /^[a-z][a-z0-9_]*$/
+
+/**
+ * 校验并收敛写入方声明的边的**形状**：type 的长度与字符集、条数上限、同一批里的重复。
+ *
+ * 拒绝一条边不拒绝整条记忆：边是线索，记忆是本体（同 hintMiss 的处理）。
+ * 每条拒因都带原值，调用方据此能自己改对。
+ *
+ * **「目标存在」与「自指」不在这里判**：自指要等新 atom 的 id 落地才知道；而目标存在
+ * 与它是同一个查询，放在事务外会让自指永远先被报成「不存在」（那条目标确实还不存在）。
+ * 两件事一起放在 commitWrite 里，见那里的注释。
+ */
+function validateDeclaredEdges(edges: unknown): {
+  accepted: DeclaredEdgeInput[]
+  rejected: DeclaredEdgeNote[]
+} {
+  const accepted: DeclaredEdgeInput[] = []
+  const rejected: DeclaredEdgeNote[] = []
+  if (edges === undefined || edges === null) return { accepted, rejected }
+  if (!Array.isArray(edges)) {
+    rejected.push({ type: '', target: null, reason: 'edges 必须是 {type, target} 的数组' })
+    return { accepted, rejected }
+  }
+  const seen = new Set<string>()
+  for (const raw of edges) {
+    const type = typeof (raw as { type?: unknown })?.type === 'string' ? (raw as { type: string }).type : ''
+    const targetRaw = (raw as { target?: unknown })?.target
+    const target =
+      typeof targetRaw === 'number' && Number.isInteger(targetRaw) && targetRaw > 0 ? targetRaw : null
+    const note = (reason: string): void => {
+      rejected.push({ type, target, reason })
+    }
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      note('不是 {type, target} 形状')
+      continue
+    }
+    if (type === '') {
+      note('type 必须是非空字符串')
+      continue
+    }
+    if (Array.from(type).length > DECLARED_EDGE_TYPE_MAX) {
+      note('type 超过 ' + DECLARED_EDGE_TYPE_MAX + ' 个字符')
+      continue
+    }
+    if (!DECLARED_EDGE_TYPE_RE.test(type)) {
+      note('type 只能用小写字母、数字、下划线，且以字母开头')
+      continue
+    }
+    if (target === null) {
+      note('target 必须是正整数 id')
+      continue
+    }
+    const key = type + '\u0000' + target
+    if (seen.has(key)) {
+      note('与本次声明里的另一条重复')
+      continue
+    }
+    if (accepted.length >= OUT_DEGREE_CAP) {
+      note('超过单条记忆的关系上限（' + OUT_DEGREE_CAP + ' 条）')
+      continue
+    }
+    seen.add(key)
+    accepted.push({ type, target })
+  }
+  return { accepted, rejected }
+}
+
 /** 写入契约。除 text 外全部可省——全默认也必须能工作。 */
 export interface WriteInput {
   text: string
@@ -74,6 +193,14 @@ export interface WriteInput {
    * 不认识的值会被收敛回默认（见 db/schema.ts 的 normalizeOrigin），脏值不进库。
    */
   origin?: string
+  /**
+   * 显式声明的关系边（T38）：`[{type, target}]`，target 是已存在的 atom id。
+   *
+   * 与写入**同一个事务**落库（origin = declared），所以「记忆进去了、关系没进去」
+   * 这种半成品状态不存在。校验见 validateDeclaredEdges：不合法的边被跳过并回执，
+   * 不阻断记忆本身。
+   */
+  edges?: DeclaredEdgeInput[]
 }
 
 /** 落位判定的证据。全部保留，便于事后复盘「为什么归到了这里」。 */
@@ -141,6 +268,13 @@ export interface WriteResult {
   kindAdjusted?: string
   /** 实际落库的类型；只有发生归一时才带（与 `kindAdjusted` 成对）。 */
   kind?: AtomKind
+  /** 本次落库的声明边条数；一条都没有时不带。 */
+  edgesDeclared?: number
+  /**
+   * 被拒的声明边与拒因。**只拒边、不拒记忆** —— 回执里逐条如实说明，
+   * 调用方据此改对或放弃，而不是以为关系已经建立了。
+   */
+  edgesRejected?: DeclaredEdgeNote[]
 }
 
 /**
@@ -502,8 +636,19 @@ interface CommitRow {
   flags: number
 }
 
-/** 在事务内落库，固定 O(1) 行数。返回 atom id。 */
-function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): number {
+/**
+ * 在事务内落库，固定 O(1) 行数。返回 atom id 与声明边的落库结果。
+ *
+ * 「固定」在声明边上也成立：条数在事务外就被 OUT_DEGREE_CAP 夹住（validateDeclaredEdges），
+ * 所以这里最多再插 16 行，与库规模无关。这是它没被拆到事务外第二次提交的理由 ——
+ * 拆开就会出现「记忆写进去了、关系没写进去」的半成品。
+ */
+function commitWrite(
+  ctx: WriteCtx,
+  row: CommitRow,
+  entries: EntryRecord[],
+  edges: DeclaredEdgeInput[],
+): { atomId: number; edgesDeclared: number; edgesRejected: DeclaredEdgeNote[] } {
   const db = ctx.db
   const now = Date.now()
   const body = buildSearchBody(row.summary, row.text, entries)
@@ -534,6 +679,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
   const upsertSearch = db.prepare(
     'INSERT INTO atom_search(id, body) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body',
   )
+  const atomExists = db.prepare('SELECT 1 AS ok FROM atom WHERE id = ?')
 
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -577,6 +723,43 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
         now,
       )
     }
+    // 声明边：origin = declared，confidence 取常量。
+    //
+    // 「目标存在」与「自指」在这里判，不在事务外：自指要等新 atom 的 id 落地才知道；
+    // 而目标存在与它是同一个查询，放在事务外会让自指永远先被报成「不存在」——
+    // 那条目标确实还不存在（除非 id 被复用：删除过的 atom 会把 rowid 让出来，
+    // 那正是自指在真实库里唯一可能的来路）。两次判断都是主键等值查询，行数仍受
+    // OUT_DEGREE_CAP 夹住。
+    let edgesDeclared = 0
+    const edgesRejected: DeclaredEdgeNote[] = []
+    for (const e of edges) {
+      if (e.target === atomId) {
+        edgesRejected.push({ type: e.type, target: e.target, reason: '不能指向自己' })
+        continue
+      }
+      if (atomExists.get(e.target) === undefined) {
+        edgesRejected.push({ type: e.type, target: e.target, reason: '目标记忆 #' + e.target + ' 不存在' })
+        continue
+      }
+      const ins = insertEdge.run(
+        'atom',
+        atomId,
+        'atom',
+        e.target,
+        e.type,
+        DECLARED_EDGE_CONFIDENCE,
+        DECLARED_ORIGIN,
+        now,
+      )
+      if (Number(ins.changes) === 0) {
+        // UNIQUE(src_type, src_id, dst_type, dst_id, kind) 撞上了：这条关系已经在库里
+        // （可能是推断出来的同一条，也可能是同一批声明里重复过一次）。不覆盖它的 origin：
+        // 把 inferred 改写成 declared 等于替模型「追认」一条它没声明过的边。
+        edgesRejected.push({ type: e.type, target: e.target, reason: '这条关系已经存在' })
+        continue
+      }
+      edgesDeclared++
+    }
     upsertSearch.run(atomId, body)
     if (!row.newTopic) {
       // 读—改—写，而不是让 SQL 直接赋值 BLOB：UPDATE 里绑定 2 KB 的 BLOB 参数在
@@ -595,7 +778,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
     }
     db.exec('COMMIT')
     bumpTopicLex(db, topicId)
-    return atomId
+    return { atomId, edgesDeclared, edgesRejected }
   } catch (err) {
     try {
       db.exec('ROLLBACK')
@@ -746,7 +929,13 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   const dup = findDuplicate(ctx.db, text, vec, topicId, ctx.review)
   const reviewNotes: ReviewNote[] = []
   if (dup.hit !== null) reviewNotes.push(duplicateNote(dup.hit, dup.truncated))
-  const atomId = commitWrite(
+
+  // ⑥ 声明边（T38）：形状（type / 条数 / 重复）在事务外校验；「目标存在」与「自指」
+  // 要等新 id 落地，放在事务内（见 commitWrite）。与写侧审核同一条纪律：**不阻断写入**，
+  // 结论只走返回值。
+  const declared = validateDeclaredEdges((input as { edges?: unknown }).edges)
+
+  const committed = commitWrite(
     ctx,
     {
       kind,
@@ -772,7 +961,9 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
           : FLAG_UNCLASSIFIED,
     },
     entries,
+    declared.accepted,
   )
+  const atomId = committed.atomId
 
   const result: WriteResult = {
     atomId,
@@ -792,6 +983,11 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   }
   if (reviewNotes.length > 0) result.review = reviewNotes
   if (dup.scanned > 0) result.reviewScan = { scanned: dup.scanned, truncated: dup.truncated }
+  // 声明边的两个去处：落库了几条（事实）与被拒的那几条（拒因）。
+  // 两者都是**回执**，不改变本函数其余行为 —— 与写入侧审核同一层。
+  if (committed.edgesDeclared > 0) result.edgesDeclared = committed.edgesDeclared
+  const edgesRejected = declared.rejected.concat(committed.edgesRejected)
+  if (edgesRejected.length > 0) result.edgesRejected = edgesRejected
   // 位标志交给回执（判据 6）：只给数，不给解释 —— 解释在工具层统一写一处。
   if (newTopic)
     result.flags =
@@ -834,12 +1030,20 @@ export async function writeReviewed(ctx: WriteCtx, input: WriteInput): Promise<R
 
   const split = length.action === 'split'
   const results: WriteResult[] = []
-  for (const seg of length.segments) {
+  for (const [i, seg] of length.segments.entries()) {
     // 切分后**不沿用 topic_hint**：一段长文本里的几件事本来就不该被硬塞进同一个主题，
     // 沿用它等于把「原文是一整块」这个假设原样带进切分结果，而那正是切分要拆掉的东西。
     // 单条写入（action='keep'）时原样透传，行为与改动前逐字一致。
+    //
+    // 声明边同理**只落在第一条**：切分后的几段是几件不同的事，把同一批关系挂到每一段上
+    // 会凭空多出几条边（破坏「事务内固定行数」的那个上界），而模型声明时说的是「这一条」。
     results.push(
-      await writeAtom(ctx, { ...input, text: seg, topicHint: split ? undefined : input.topicHint }),
+      await writeAtom(ctx, {
+        ...input,
+        text: seg,
+        topicHint: split ? undefined : input.topicHint,
+        edges: i === 0 ? input.edges : [],
+      }),
     )
   }
   return { length, results }

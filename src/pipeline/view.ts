@@ -11,7 +11,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
-import { GRAPH_KINDS } from '../graph/infer.js'
+import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
 import { TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
 
@@ -219,7 +219,7 @@ function pathLinesFor(
   // 另一端：边的一端落进锚里时，邻居是另一端。两端都是 atom 已由 WHERE 保证。
   const other = 'CASE WHEN e.src_id IN (' + ph + ') THEN e.dst_id ELSE e.src_id END'
   const sql =
-    'SELECT e.kind AS kind, e.confidence AS conf, b.id AS oid, b.summary AS summary FROM edge e' +
+    'SELECT e.kind AS kind, e.confidence AS conf, e.origin AS origin, b.id AS oid, b.summary AS summary FROM edge e' +
     ' JOIN atom b ON b.id = ' +
     other +
     " WHERE e.src_type = 'atom' AND e.dst_type = 'atom'" +
@@ -243,6 +243,7 @@ function pathLinesFor(
   const rows = db.prepare(sql).all(...args) as Array<{
     kind: string
     conf: number
+    origin: string
     oid: number | bigint
     summary: string
   }>
@@ -252,9 +253,13 @@ function pathLinesFor(
     const id = Number(r.oid)
     if (exclude.has(id) || seen.has(id)) continue
     seen.add(id)
-    out.push(
-      '[' + r.kind + ' ' + Number(r.conf).toFixed(2) + '] ' + clip(String(r.summary), PATH_SUMMARY_CHARS),
-    )
+    // 声明边与推断边**分开标**：前者是模型说过的（真相源，重建后仍在），后者是向量近邻
+    // （派生物，重建会整批换掉）。两者在注入文本里长得一样时，模型无法判断这条线索
+    // 该不该信 —— 一句「·声明」把这件事说清，且不占置信度那格（declared 恒为 1.0，
+    // 显示出来只是噪声）。
+    // ORDER BY confidence DESC 因此也把声明边排在推断边前面：声明就是证据。
+    const mark = String(r.origin) === DECLARED_ORIGIN ? '·声明' : ' ' + Number(r.conf).toFixed(2)
+    out.push('[' + r.kind + mark + '] ' + clip(String(r.summary), PATH_SUMMARY_CHARS))
   }
   return out
 }

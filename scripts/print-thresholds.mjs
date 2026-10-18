@@ -126,6 +126,9 @@ const EXEMPT_NON_NUMERIC = {
   EMPTY_VOCAB: '空词表实现，不是阈值',
   SEPARATOR: '正则',
   HAN: '正则',
+  DECLARED_EDGE_TYPE_RE:
+    '正则：声明边 type 的字符集（小写字母 / 数字 / 下划线）。长度上限另有变量 —— ' +
+    'DECLARED_EDGE_TYPE_MAX 已登记进阈值表',
   VERSION: '插件版本（读自 package.json）',
   SAMPLE_DDL: 'SQL 文本（样本库的建表语句，只此一份）',
   Config: 'zod schema 定义体，不是数值常量（其默认值在阈值表里逐项登记）',

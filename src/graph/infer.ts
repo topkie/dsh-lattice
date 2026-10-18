@@ -21,12 +21,24 @@
 //
 // **幂等**：inferred 边是派生物（schema.ts 的设计要点第 1 条），每次重建先删掉自己上次
 // 写的那批。declared / untyped 边一律不动 —— 它们不是这个模块的产出。
+//
+// **第三个边源不进这个模块**：模型在写入时声明的 `declared` 边（origin = declared，
+// 见 pipeline/write.ts）。它们由写入落在同一个事务里，这里只**读**它们（图路白名单
+// 认 related，计数见 edgeOriginCounts），重建时按 origin 跳过。
 
 import type { DatabaseSync } from 'node:sqlite'
 import { decodeVec, VEC_DIM } from '../util/vec.js'
 
 /** 每条边在库里的来源标记。declared 是真相源，inferred 由本模块重算。 */
 export const INFERRED_ORIGIN = 'inferred'
+
+/**
+ * 写入方显式声明的边（`lattice_write` 的 `edges` 参数）。
+ *
+ * 本模块**只读不写**：重建只删自己那批 `inferred`，这一类一行都不动 —— 判据就是
+ * 「重算不覆盖声明」。所以它没有列进上面那段「幂等」的处理，也不需要。
+ */
+export const DECLARED_ORIGIN = 'declared'
 
 /**
  * 每 atom 的**目标**出度：向量近邻保留几个。
@@ -53,8 +65,17 @@ export const OUT_DEGREE_CAP = 16
 /** 全量两两比较的规模上限；超出时拒绝推断并如实报告，而不是安静地跑上几分钟。 */
 export const GRAPH_INFER_MAX_ATOMS = 4000
 
-/** 图路认的 kind 白名单，与 search.ts 的图路 SQL 必须一致。 */
-export const GRAPH_KINDS: readonly string[] = ['near', 'co_occur', 'refines', 'requires']
+/**
+ * 图路认的 kind 白名单，与 search.ts 的图路 SQL 必须一致。
+ *
+ * `related` 是模型**声明**的 kind（T38）：它带来的候选不在向量路里，图路因此第一次
+ * 有「非几何」的输入可引进 —— 此前四类 kind 里三类没有写入方，实际只有 near，
+ * 而 near 与向量路同源（search.ts 的 freshGraph 过滤就是在处理这件事）。
+ *
+ * `supersedes` / `duplicate` **刻意不在表里**：它们服务于「只出一条更高分的」
+ * （§24），不是邻居扩展信号。加进来会让「已被取代」的条目重新进入候选。
+ */
+export const GRAPH_KINDS: readonly string[] = ['near', 'co_occur', 'refines', 'requires', 'related']
 
 export interface InferOptions {
   /** 目标出度；默认 NEAR_K。 */
@@ -245,11 +266,15 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
     bump(degIn, e.d)
   }
 
+  // **DO NOTHING 而不是 DO UPDATE**：上一次的 inferred 行刚被整批删掉，所以这里撞上的
+  // 只可能是**非派生**的边 —— 主要是模型声明的（origin = declared）。改成 DO UPDATE
+  // 会把它改写成 inferred：那条声明当场从真相源变成派生物，下一次重建就会连同 inferred
+  // 一起删掉。同一批 edges 里不会出现重复键（近邻按 atom 去重、duplicate 来自
+  // atom_pair 的唯一键），所以这里不需要「更新已有行」这层语义。
   const ins = db.prepare(
     'INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
-      'ON CONFLICT(src_type, src_id, dst_type, dst_id, kind) DO UPDATE SET ' +
-      'confidence = excluded.confidence, origin = excluded.origin, created_at = excluded.created_at',
+      'ON CONFLICT(src_type, src_id, dst_type, dst_id, kind) DO NOTHING',
   )
   let removedEdges = 0
   db.exec('BEGIN IMMEDIATE')
@@ -313,6 +338,28 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
       stats.meanOutDegree,
     stats,
   }
+}
+
+/**
+ * 边表的 origin 分布。图路状态要把「声明」与「推断」分开报数。
+ *
+ * **为什么要分开报**：图路非 0 有两种完全不同的成因 —— 模型声明的关系，与向量近邻的
+ * 推断。合成一个数之后，「图路有值」这句话不可解释：读者分不清它来自真相源还是派生物，
+ * 也就分不清「重建之后它会消失吗」。
+ *
+ * 只做一次 GROUP BY，边表规模是 atom 数的常数倍（每 atom ≤ NEAR_K 条 near 边）。
+ */
+export function edgeOriginCounts(db: DatabaseSync): { declared: number; inferred: number } {
+  const rows = db.prepare('SELECT origin, COUNT(*) AS n FROM edge GROUP BY origin').all() as Array<{
+    origin: string
+    n: number | bigint
+  }>
+  const out = { declared: 0, inferred: 0 }
+  for (const r of rows) {
+    if (r.origin === DECLARED_ORIGIN) out.declared = Number(r.n)
+    else if (r.origin === INFERRED_ORIGIN) out.inferred = Number(r.n)
+  }
+  return out
 }
 
 /**

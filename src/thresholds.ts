@@ -102,6 +102,8 @@ import {
   RECALIBRATE_SAMPLE_LIMIT,
 } from './calibration/trigger.js'
 import {
+  DECLARED_EDGE_CONFIDENCE,
+  DECLARED_EDGE_TYPE_MAX,
   DEFAULT_THRESHOLDS,
   DEFAULT_TOP_N,
   DELTA_PEAK,
@@ -1918,8 +1920,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => OUT_DEGREE_CAP,
     definedBy: { file: 'src/graph/infer.ts', name: 'OUT_DEGREE_CAP' },
     affects:
-      '出度硬上限，生成侧（inferEdges）与查询侧（graphPath 的每个种子）各用一次：' +
-      '生成侧超出部分被截断，查询侧每个种子最多贡献这么多条候选',
+      '出度硬上限，三处各用一次：生成侧（inferEdges）超出部分被截断；查询侧（graphPath 的' +
+      '每个种子）最多贡献这么多条候选；写入侧（声明边）超过条数的边被拒 —— 否则模型可以' +
+      '用声明绕过「每 atom 出度 ≤ 16」这条不变量',
     calibration: {
       evidence:
         '**设计文档给的值，未在本库标定**：§33 的降级路径写「出度硬上限（建议 16）+ confidence ' +
@@ -1946,6 +1949,39 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-17',
     },
     variesWith: ['机器算力', '单次召回可接受的阻塞时长', '是否改成近邻候选而非全量成对'],
+  },
+  {
+    name: 'DECLARED_EDGE_CONFIDENCE',
+    area: '图扩展',
+    value: () => DECLARED_EDGE_CONFIDENCE,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DECLARED_EDGE_CONFIDENCE' },
+    affects:
+      '写入声明边（origin = declared）时的 confidence：它是一个常量，不是相似度。' +
+      '只参与图路内部排序（view.ts 的路段按 confidence 降序，声明边因此排在推断边之前），' +
+      '不进任何原子的打分 —— 打分只看四路召回的名次',
+    calibration: {
+      evidence:
+        '**设计取值，不是标定**：裁决把 declared 定义为真相源，而「声明」本身就是证据，' +
+        '因此给满 1.0，与 near 边「没有证据时给中位」的 0.5 相反。' +
+        '取它而不是别的数**不改变任何排序**：图路只提供候选与名次，confidence 只决定' +
+        '一跳邻居内部的先后；T38 的 20 条 gold 对照里逐条名次不变',
+    },
+    variesWith: ['（不应变：改它只会改变同行内声明边之间的显示顺序）'],
+  },
+  {
+    name: 'DECLARED_EDGE_TYPE_MAX',
+    area: '图扩展',
+    value: () => DECLARED_EDGE_TYPE_MAX,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DECLARED_EDGE_TYPE_MAX' },
+    affects:
+      '写入声明边时 type 的字符数上限：超过即拒这条边（不拒记忆），拒因随回执返回。' +
+      '字符集另有判据（小写字母 / 数字 / 下划线，正则见 write.ts 的 DECLARED_EDGE_TYPE_RE）',
+    calibration: {
+      evidence:
+        '**护栏，不是标定**：现有五类 kind 最长 10 个字符（supersedes），32 留两倍余量给' +
+        '项目自定义的关系名；再长就会挤占回执与注入文本，且没有任何已知用法需要它',
+    },
+    variesWith: ['模型自取关系名的实际长度分布（本项目尚无这份实测）'],
   },
   // ────────────────────────────── 降级日志（src/log/）──────────────────────────────
   //

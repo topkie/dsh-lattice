@@ -22,7 +22,8 @@ import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
 import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef } from '../samples/index.js'
-import { ForgottenError, writeReviewed } from '../pipeline/write.js'
+import { type DeclaredEdgeInput, ForgottenError, writeReviewed } from '../pipeline/write.js'
+import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import {
   getRuntime,
   maybeRecalibrate,
@@ -74,6 +75,15 @@ function textOutput() {
  * 2026-10-17 修正：`isWeakMatch()` 改为接受 `briefMin`，调用处传 `view.briefMin`。
  */
 export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
+
+/**
+ * 有命中时追加在召回结果末尾的一句：关系可以显式声明（T38 的可发现性）。
+ *
+ * **只在返回文本里**：不改排序、不写库（判据就是「跑前后 atom / edge 行数与 data_version
+ * 不变」）。写在末尾而不是开头，是因为它是一条「还有别的用法」的提示，不该挤在
+ * 库现状与锚段之间抢注意力。
+ */
+export const DECLARED_EDGE_HINT = '关系可显式声明：lattice_write 的 edges。'
 
 /**
  * 这次召回的结果值不值得给模型看 —— 是否该在结果前提示「可能不相关」。
@@ -163,6 +173,23 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         type: 'number',
         description: '取代哪条旧记忆的 id（改口时用）；旧条只标记，不删。',
       },
+      edges: {
+        type: 'array',
+        description:
+          '关系边：[{type, target}]。type 推荐 related / refines / supersedes / duplicate / requires，' +
+          '自取须小写（字母、数字、下划线，≤32 字符）；target 是已有记忆 id。' +
+          '最多 ' +
+          OUT_DEGREE_CAP +
+          ' 条；不合法的边被跳过并逐条说明。',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            type: { type: 'string', required: true, description: '关系类型，推荐值见上' },
+            target: { type: 'number', required: true, description: '已有记忆的 id' },
+          },
+        },
+      },
     },
     output: textOutput(),
     async execute(args: Record<string, unknown>) {
@@ -173,6 +200,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const hint = typeof args?.topic_hint === 'number' ? args.topic_hint : undefined
       const sup =
         typeof args?.supersedes === 'number' && Number.isFinite(args.supersedes) ? args.supersedes : undefined
+      // 形状由 write.ts 的 validateDeclaredEdges 校验：工具层**原样搬运**，连「不是数组」
+      // 也交给它 —— 否则那种输入会被这里静默丢掉，调用方看不到任何说明。
+      const edges = args?.edges === undefined ? undefined : (args.edges as DeclaredEdgeInput[])
       let out
       try {
         // 写入侧审核层（M3-T22）在 writeReviewed 里：长度类**自动处理**（过短拦下 / 过长切分），
@@ -185,6 +215,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           refs,
           topicHint: hint,
           origin: str(args?.origin, 'model'),
+          edges,
         })
       } catch (e) {
         // 防写回拦下（§44）。**不静默丢弃**：把「被拒了、以及为什么」原样交回写入方，
@@ -248,9 +279,21 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         // 重复 / 高相似的提示挂在这里。**写入已经发生**，提示只是让调用方知道
         // 「库里另有一条与它重合」—— 处置权在它手上。
         for (const n of r.review ?? []) lines.push(n.message)
+        // 声明边（T38）：落库的与没落库的分开说。**只拒边、不拒记忆** ——
+        // 拒因必须回显，否则调用方会以为关系已经建立（与防写回同一条纪律）。
+        if (r.edgesDeclared !== undefined) lines.push('关系 ' + r.edgesDeclared + ' 条（声明）')
+        for (const n of r.edgesRejected ?? []) {
+          const label =
+            (n.type === '' ? '（无 type）' : n.type) + (n.target === null ? '' : ' → #' + n.target)
+          lines.push('关系未建立：' + label + '，' + n.reason)
+        }
       })
       if (multi) {
         lines.push('（原文被切分，topic_hint 未沿用：各段各自落位，以免把几件事硬塞进同一个主题。）')
+        // 边只落在第一条。不说的话，调用方会以为每一段都挂上了同一批关系。
+        if (out.results.some((r) => r.edgesDeclared !== undefined || r.edgesRejected !== undefined)) {
+          lines.push('（关系只落在第一条。）')
+        }
       }
 
       // 写入侧重标尝试（T44 判据 7）：**异步、不 await** —— 写入的返回不该等一次标定。
@@ -366,7 +409,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         /* 只读连接等场景下写不了，不影响召回结果 */
       }
       if (recalled.hits.length === 0) return notes.join('\n') + '\n\n没有找到相关记忆。'
-      return notes.join('\n') + '\n\n' + view.text
+      return notes.join('\n') + '\n\n' + view.text + '\n\n（' + DECLARED_EDGE_HINT + '）'
     },
   })
 
@@ -412,6 +455,27 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (String(row.origin) === 'user') meta.push('用户说的')
       else if (String(row.origin) === 'import') meta.push('导入的')
       if (row.superseded_by !== null) meta.push('已被 #' + Number(row.superseded_by) + ' 取代')
+      // 声明边（T38）：展开时把这条记忆**说过的**关系列出来，模型才能核对
+      // 「我声明的那条关系在不在」。只列 origin = declared 且方向是「这条 → 别条」的：
+      // 推断出来的 near 边是派生物（召回【路】段已经在展示），方向反过来的边去查另一端更自然。
+      const declared = rt.db
+        .prepare(
+          'SELECT e.kind AS kind, e.dst_id AS oid, b.summary AS summary FROM edge e' +
+            ' JOIN atom b ON b.id = e.dst_id' +
+            " WHERE e.src_type = 'atom' AND e.dst_type = 'atom' AND e.origin = ? AND e.src_id = ?" +
+            ' ORDER BY e.id LIMIT ?',
+        )
+        .all(DECLARED_ORIGIN, Number(row.id), OUT_DEGREE_CAP) as Array<{
+        kind: string
+        oid: number | bigint
+        summary: string
+      }>
+      const tail: string[] = []
+      if (declared.length > 0) {
+        tail.push('', '关系（声明）' + declared.length + ' 条：')
+        for (const d of declared)
+          tail.push('- ' + String(d.kind) + ' → #' + Number(d.oid) + ' ' + String(d.summary))
+      }
       return [
         '#' +
           Number(row.id) +
@@ -422,6 +486,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           (meta.length > 0 ? '（' + meta.join('，') + '）' : ''),
         '',
         String(row.text),
+        ...tail,
       ].join('\n')
     },
   })

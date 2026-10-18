@@ -36,6 +36,13 @@
   （二次确认，只删日志文件，不碰主库）
 - `lattice_list`：列目录（id / 类型 / 摘要 / 所有权 / scope / 主题 / 取回次数），分页并可按
   条件过滤 —— 补上「库里有什么」这个此前无法被回答的问题
+- **声明关系边**：`lattice_write` 新增 `edges: [{type, target}]`，把「这两条记忆是什么关系」
+  写成 `origin = declared` 的边，与写入**同一个事务**落库。type 不做白名单，只校验长度
+  （≤32 字符）与字符集（小写字母、数字、下划线），推荐 related / refines / supersedes /
+  duplicate / requires；一条记忆最多 16 条，不合法的边**只跳过并回执**，记忆照写。
+  `related` 进图路（库里只有声明边时图路也有输入），`supersedes` / `duplicate` 不进；
+  召回元数据把声明边与推断边**分开报数**，注入的路段按 origin 分标；全量重建只删
+  `origin = 'inferred'`，声明边一行不动；声明边**不写样本库**
 - 迁移与评测脚本：现有卡片迁移、等 token 召回对比、多组真实模型验证
 - 存储层：单库 SQLite schema，含 atom / topic / entry / edge 等表与两层检索索引
   （正文 trigram + 入口 bigram）

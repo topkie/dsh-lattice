@@ -13,7 +13,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
-import { ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
 
 /** 召回路的名字，也是融合时的权重键。 */
 export type Channel = 'vec' | 'entry' | 'body' | 'graph'
@@ -89,11 +89,16 @@ export interface RecallMeta {
    */
   topCosine: number
   /**
-   * 图路的输入状态（见 graph/infer.ts 的 InferOutcome.status）。
+   * 图路的输入状态：`<状态>（声明边 N 条，推断边 M 条）`。状态前缀是
+   * graph/infer.ts 的 InferOutcome.status 原值。
    *
-   * 为什么必须报出来：图路为空有两种完全不同的原因 —— 「库里还没有推断边」与
+   * 为什么必须报出来：图路为空有两种完全不同的原因 —— 「库里还没有边」与
    * 「有边但这次没扩展出东西」。前者是接线问题，后者是数据性质。不区分就会让
    * 「图路恒为 0」这种故障再次以一个安静的数字通过验收。
+   *
+   * **两种边分开报数**：图路非 0 可能来自模型声明的关系（真相源，重建后仍在），也可能
+   * 来自向量近邻的推断（派生物，重建会整批换掉）。合成一个数时「图路有值」不可解释 ——
+   * 读者分不清它是不是重建一次就没了。
    */
   graphStatus: string
   elapsedMs: number
@@ -583,7 +588,12 @@ export function recall(
   const E = entryPath(db, q, kLex, scope)
   const B = bodyPath(db, q, kLex, scope)
   // 图路的输入是推断边（src/graph/infer.ts）：库里还没有时先建一次。
-  const graphStatus = ensureGraphOnce(db)
+  // 建完再读 origin 分布，所以这一次重建的结果也在报出的数里。
+  // 声明边（origin = declared）不是本模块的产出，但它同样进图路（GRAPH_KINDS 有 related）——
+  // 分开报，读者才知道「图路有值」是来自真相源还是派生物。
+  const graphEdges = edgeOriginCounts(db)
+  const graphStatus =
+    ensureGraphOnce(db) + '（声明边 ' + graphEdges.declared + ' 条，推断边 ' + graphEdges.inferred + ' 条）'
   const G = graphPath(db, A.slice(0, DEFAULT_SEED_COUNT), kGraph, scope)
 
   // 图路只负责**引入别处没有的候选**，不对已有候选重复计票。
