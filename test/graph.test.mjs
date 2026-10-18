@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
 import { ensureGraphEdges, inferEdges } from '../dist/graph/infer.js'
+import { recall } from '../dist/pipeline/search.js'
 import { assembleView } from '../dist/pipeline/view.js'
 import { VEC_DIM } from '../dist/util/vec.js'
 
@@ -59,8 +60,8 @@ function blobOf(v) {
   return b
 }
 
-/** 往库里塞一个带真向量的 atom，返回它的 id。 */
-function seedAtom(topicId, text, vec) {
+/** 往库里塞一个带真向量的 atom，返回它的 id。scope 默认 global。 */
+function seedAtom(topicId, text, vec, scope = 'global') {
   const now = Date.now()
   if (!db.prepare('SELECT 1 AS ok FROM topic WHERE id = ?').get(topicId)) {
     db.prepare(
@@ -73,13 +74,9 @@ function seedAtom(topicId, text, vec) {
         Q +
         '结论' +
         Q +
-        ', ?, ?, ?, ?, 0.8, ' +
-        Q +
-        'global' +
-        Q +
-        ', NULL, NULL, NULL, NULL, 0, ?, ?)',
+        ', ?, ?, ?, ?, 0.8, ?, NULL, NULL, NULL, NULL, 0, ?, ?)',
     )
-    .run(text, String(text).slice(0, 40), blobOf(vec), topicId, now, now)
+    .run(text, String(text).slice(0, 40), blobOf(vec), topicId, scope, now, now)
   const id = Number(r.lastInsertRowid)
   db.prepare(
     'INSERT INTO atom_topic(atom_id, topic_id, weight, origin) VALUES (?, ?, 1.0, ' + Q + 'primary' + Q + ')',
@@ -218,6 +215,18 @@ describe('注入组装：路段只认 atom 之间的边', () => {
     assert.ok(!view.text.includes('【路】'), '不该把 topic 边的另一端当成邻居')
   })
 
+  it('路段邻居也按 scope 过滤：global 的锚不列别的域的邻居', () => {
+    const a = seedAtom(1, '甲条记忆的正文', unit([1, 0.9]))
+    const b = seedAtom(1, '乙条记忆的正文', unit([1, 0.85]), 'proj-x')
+    insertEdge('atom', a, 'atom', b, 'near', 0.9, 'inferred')
+    const res = recallOf([hit(a, 1, '甲的摘要', 1)], [{ topicId: 1, label: 'T1', hits: 1 }])
+    assert.ok(assembleView(db, res, {}).text.includes('乙条记忆'), '不传 scope 时邻居照常出现')
+    assert.ok(
+      !assembleView(db, res, { scope: 'global' }).text.includes('乙条记忆'),
+      '传了 scope 就不该把别域的邻居写进注入文本',
+    )
+  })
+
   it('atom 之间的 near 边会进路段', () => {
     const a = seedAtom(1, '甲条记忆的正文', unit([1, 0.9]))
     const b = seedAtom(1, '乙条记忆的正文', unit([1, 0.85]))
@@ -229,5 +238,34 @@ describe('注入组装：路段只认 atom 之间的边', () => {
     )
     assert.ok(view.text.includes('【路】'))
     assert.ok(view.text.includes('乙条记忆'), '邻居的摘要该出现在路段里')
+  })
+})
+
+describe('图路：一跳邻居同样受 scope 约束', () => {
+  it('scope=global 的召回不会经边把项目域的 atom 带进来', () => {
+    const a = seedAtom(1, '依赖解析要开 hoisted', unit([1, 0.9, 0.1]))
+    // 词面刻意与上一条不同（避开重复判据），向量却几乎相同 —— 这样它只会经 near 边相连。
+    const b = seedAtom(2, '装包链接失败时先看解析策略', unit([1, 0.9, 0.12]), 'proj-x')
+    const built = inferEdges(db, DUP)
+    assert.ok(
+      built.stats.nearEdges > 0,
+      '两条的余弦远高于截断线，应建出 near 边：' + JSON.stringify(built.stats),
+    )
+
+    const qv = unit([1, 0.9, 0.1])
+    // 不带 scope：两条都可见，且图路确实引进了向量路以外的候选（先证明这条路有输入）。
+    const open = recall(db, '依赖解析要开 hoisted', qv, { topN: 24 })
+    assert.ok(
+      open.hits.some((h) => h.id === b),
+      '不带 scope 时项目域那条也应该在',
+    )
+    assert.ok(open.meta.counts.graph > 0, '图路应该有输入：' + JSON.stringify(open.meta.counts))
+
+    // 带 scope：只剩全局那条。过滤掉的是**邻居**，不是种子 —— 种子本来就在向量路里过了。
+    const g = recall(db, '依赖解析要开 hoisted', qv, { scope: 'global', topN: 24 })
+    assert.deepEqual(
+      g.hits.map((h) => h.id),
+      [a],
+    )
   })
 })

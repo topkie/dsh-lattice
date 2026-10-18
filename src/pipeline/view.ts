@@ -57,6 +57,13 @@ export interface ViewOptions {
   /** 路段的整体行数上限。 */
   pathLines?: number
   /**
+   * 召回时用的 scope；给了就按同一语义过滤【路】段的邻居。
+   *
+   * 为什么必须传：锚是召回结果（已按 scope 过滤），而【路】段的邻居是从边里取的。
+   * 不传时邻居不受限 —— 别的域里的 atom 摘要会写进注入文本，hits 里却没有它。
+   */
+  scope?: string
+  /**
    * 本地标定值（快照里的「精简档下界」）。**给了就用它，不再按库规模插值**。
    *
    * 为什么由调用方传：快照的读取发生在运行时（state.ts），而 pipeline 层不认识运行时 ——
@@ -196,10 +203,19 @@ function topicEntries(db: DatabaseSync, topicId: number, limit: number): string[
  *
  * kind 白名单与 search.ts 的图路共用同一个定义（GRAPH_KINDS），避免两处各写一份。
  */
-function pathLinesFor(db: DatabaseSync, anchors: number[], exclude: Set<number>, limit: number): string[] {
+function pathLinesFor(
+  db: DatabaseSync,
+  anchors: number[],
+  exclude: Set<number>,
+  limit: number,
+  scope?: string,
+): string[] {
   if (anchors.length === 0 || limit <= 0) return []
   const ph = anchors.map(() => '?').join(', ')
   const kinds = GRAPH_KINDS.map((x) => "'" + x + "'").join(', ')
+  // 邻居也要过 scope。锚是召回结果（已被 scope 过滤），邻居不是 —— 不过滤时【路】段会把
+  // 别的域里的 atom 摘要写进注入文本，虽然 hits 里没有它，模型照样看得见。
+  const scopeSql = scope === undefined ? '' : " AND (b.scope = ? OR b.scope = 'global')"
   // 另一端：边的一端落进锚里时，邻居是另一端。两端都是 atom 已由 WHERE 保证。
   const other = 'CASE WHEN e.src_id IN (' + ph + ') THEN e.dst_id ELSE e.src_id END'
   const sql =
@@ -218,8 +234,13 @@ function pathLinesFor(db: DatabaseSync, anchors: number[], exclude: Set<number>,
     '   AND b.id NOT IN (' +
     ph +
     ')' +
+    scopeSql +
     ' ORDER BY e.confidence DESC LIMIT ?'
-  const rows = db.prepare(sql).all(...anchors, ...anchors, ...anchors, ...anchors, limit) as Array<{
+  const args: Array<string | number> =
+    scope === undefined
+      ? [...anchors, ...anchors, ...anchors, ...anchors, limit]
+      : [...anchors, ...anchors, ...anchors, ...anchors, scope, limit]
+  const rows = db.prepare(sql).all(...args) as Array<{
     kind: string
     conf: number
     oid: number | bigint
@@ -382,7 +403,9 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
     }
 
     // ── 路：一跳关联 ──
-    const pathLines = st.pathsOff ? [] : pathLinesFor(db, anchorIds, new Set(anchorIds), st.pathLimit)
+    const pathLines = st.pathsOff
+      ? []
+      : pathLinesFor(db, anchorIds, new Set(anchorIds), st.pathLimit, opts.scope)
     const kept: string[] = []
     let pathsUsed = 0
     for (const l of pathLines) {

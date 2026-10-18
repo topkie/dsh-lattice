@@ -256,26 +256,42 @@ function bodyPath(db: DatabaseSync, query: string, k: number, scope?: string): n
  * 这里只做**出度**封顶，不设 confidence 线：截断线在生成侧（graph/infer.ts）是唯一
  * 真相源，两处各写一条线会让「边为什么没出来」变成一个要读两个文件才能回答的问题。
  */
-function graphPath(db: DatabaseSync, seeds: number[], k: number): number[] {
+function graphPath(db: DatabaseSync, seeds: number[], k: number, scope?: string): number[] {
   if (seeds.length === 0) return []
   const ph = seeds.map(() => '?').join(', ')
   const kinds = GRAPH_KINDS.map((x) => "'" + x + "'").join(', ')
-  const atomAtom = "src_type = 'atom' AND dst_type = 'atom' AND kind IN (" + kinds + ')'
+  // 列名带 e. 前缀：下面 JOIN 了 atom，而 atom 表也有一个 kind 列，不限定会报歧义。
+  const atomAtom = "e.src_type = 'atom' AND e.dst_type = 'atom' AND e.kind IN (" + kinds + ')'
+  // 一跳邻居同样要过 scope。种子（向量路）是过滤过的，**邻居不是** —— 只在种子那侧过滤时，
+  // 一条跨域的边就能把别的域的 atom 带进结果。实测（scripts/verify-scope-write.mjs 的
+  // 判据 2/4/5）：scope=global 的召回里曾出现项目域 atom，来源正是这条路。
+  const scopeSql = scope === undefined ? '' : " AND (a.scope = ? OR a.scope = 'global')"
   const sql =
     'WITH nb(seed, id, c) AS (' +
-    'SELECT e.src_id AS seed, e.dst_id AS id, e.confidence AS c FROM edge e WHERE ' +
+    'SELECT e.src_id AS seed, e.dst_id AS id, e.confidence AS c FROM edge e ' +
+    'JOIN atom a ON a.id = e.dst_id WHERE ' +
     atomAtom +
     ' AND e.src_id IN (' +
     ph +
-    ') UNION ALL ' +
-    'SELECT e.dst_id AS seed, e.src_id AS id, e.confidence AS c FROM edge e WHERE ' +
+    ')' +
+    scopeSql +
+    ' UNION ALL ' +
+    'SELECT e.dst_id AS seed, e.src_id AS id, e.confidence AS c FROM edge e ' +
+    'JOIN atom a ON a.id = e.src_id WHERE ' +
     atomAtom +
     ' AND e.dst_id IN (' +
     ph +
-    ')), ranked AS (' +
+    ')' +
+    scopeSql +
+    '), ranked AS (' +
     'SELECT id, c, ROW_NUMBER() OVER (PARTITION BY seed ORDER BY c DESC) AS rn FROM nb WHERE id <> seed' +
     ') SELECT id, MAX(c) AS s FROM ranked WHERE rn <= ? GROUP BY id ORDER BY s DESC LIMIT ?'
-  const rows = db.prepare(sql).all(...seeds, ...seeds, OUT_DEGREE_CAP, k) as Array<{
+  // 参数按 SQL 里出现的顺序压：种子 → 该路的 scope → 另一侧的种子 → scope → 出度 → 条数。
+  const args: Array<string | number> =
+    scope === undefined
+      ? [...seeds, ...seeds, OUT_DEGREE_CAP, k]
+      : [...seeds, scope, ...seeds, scope, OUT_DEGREE_CAP, k]
+  const rows = db.prepare(sql).all(...args) as Array<{
     id: number | bigint
     s: number
   }>
@@ -568,7 +584,7 @@ export function recall(
   const B = bodyPath(db, q, kLex, scope)
   // 图路的输入是推断边（src/graph/infer.ts）：库里还没有时先建一次。
   const graphStatus = ensureGraphOnce(db)
-  const G = graphPath(db, A.slice(0, DEFAULT_SEED_COUNT), kGraph)
+  const G = graphPath(db, A.slice(0, DEFAULT_SEED_COUNT), kGraph, scope)
 
   // 图路只负责**引入别处没有的候选**，不对已有候选重复计票。
   //

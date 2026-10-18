@@ -16,17 +16,25 @@
 //   2. scope=global 的召回里不含任何项目域 atom
 //   3. scope=<项目> 的召回里含该项目域的 atom，且含 global 的 atom（项目域要能看见全局）
 //   4. scope=<项目> 的召回里不含另一个项目域的 atom
-//   5. 向量路与入口/正文路都受 scope 约束（逐路计数核对）
+//   5. 另一侧的 scope=<项目> 同样只含自己的与 global 的（两侧各查一次，不只查一边）
+//   6. 逐路计数都受 scope 约束（global 的向量路严格更少）
+//   7. 图路有输入，且一跳邻居不越界 —— 「有输入」是前提：没有输入时这条路没被测到，
+//      不能算通过（否则「把图路关掉」也会让脚本变绿）
 //
 // 只看「该看到的在不在、不该看到的在不在」，不看名次 —— 名次受 RRF 分数并列影响，
 // 把它写进判据会让脚本在无关改动上闪断。
 //
-// 两处**已知的、本脚本如实报出**的事实（都不计成败 —— 它们是设计现状，不是本次收口范围）：
-//   ① 图路（graphPath，search.ts）不做 scope 过滤 —— 它从种子沿边一跳，种子是过滤过的。
-//   ② 搜索的图路只走 atom↔atom 边（kind IN near/co_occur/refines/requires），而写入路径
-//      （write.ts 的 INSERT INTO edge）只产 atom→**topic** 的 near 边。也就是说：当前代码里
-//      不存在 atom↔atom 边，图路在本脚本的所有 scope 下都为 0 —— 判据 6 里 graph=0 不是
-//      「过滤掉了」，是「这条路本来就没有输入」。脚本会把两类边各数一遍，让这一点可自查。
+// 两点与本脚本有关的来龙去脉，读输出时要先知道：
+//   ① 一跳邻居曾经不过 scope。图路的「种子」是向量路的结果（已过滤），但沿边出去的那一跳
+//      没有过滤 —— 一条跨域的边就能把别的域的 atom 带进来。判据 7 专门盯这件事：域外命中
+//      必须是 0，而那要求图路**确实有输入**（没有输入时这条判据不算通过，见它的 detail）。
+//      召回侧（search.ts 的 graphPath）与注入文本的【路】段（view.ts 的 pathLinesFor）两处
+//      都要过滤，只改一处会在另一处留下同样的泄漏。
+//   ② 这条路曾经长期为空。搜索的图路只认 atom↔atom 边（kind IN near/co_occur/refines/
+//      requires），而写入路径（write.ts 的 INSERT INTO edge）只产 atom→**topic** 的 near 边；
+//      atom↔atom 边是召回时由 graph/infer.ts 按余弦近邻现建的，本脚本四条卡片之间曾长期
+//      达不到建边线，于是「路是空的」反而让 ① 一直没暴露。脚本会把两类边各数一遍：边数为 0
+//      时，判据 7 的红不是「调用方写错了」，而是「这条链路没被测到」。
 
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -166,24 +174,24 @@ const cGlobal = counts('global')
 const cX = counts(PROJ_X)
 const fmt = (c) => 'vec ' + c.vec + ' / entry ' + c.entry + ' / body ' + c.body + ' / graph ' + c.graph
 check(
-  '6 向量路与入口/正文路都受 scope 约束',
+  '6 向量路与入口/正文路都受 scope 约束（图路见判据 7）',
   cGlobal.vec < cAll.vec && cGlobal.entry <= cAll.entry && cGlobal.body <= cAll.body,
   '不给 scope: ' + fmt(cAll) + '  |  global: ' + fmt(cGlobal) + '  |  ' + PROJ_X + ': ' + fmt(cX),
 )
 
-// 图路的两处现状：先看有没有输入（atom↔atom 边），再看它有没有把域外 atom 带进来。
+// 判据 7：图路有输入，且一跳邻居没有越界。
 const edgeCount = (where) => Number(db.prepare('SELECT COUNT(*) AS n FROM edge WHERE ' + where).get().n)
 const atomAtom = edgeCount("src_type = 'atom' AND dst_type = 'atom'")
 const atomTopic = edgeCount("src_type = 'atom' AND dst_type = 'topic'")
 const leak = asGlobal.filter((h) => h.scope !== 'global')
-say('')
-say('  图路的输入：atom↔atom 边 ' + atomAtom + ' 条 / atom→topic 边 ' + atomTopic + ' 条')
-say(
-  '  图路域外命中：' +
-    (atomAtom === 0
-      ? '不适用（本库没有 atom↔atom 边，图路无输入 —— 见文件头 ②）'
-      : leak.length +
-        (leak.length === 0 ? '（图路有输入，且未越界）' : '  ← ' + tags(leak) + '（见文件头 ①）')),
+check(
+  '7 图路有输入，且邻居不越界（' + atomAtom + ' 条 atom↔atom 边，域外命中 ' + leak.length + ' 条）',
+  atomAtom > 0 && leak.length === 0,
+  atomAtom === 0
+    ? '本库没建出 atom↔atom 边，这条路没被测到 —— 见文件头 ②'
+    : leak.length === 0
+      ? '输入 atom→topic 边 ' + atomTopic + ' 条（不参与图路）'
+      : '越界：' + tags(leak) + ' —— 见文件头 ①',
 )
 
 db.close()
