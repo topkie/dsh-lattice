@@ -424,7 +424,7 @@ describe('防写回的反馈：走真实工具入口', () => {
     }
   }
 
-  const RE_WRITTEN = /已写入 atom #(\d+)/
+  const RE_WRITTEN = /已写入记忆 #(\d+)/
   const RE_REJECT = /写入被拒/
   /** 查**工具那个库**（不是外层那个）—— 这条管线写在哪，就在哪查。 */
   const inToolDb = (id) => Number(toolDb.prepare('SELECT COUNT(*) AS n FROM atom WHERE id = ' + id).get().n)

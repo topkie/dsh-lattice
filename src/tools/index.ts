@@ -133,18 +133,15 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const writeTool = defineTool({
     name: 'lattice_write',
     description:
-      '记住一件事。写入后会自动编码、定位主题并生成检索入口。' +
-      '仅在内容值得跨会话复用时调用：结论、坑、步骤、参数；一次对话里临时说过的话不要写。' +
-      '写入侧有一层按「修复成本」分级的审核：正文短于 12 个字符的碎片会被拒收（请把它并进它解释的那条记忆），' +
-      '长于 600 字的会按句自动切成多条分别写入；与库里已有内容重复或高度相似时只给一条提示，不阻止写入。',
+      '记住一件事。仅在内容值得跨会话复用时调用：结论、坑、命令与参数、环境、步骤、数据；' +
+      '一次对话里临时说过的话不要写。太短的碎片会被拒收（请把它并进它解释的那条记忆），' +
+      '过长的会按句拆成多条分别写入；与已有内容重复或高度相似时只给一条提示，不阻止写入。',
     // 注意形状：parameters 是「属性名 → 值 schema」的映射，**不是** {type, properties}。
     // 必填写成属性上的 required: true。写错会在 defineTool 时就抛错，整个插件加载失败。
     parameters: {
       text: {
         type: 'string',
-        description:
-          '记忆正文。一句话讲清一个结论，不要塞进多个主题。' +
-          '至少要是一句完整的话（短于 12 个字符会被写入侧审核拒收）。',
+        description: '记忆正文。一条讲清一个结论，不要塞进多个主题；至少要是一句完整的话。',
         required: true,
       },
       kind: {
@@ -158,7 +155,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           '用户以后可能用哪些说法找它？同义词、俗称、报错原文都写上。' +
           '例：正文讲 nodeLinker=hoisted，refs 写 ["pnpm 依赖装不上", "符号链接失败"]。',
       },
-      topic_hint: { type: 'number', description: '已知归属主题 id 时直接指定，跳过几何定位' },
+      topic_hint: { type: 'number', description: '已知归属主题 id 时直接指定' },
       scope: { type: 'string', description: 'global 或项目键，默认 global' },
       origin: {
         type: 'string',
@@ -168,7 +165,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       },
       supersedes: {
         type: 'number',
-        description: '本条取代哪条旧记忆的 atom id（改口、修订时用）。旧条只被标记，不会删除。',
+        description: '本条取代哪条旧记忆的 id（改口、修订时用）。旧条只被标记，不会删除。',
       },
     },
     output: textOutput(),
@@ -222,7 +219,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
             : ''
         lines.push(
           (multi ? '第 ' + (i + 1) + '/' + out.results.length + ' 条：' : '') +
-            '已写入 atom #' +
+            '已写入记忆 #' +
             r.atomId +
             '：' +
             action +
@@ -237,7 +234,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
             (refs.length > 0 ? '（其中显式声明 ' + refs.length + ' 条）' : ''),
         )
         if (r.hintMiss !== undefined) {
-          lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按几何定位处理。')
+          lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按内容自动判断归属。')
         }
         // 类型归一可见：纠正不静默，否则调用方会以为库里真有那一类。
         if (r.kindAdjusted !== undefined) {
@@ -291,7 +288,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const recallTool = defineTool({
     name: 'lattice_recall',
     description:
-      '按需取回记忆。返回组装好的三段式文本：【锚】是记忆正文（每条带 atom id，' +
+      '按需取回记忆。返回组装好的三段式文本：【锚】是记忆正文（每条带 id，' +
       'id 自增即写入先后；标「我」的是用户说过的、「导入」的是外部来源的、' +
       '「已被 #N 取代」的是后来被修订掉的），【入口】是相关说法，【路】是关联线索。' +
       '凡是答案可能取决于「之前定过什么」的问题，都该先查：用户提过的事实与偏好、项目既有约定、' +
@@ -303,7 +300,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         description: '用你自己的话描述要找什么，不必迁就记忆里的措辞',
         required: true,
       },
-      budget: { type: 'number', description: '字符预算，默认取插件配置' },
+      budget: { type: 'number', description: '返回文本的字符预算' },
     },
     output: textOutput(),
     async execute(args: Record<string, unknown>) {
@@ -390,7 +387,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     parameters: {
       atom_id: {
         type: 'number',
-        description: '要展开的 atom id，从召回文本【锚】段的 [id] 取',
+        description: '要展开的记忆 id，从召回文本【锚】段的 [id] 取',
         required: true,
       },
       mode: { type: 'string', description: 'full（默认）或 related' },
@@ -454,7 +451,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       topic: { type: 'number', description: '只看某个主题下的记忆' },
       flags: {
         type: 'number',
-        description: '只看带某个标记的记忆（按位）：1 待拆分 / 2 歧义 / 4 未归类',
+        description:
+          '只看需要留意的记忆：2 = 两个主题都像（歧义）、4 = 没有合适的主题（未归类）；' +
+          '给 3 表示两类都要',
       },
       limit: { type: 'number', description: '本页条数，默认 20，上限 50' },
       offset: { type: 'number', description: '从第几条开始，用于翻页' },
@@ -505,13 +504,12 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     name: 'lattice_feedback',
     description:
       '对上一次 lattice_recall 的结果给出反馈：第几条有用（positive）或无关（negative）。' +
-      'ref 是上次召回文本【锚】段的 1-based 序号（不是 atom id），插件负责把它映射回那条记忆。' +
-      '这只是一条校准样本：不修改记忆、不建立关联边、不改变排序、不触发重标。' +
-      '拿不准时不要调用 —— 标错的样本会直接挪动判定切点。',
+      'ref 是上次召回文本【锚】段的 1-based 序号，不是记忆 id。' +
+      '它只记录这次判断：不修改记忆、不改变排序。拿不准时不要调用 —— 标错会让后续判断的依据变脏。',
     parameters: {
       kind: {
         type: 'string',
-        description: 'positive（这次召回有用）或 negative（与问题无关）。只能填这两个值。',
+        description: 'positive（这次召回有用）或 negative（与问题无关）',
         required: true,
       },
       ref: {

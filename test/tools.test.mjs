@@ -146,7 +146,7 @@ describe('lattice_write', () => {
     const out = await tool('lattice_write').execute({
       text: '系统代理必须走本地端口，否则访问境外源会超时。',
     })
-    assert.ok(out.includes('已写入 atom #'), '输出: ' + out)
+    assert.ok(out.includes('已写入记忆 #'), '输出: ' + out)
     assert.ok(out.includes('新建主题'), '首个 atom 应当新建主题，输出: ' + out)
     assert.ok(out.includes('入口'), '输出: ' + out)
   })
@@ -189,7 +189,7 @@ describe('写入侧审核：工具返回值（M3-T22）', () => {
     const out = await tool('lattice_write').execute({ text: '好' })
     assert.ok(out.includes('未写入'), '输出: ' + out)
     assert.ok(out.includes('合并'), '要给出出路，输出: ' + out)
-    assert.equal(out.includes('已写入 atom'), false, '不能既说未写入又说已写入')
+    assert.equal(out.includes('已写入记忆'), false, '不能既说未写入又说已写入')
     const listed = await tool('lattice_list').execute({})
     assert.ok(listed.includes('atom 0') || listed.includes('没有'), '库里不该有任何 atom，输出: ' + listed)
   })
@@ -200,7 +200,7 @@ describe('写入侧审核：工具返回值（M3-T22）', () => {
     assert.ok(out.includes('自动切成 3 条'), '输出: ' + out)
     assert.ok(out.includes('第 1/3 条'), '输出: ' + out)
     assert.ok(out.includes('第 3/3 条'), '输出: ' + out)
-    assert.equal((out.match(/已写入 atom #/g) ?? []).length, 3, '输出: ' + out)
+    assert.equal((out.match(/已写入记忆 #/g) ?? []).length, 3, '输出: ' + out)
     assert.ok(out.includes('topic_hint 未沿用'), '切分后不沿用 hint 这件事要说出来，输出: ' + out)
   })
 })
