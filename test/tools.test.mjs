@@ -82,15 +82,20 @@ afterEach(() => {
 })
 
 describe('工具注册', () => {
-  it('注册了 ping 与四个业务工具', () => {
+  // 模型侧工具数 = 6（ping + write / recall / expand / list / feedback）。
+  // 2026-10-18 按裁决 #30 增加 `lattice_feedback`：它只写独立样本库（裁决 #31），
+  // 所以「多一个工具」不等于「多一个写主库的入口」—— 见 test/samples.test.mjs。
+  it('注册了 ping 与五个业务工具（共六个）', () => {
     const names = tools.map((t) => t.name).sort()
     assert.deepEqual(names, [
       'lattice_expand',
+      'lattice_feedback',
       'lattice_list',
       'lattice_ping',
       'lattice_recall',
       'lattice_write',
     ])
+    assert.equal(names.length, 6)
   })
 
   /**
@@ -112,7 +117,13 @@ describe('工具注册', () => {
   })
 
   it('每个业务工具都有 description / parameters / execute', () => {
-    for (const n of ['lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list']) {
+    for (const n of [
+      'lattice_write',
+      'lattice_recall',
+      'lattice_expand',
+      'lattice_list',
+      'lattice_feedback',
+    ]) {
       const t = tool(n)
       assert.equal(typeof t.execute, 'function', n + ' 缺少 execute')
       assert.ok(String(t.description).length > 20, n + ' 的 description 太短，模型无法判断何时用')
@@ -126,6 +137,7 @@ describe('工具注册', () => {
     assert.deepEqual(tool('lattice_write').parameters.required, ['text'])
     assert.deepEqual(tool('lattice_recall').parameters.required, ['query'])
     assert.deepEqual(tool('lattice_expand').parameters.required, ['atom_id'])
+    assert.deepEqual(tool('lattice_feedback').parameters.required, ['kind', 'ref'])
   })
 })
 
@@ -345,6 +357,9 @@ describe('lattice_ping', () => {
       'lattice_recall',
       'lattice_expand',
       'lattice_list',
+      'lattice_feedback',
     ])
+    // 样本库只报条数，且没写过样本时不建库：三个数都是 0。
+    assert.deepEqual(j.samples, { total: 0, positive: 0, negative: 0 })
   })
 })

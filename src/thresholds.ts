@@ -104,6 +104,14 @@ import { GRAPH_INFER_MAX_ATOMS, NEAR_COS_MIN, NEAR_K, OUT_DEGREE_CAP } from './g
 import { LOG_FLUSH_WINDOW_MS, LOG_QUEUE_MAX, LOG_WRITE_FAILED_MIN_INTERVAL_MS } from './log/index.js'
 import { LOG_EXPORT_MAX_BYTES, LOG_EXPORT_MAX_ROWS } from './log/export.js'
 import { LOG_FILE_MAX_BYTES, LOG_KEEP_FILES, LOG_TOTAL_MAX_BYTES } from './log/store.js'
+import { SAMPLE_QUEUE_MAX } from './samples/index.js'
+import {
+  SAMPLE_MAX_ROWS,
+  SAMPLE_NEG_OBVIOUS_MAX,
+  SAMPLE_OBVIOUS_MAX_TOP1,
+  SAMPLE_RETAIN_DAYS,
+  SAMPLE_UNCERTAIN_MAX_TOP1,
+} from './samples/store.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
 export type ThresholdArea =
@@ -120,6 +128,7 @@ export type ThresholdArea =
   | '重聚类'
   | '图扩展'
   | '降级日志'
+  | '校准样本'
 
 /** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
@@ -1904,6 +1913,99 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-18',
     },
     variesWith: ['单行 detail 的长度', '浏览器/编辑器打开大文件的承受度'],
+  },
+  // ──────────────────────────── 校准样本（src/samples/）────────────────────────────
+  //
+  // 这一组的取值来源是 M4 开工裁决 #34（用户裁决），不是语料标定：样本库的容量与
+  // 负样本分档取决于「一次会话里模型会反馈几次」，本仓库还没有这份实测。
+  // 按本表纪律，如实写「未标定」，而不是编一个看起来有依据的场景。
+  {
+    name: 'SAMPLE_RETAIN_DAYS',
+    area: '校准样本',
+    value: () => SAMPLE_RETAIN_DAYS,
+    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_RETAIN_DAYS' },
+    affects: '淘汰：写样本时删掉 created_at 早于「现在 - 90 天」的行',
+    calibration: {
+      evidence:
+        '**未标定**：裁决 #34 ③ 定 90 天。理由是「跨一个季度的对照仍有意义，再久语料族' +
+        '大概率已经变了」—— 这是判断而非实测，样本的实际衰减速率没有测过',
+      at: '2026-10-18',
+    },
+    variesWith: ['语料族的更新周期', '重标频率'],
+  },
+  {
+    name: 'SAMPLE_MAX_ROWS',
+    area: '校准样本',
+    value: () => SAMPLE_MAX_ROWS,
+    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_MAX_ROWS' },
+    affects: '总量：超过 1 万条时按 created_at 淘汰最旧的（约 20 MB：512 维 x 4 B x 1 万）',
+    calibration: {
+      evidence:
+        '**未标定**：裁决 #34 ③ 定 1 万条。10 万条向量约 200 MB，已明确不可行；' +
+        '1 万条是「够切点估计、又不超过一个普通库的量级」的判断，不是按样本量需求算出来的',
+      at: '2026-10-18',
+    },
+    variesWith: ['切点估计所需的样本量', '愿意给的磁盘空间'],
+  },
+  {
+    name: 'SAMPLE_NEG_OBVIOUS_MAX',
+    area: '校准样本',
+    value: () => SAMPLE_NEG_OBVIOUS_MAX,
+    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_NEG_OBVIOUS_MAX' },
+    affects:
+      '「明显无关」负样本的上限：满了删最旧的、保留最近 2000 条。' +
+      '「不确定带」的那一档不设上限（它才是切点信息的来源）',
+    calibration: {
+      evidence:
+        '**未标定**：裁决 #34 ④ 定 2000 条。理由是该档「对切点信息量低」，只需要少量' +
+        '代表；具体多少条够，要等 T46 的重标样本量与切点偏移实测',
+      at: '2026-10-18',
+    },
+    variesWith: ['切点扫描对负样本数量的敏感度', '总条数上限'],
+  },
+  {
+    name: 'SAMPLE_OBVIOUS_MAX_TOP1',
+    area: '校准样本',
+    value: () => SAMPLE_OBVIOUS_MAX_TOP1,
+    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_OBVIOUS_MAX_TOP1' },
+    affects: '负样本分档：top1 低于 0.4 记为「明显无关」（这一档有 2000 条上限）',
+    calibration: {
+      evidence:
+        '**未标定**：裁决 #34 ④ 给出 0.4 / 0.6 两条线，但没有说明依据。' +
+        '可对照的实测只有一处，量级相近但口径不同：view.ts 注释里「无关查询 top1 上界 ' +
+        '0.398」（279 条库、24 条查询）、「0.515」（1374 条库）—— 说明这条线随库规模上移，' +
+        '固定 0.4 在大库上会把「有点关系」的召回记成明显无关',
+      at: '2026-10-18',
+    },
+    variesWith: ['库规模（无关 top1 随库长大上移）', '语料族', '编码模型'],
+  },
+  {
+    name: 'SAMPLE_UNCERTAIN_MAX_TOP1',
+    area: '校准样本',
+    value: () => SAMPLE_UNCERTAIN_MAX_TOP1,
+    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_UNCERTAIN_MAX_TOP1' },
+    affects: '负样本分档：top1 在 0.4~0.6 记为「不确定带」（优先保留，供切点扫描）',
+    calibration: {
+      evidence:
+        '**未标定**：裁决 #34 ④ 的 0.6。与上一条同源 —— 两条线一起定，分开调没有意义；' +
+        '它们的位置应当由 T46 的切点扫描给出，本表只记录当前取值',
+      at: '2026-10-18',
+    },
+    variesWith: ['库规模', '语料族', '编码模型', '切点的目标位置'],
+  },
+  {
+    name: 'SAMPLE_QUEUE_MAX',
+    area: '校准样本',
+    value: () => SAMPLE_QUEUE_MAX,
+    definedBy: { file: 'src/samples/index.ts', name: 'SAMPLE_QUEUE_MAX' },
+    affects: '缓冲：内存队列上限 64 条；满了丢最旧并计数，不阻塞召回、不抛错',
+    calibration: {
+      evidence:
+        '**未标定**：按「一次召回最多入队一条」推算。64 条足以吸收事件循环被占住的' +
+        '一整轮（对照 LOG_QUEUE_MAX 的 200 条：日志一次召回可能同时产生三条事件）',
+      at: '2026-10-18',
+    },
+    variesWith: ['事件循环被占住的时长', '单条样本的内存占用'],
   },
 ]
 

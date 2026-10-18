@@ -58,17 +58,26 @@ describe('插件契约', () => {
     assert.equal(typeof apply, 'function')
   })
 
-  it('激活时注册四个业务工具与一个健康检查', () => {
+  /**
+   * 模型侧的工具表是**闭集**，改它要先有裁决。
+   *
+   * 2026-10-18：按裁决 #30 新增第 6 个工具 `lattice_feedback`（样本反馈），
+   * 本条断言因此从「四个业务工具 + ping」改为「五个业务工具 + ping = 6」。
+   * 改这条的理由只该是「裁决表里多了一条」，不该是「代码里顺手多加了一个」。
+   */
+  it('激活时注册五个业务工具与一个健康检查（共六个，含 feedback）', () => {
     const ctx = fakeCtx()
     apply(ctx, baseConfig)
     const names = ctx.registered.map((t) => t.name).sort()
     assert.deepEqual(names, [
       'lattice_expand',
+      'lattice_feedback',
       'lattice_list',
       'lattice_ping',
       'lattice_recall',
       'lattice_write',
     ])
+    assert.equal(names.length, 6)
     for (const t of ctx.registered) assert.equal(typeof t.output.render, 'function')
   })
 
@@ -238,7 +247,7 @@ describe('插件契约', () => {
     assert.equal(res.out.body.error, 'bad-body')
   })
 
-  it('宿主没有 webServer 时不注册路由、不抛，四个工具照常在', () => {
+  it('宿主没有 webServer 时不注册路由、不抛，六个工具照常在', () => {
     const ctx = fakeCtx()
     assert.doesNotThrow(() => apply(ctx, baseConfig))
     assert.deepEqual(ctx.injected, [['webServer']], '依赖照样声明，只是不会执行')
@@ -246,6 +255,7 @@ describe('插件契约', () => {
     // 与上一条合起来钉死「静默跳过」：不报错，但也不能什么都不做。
     assert.deepEqual(ctx.registered.map((t) => t.name).sort(), [
       'lattice_expand',
+      'lattice_feedback',
       'lattice_list',
       'lattice_ping',
       'lattice_recall',

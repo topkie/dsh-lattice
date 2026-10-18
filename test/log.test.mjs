@@ -186,7 +186,14 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
     assert.equal(JSON.parse(rows[1].detail).reason, 'model_changed', '合法枚举原样保留')
   })
 
-  it('事件白名单覆盖草案里的全部十一类事件', () => {
+  /**
+   * 白名单是**闭集**：多一个事件就是多一条「什么东西可能落进磁盘」的路径。
+   *
+   * 2026-10-18 增 `samples.unavailable`（T44 的样本库）：它与 `log.write_failed` 同形 ——
+   * 旁路写不进时只记原因码。改这里的每一条都要能说出「为什么它必须落盘」，
+   * 否则下次就该删掉它而不是给测试打补丁。
+   */
+  it('事件白名单覆盖草案里的十二类事件', () => {
     assert.deepEqual(Object.keys(EVENT_DETAIL_KEYS).sort(), [
       'calib.recalibrate_done',
       'calib.recalibrate_failed',
@@ -199,6 +206,7 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
       'recall.lexical_degraded',
       'recall.short_term_miss',
       'recall.vector_missing',
+      'samples.unavailable',
     ])
     // 等级也白名单化：notice / info 不被接受。
     assert.equal(sanitizeEvent('info', 'encoder.unavailable', { reason: 'Error' }), null)

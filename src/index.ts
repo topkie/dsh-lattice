@@ -36,6 +36,7 @@ import {
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
 import { recall } from './pipeline/search.js'
 import { forgetAtom } from './pipeline/forget.js'
+import { sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -146,6 +147,13 @@ export const Config = z.object({
   cacheSize: z.number().min(0).default(0),
   /** 写锁等待上限毫秒；0 = 自动 */
   busyTimeout: z.number().min(0).default(0),
+  /**
+   * 校准样本的自动收集（默认开）。
+   *
+   * 关掉的是**自动收集**（负样本按纯度规则收集）；显式 `lattice_feedback` 照常记录 ——
+   * 那是模型对本次召回的显式判断，不是抽样。
+   */
+  samplesEnabled: z.boolean().default(true),
 })
 
 /**
@@ -212,6 +220,7 @@ export function apply(ctx: Context, config: unknown): void {
     },
     viewBudget: Number(cfg.viewBudget ?? 6000),
     topN: Number(cfg.topN ?? 24),
+    samplesEnabled: cfg.samplesEnabled !== false,
     resources: {
       mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,
       cacheSize: Number(cfg.cacheSize ?? 0) > 0 ? Number(cfg.cacheSize) : undefined,
@@ -320,7 +329,14 @@ export function apply(ctx: Context, config: unknown): void {
           calibration: { state: rt.calibration.state, reason: rt.calibration.reason ?? null },
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
-          tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list'],
+          tools: [
+            'lattice_ping',
+            'lattice_write',
+            'lattice_recall',
+            'lattice_expand',
+            'lattice_list',
+            'lattice_feedback',
+          ],
           encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
           thresholds: {
             tauJoin: cfg.tauJoin,
@@ -335,6 +351,9 @@ export function apply(ctx: Context, config: unknown): void {
             cacheSizeMB: Math.round(res.cacheSize / 1024 / 1024),
             busyTimeoutMs: res.busyTimeout,
           },
+          // 样本库只报条数：原文（哪怕一条摘录）都不该出现在健康检查里。
+          // 库文件不存在时报 0，不为了报数而建库。
+          samples: sampleStats(),
         })
       },
     }),

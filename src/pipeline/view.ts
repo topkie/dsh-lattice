@@ -72,6 +72,14 @@ export interface ViewResult {
   briefMin: number
   /** 完整文本，直接注入。 */
   text: string
+  /**
+   * 本次真正展示的 atom id，按**展示顺序**。
+   *
+   * 与 `anchors` 的区别：`anchors` 只是条数。给 id 是因为 `lattice_feedback` 的 `ref`
+   * 数的是模型看见的那几行（【锚】段），而预算裁剪后展示的条目是 `recalled.hits` 的前缀，
+   * 两者容易混淆 —— 把「展示的是哪几条」原样交出去，序号解析才有唯一的依据。
+   */
+  anchorIds: readonly number[]
   anchors: number
   entryTopics: number
   pathLines: number
@@ -431,6 +439,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
     tier,
     briefMin: inferred.briefMin,
     text: b.text,
+    anchorIds: b.anchorIds,
     anchors: b.anchorLines.length,
     entryTopics: b.entryLines.length,
     pathLines: b.pathLines.length,

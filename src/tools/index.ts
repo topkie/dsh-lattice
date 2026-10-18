@@ -1,22 +1,27 @@
-// 暴露给宿主的四个工具。
+// 暴露给宿主的五个业务工具（`lattice_ping` 在 index.ts 注册，共六个）。
 //
 // 只有工具，没有 hook —— 这是设计决定：禁用 LLM 后「轮次结束自动沉淀」那条路必然
 // 要调 LLM 做结构化，与本插件的定位冲突。写入与召回都必须是**显式动作**。
 //
-// 四个工具对应记忆的四个动作：
-//   lattice_write   记住一件事
-//   lattice_recall  按需取回（返回组装好的三段式文本，不是裸数组）
-//   lattice_expand  展开某条记忆的全文或它的兄弟
-//   lattice_list    列目录（「库里有什么」，只读、分页、可过滤）
+// 五个工具对应记忆行动的五个环节：
+//   lattice_write     记住一件事
+//   lattice_recall    按需取回（返回组装好的三段式文本，不是裸数组）
+//   lattice_expand    展开某条记忆的全文或它的兄弟
+//   lattice_list      列目录（「库里有什么」，只读、分页、可过滤）
+//   lattice_feedback  对上次召回给出「第几条有用 / 无用」（裁决 #30/#33）
 //
-// **还有第五个动作，但没有第五个工具**：删除。`lattice_forget` 刻意不在下面这个数组里
+// **还有第六个动作，但没有第六个工具**：删除。`lattice_forget` 刻意不在下面这个数组里
 // —— 理由见文件尾 `forgetTool` 上方那段注释。
+//
+// `lattice_feedback` 为什么是独立工具而不是挂在 write 上（裁决 #30）：写入是高频路径
+// （现在已经 8 个参数），反馈是低频动作；挂上去等于每次写入都替反馈付一次参数成本。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
+import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef } from '../samples/index.js'
 import { ForgottenError, writeReviewed } from '../pipeline/write.js'
 import {
   getRuntime,
@@ -112,6 +117,14 @@ function str(v: unknown, fallback = ''): string {
 }
 function num(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
+}
+
+/** 拒因里回显入参：把 undefined / 字符串 / 数字混成同一句话，调用方就改不对。 */
+function describeArg(v: unknown): string {
+  if (v === undefined) return '（未提供）'
+  if (typeof v === 'string') return '"' + v + '"'
+  if (typeof v === 'number') return String(v)
+  return typeof v
 }
 
 /** 构造三个工具的定义。cfg 在闭包里，apply 时解析一次。 */
@@ -264,7 +277,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       'id 自增即写入先后；标「我」的是用户说过的、「导入」的是外部来源的、' +
       '「已被 #N 取代」的是后来被修订掉的），【入口】是相关说法，【路】是关联线索。' +
       '凡是答案可能取决于「之前定过什么」的问题，都该先查：用户提过的事实与偏好、项目既有约定、' +
-      '踩过的坑、之前讨论过的方案。只有确实与历史无关的常识问答才不必查。',
+      '踩过的坑、之前讨论过的方案。只有确实与历史无关的常识问答才不必查。' +
+      '若【锚】段里某一条明显有用或明显无关，可用 lattice_feedback 反馈「第几条」（ref 是这里的 1-based 序号）。',
     parameters: {
       query: {
         type: 'string',
@@ -287,6 +301,19 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         // 本地标定值（快照）优先于按规模插值；未标定时为 undefined，pipeline 自己会回落。
         briefMin: rt.calibration.params?.briefMin,
       })
+      // 会话级「最近一次召回」：只留在内存里（裁决 #34 ⑥），lattice_feedback 的 ref 靠它解析。
+      // 记的是 view.anchorIds（真正展示给模型的那批），不是融合后的全部候选。
+      noteLastRecall({ ids: view.anchorIds, top1: recalled.meta.topCosine, vec: vq })
+      // 负样本自动收集：分类是纯逻辑，落盘由样本模块延后到下一轮事件循环 ——
+      // 召回路径上仍然没有同步 IO。开关关掉时这一步整体跳过，召回结果不受影响。
+      if (cfg.samplesEnabled !== false) {
+        collectAutoNegative({
+          query: q,
+          meta: recalled.meta,
+          vec: vq,
+          hitIds: recalled.hits.map((h) => h.id),
+        })
+      }
       const notes: string[] = [libraryLine(rt)]
       if (recalled.meta.vectorMissing) notes.push('（编码器不可用，本次为纯词面召回）')
       if (recalled.meta.lexicalDegraded) notes.push('（词面两路均未命中，仅向量路有结果）')
@@ -439,7 +466,58 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     },
   })
 
-  return [writeTool, recallTool, expandTool, listTool]
+  /**
+   * 校准样本的**唯一人工入口**（裁决 #30/#33）。
+   *
+   * 只写独立样本库，**不写 edge、不写主库、不触发重标**（裁决 #31：正样本是
+   * 「查询↔记忆」，edge 是「记忆↔记忆」，不是同一条数据）。`ref` 是上次召回的 1-based
+   * 序号，由插件映射回 atom id —— 模型管语义位置，插件管结构。
+   */
+  const feedbackTool = defineTool({
+    name: 'lattice_feedback',
+    description:
+      '对上一次 lattice_recall 的结果给出反馈：第几条有用（positive）或无关（negative）。' +
+      'ref 是上次召回文本【锚】段的 1-based 序号（不是 atom id），插件负责把它映射回那条记忆。' +
+      '这只是一条校准样本：不修改记忆、不建立关联边、不改变排序、不触发重标。' +
+      '拿不准时不要调用 —— 标错的样本会直接挪动判定切点。',
+    parameters: {
+      kind: {
+        type: 'string',
+        description: 'positive（这次召回有用）或 negative（与问题无关）。只能填这两个值。',
+        required: true,
+      },
+      ref: {
+        type: 'number',
+        description:
+          '上次召回结果里的 1-based 序号（召回文本【锚】段第几条）；越界会被拒绝，且拒因会写清原因。',
+        required: true,
+      },
+    },
+    output: textOutput(),
+    async execute(args: Record<string, unknown>) {
+      // 先确保运行时与样本库已配置：样本的落盘依赖 configureSamples。这一步不写主库
+      // （getRuntime 的写只发生在首次建库与迁移时）。
+      getRuntime(cfg)
+      const kind = str(args?.kind).trim()
+      if (kind !== 'positive' && kind !== 'negative') {
+        return '反馈被拒：kind 只能是 positive 或 negative，收到 ' + describeArg(args?.kind) + '。'
+      }
+      const resolved = resolveFeedbackRef(args?.ref)
+      if (!resolved.ok) return '反馈被拒：' + resolved.reason
+      const recorded = await recordSample({
+        kind,
+        source: 'feedback',
+        top1: resolved.top1,
+        vec: resolved.vec,
+        hitIds: [resolved.atomId],
+      })
+      const head = '第 ' + String(args?.ref) + ' 条（atom #' + resolved.atomId + '）判为 ' + kind + '。'
+      if (recorded) return '已记下反馈：' + head
+      return '反馈未写入样本库：' + head + '（样本库写失败，这条反馈已丢弃；记忆与召回不受影响。）'
+    },
+  })
+
+  return [writeTool, recallTool, expandTool, listTool, feedbackTool]
 }
 
 /**
