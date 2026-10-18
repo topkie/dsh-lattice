@@ -306,6 +306,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const rt = getRuntime(cfg)
       const q = str(args?.query).trim()
       if (q === '') return '查询为空。'
+      // 标定参数在**第一处等待点之前**取一次，这次召回整段只用这一代。
+      // 重标由写入侧异步触发，会在两次等待之间整体替换 rt.calibration —— 若等到编码返回
+      // 之后才读，同一次召回就会「按旧参数召回、按新参数注入」，中间隔了一次换代。
+      const calibParams = rt.calibration.params ?? null
       const vq = await runtimeEncode(cfg, q)
       const recalled = recall(rt.db, q, vq, { topN: cfg.topN })
       // 降级留痕：只入队，不阻塞召回（见 src/log/index.ts 的队列与批量窗口）。
@@ -313,7 +317,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const view = assembleView(rt.db, recalled, {
         budget: num(args?.budget, cfg.viewBudget),
         // 本地标定值（快照）优先于按规模插值；未标定时为 undefined，pipeline 自己会回落。
-        briefMin: rt.calibration.params?.briefMin,
+        briefMin: calibParams?.briefMin,
       })
       // 会话级「最近一次召回」：只留在内存里（裁决 #34 ⑥），lattice_feedback 的 ref 靠它解析。
       // 记的是 view.anchorIds（真正展示给模型的那批），不是融合后的全部候选。
