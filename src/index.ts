@@ -341,7 +341,7 @@ export function apply(ctx: Context, config: unknown): void {
   tools.register(
     defineTool({
       name: 'lattice_ping',
-      description: 'dsh-lattice 健康检查：返回插件版本与当前配置摘要。用于确认插件已正确加载。',
+      description: '健康检查：插件版本与配置摘要。',
       parameters: {},
       output: {
         schema: { type: 'string' },
