@@ -20,6 +20,12 @@ export const META_SOURCE = 'source'
 /** 生成者标识（脚本名或 'runtime'）。 */
 export const META_BUILDER = 'builder'
 
+/** 上次判 S 的时间（epoch 毫秒）：重标冷却期用它，不靠内存变量（重启即失）。 */
+export const META_CALIB_LAST_CHECK = 'calib_last_check_at'
+
+/** 上次重标失败的原因码：判据 8 要求「失败要有记录」，而且不能只活在日志里。 */
+export const META_CALIB_LAST_ERROR = 'calib_last_error'
+
 /** 写入一个键（已存在则覆盖）。 */
 export function setMeta(db: DatabaseSync, key: string, value: string, now = Date.now()): void {
   db.prepare(

@@ -76,6 +76,14 @@ import {
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import {
+  RECALIBRATE_COOLDOWN_MS,
+  RECALIBRATE_DRIFT,
+  RECALIBRATE_MIN_ATOMS,
+  RECALIBRATE_MIN_POSITIVE,
+  RECALIBRATE_OBVIOUS_LIMIT,
+  RECALIBRATE_SAMPLE_LIMIT,
+} from './calibration/trigger.js'
+import {
   DEFAULT_THRESHOLDS,
   DEFAULT_TOP_N,
   DELTA_PEAK,
@@ -2006,6 +2014,84 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-18',
     },
     variesWith: ['事件循环被占住的时长', '单条样本的内存占用'],
+  },
+  // ──────────────────────── 重标触发（calibration/trigger.ts）────────────────────────
+  {
+    name: 'RECALIBRATE_COOLDOWN_MS',
+    area: '校准样本',
+    value: () => RECALIBRATE_COOLDOWN_MS,
+    display: '12 小时',
+    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_COOLDOWN_MS' },
+    affects: '冷却：距上次判 S 不足 12 小时就不判、也不重标（省一次伪查询抽样）',
+    calibration: {
+      evidence:
+        '**无测量依据，是产品口味**（裁决 #35）：12 小时对应「一次写作会话」量级。没有任何测量能回答「12 小时比 6 小时更合适」',
+      at: '2026-10-18',
+    },
+    variesWith: ['用户的写作节奏', '库的变化速率'],
+  },
+  {
+    name: 'RECALIBRATE_MIN_ATOMS',
+    area: '校准样本',
+    value: () => RECALIBRATE_MIN_ATOMS,
+    display: '192（= TIER_SCALE_STABLE_ATOMS）',
+    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_ATOMS' },
+    affects: '闸①：库小于 192 条不重标（S 的抽样波动在这个规模下与漂移同量级）',
+    calibration: {
+      evidence: 'T23-b 降采样实验结论（阈值稳定所需的最小 atom 数 = 192），与锚点表的稳定下限同一个数',
+      at: '2026-10-18',
+    },
+    variesWith: ['查询集', '语料构成'],
+  },
+  {
+    name: 'RECALIBRATE_MIN_POSITIVE',
+    area: '校准样本',
+    value: () => RECALIBRATE_MIN_POSITIVE,
+    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_POSITIVE' },
+    affects: '闸④：正样本少于 10 条不重标（切点会被单条样本牵着走）',
+    calibration: {
+      evidence: '**未标定**（裁决 #35 的取值）：与写入节奏匹配的经验数，没有测量能给出「少于几条算不够」',
+      at: '2026-10-18',
+    },
+    variesWith: ['用户/模型的标注频率'],
+  },
+  {
+    name: 'RECALIBRATE_DRIFT',
+    area: '校准样本',
+    value: () => RECALIBRATE_DRIFT,
+    display: '0.01（约 1.6σ@192 维）',
+    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_DRIFT' },
+    affects: '闸②：S 与快照基准的差 ≤ 0.01 时不重标（噪声内不动）',
+    calibration: {
+      evidence:
+        'U9 噪声实测：192 维下 S 的 sd 约 0.0063，0.01 约 1.6σ —— 小于它的漂移分不清是库变了还是抽样噪声',
+      at: '2026-10-18',
+    },
+    variesWith: ['采样伪查询条数 m', '库规模'],
+  },
+  {
+    name: 'RECALIBRATE_SAMPLE_LIMIT',
+    area: '校准样本',
+    value: () => RECALIBRATE_SAMPLE_LIMIT,
+    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_SAMPLE_LIMIT' },
+    affects: '一次重标最多取多少条样本（分层取样的上限，不是样本库容量）',
+    calibration: {
+      evidence: '**未标定**：取样本库容量上限的五分之一；切点只由靠近阈值的样本决定，多取无信息',
+      at: '2026-10-18',
+    },
+    variesWith: ['样本库容量', '阈值附近的样本密度'],
+  },
+  {
+    name: 'RECALIBRATE_OBVIOUS_LIMIT',
+    area: '校准样本',
+    value: () => RECALIBRATE_OBVIOUS_LIMIT,
+    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_OBVIOUS_LIMIT' },
+    affects: '「明显无关」那一档在一次重标里最多取多少条（不确定带全取）',
+    calibration: {
+      evidence: '**未标定**：该档的信息量在「它们离得很远」，多取只是重复同一件事',
+      at: '2026-10-18',
+    },
+    variesWith: ['库规模', '负样本的 top1 分布'],
   },
 ]
 

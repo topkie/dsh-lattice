@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { deriveResourceParams } from '../util/memory.js'
-import { encodeVec } from '../util/vec.js'
+import { decodeVec, encodeVec } from '../util/vec.js'
 
 /** 样本目录名（位于 dataDir 之下）。 */
 export const SAMPLES_DIR_NAME = 'samples'
@@ -204,6 +204,46 @@ export class SampleStore {
       else if (row.kind === 'negative') negative = Number(row.n)
     }
     return { total: positive + negative, positive, negative }
+  }
+
+  /**
+   * 读出用于重标的样本（T44 判据 3/5/7 的输入）。
+   *
+   * 三条纪律写在这里，而不是让调用方各自实现：
+   *   ① **跳过失效样本**（换过编码模型的旧行）：它们的 top1 是在另一个向量空间里量的，混进来会把切点拽偏；
+   *   ② **只读、不写库**：重标的写入走 lattice-calib 的单事务快照；
+   *   ③ 按时间倒序取上限条数 —— 分层取样（不确定带全取、明显无关取最近 N 条）由调用方
+   *      按 top1 分档决定，库这一层只管把「候选」交出去。
+   */
+  readForCalibration(limit: number): Array<{
+    kind: 'positive' | 'negative'
+    source: string
+    top1: number
+    vec: Float32Array | null
+    encoderModel: string
+  }> {
+    this.open()
+    const db = this.db
+    if (db === null) return []
+    const rows = db
+      .prepare(
+        'SELECT kind, source, top1, vec, encoder_model FROM recall_sample ' +
+          "WHERE flags = '' ORDER BY created_at DESC, id DESC LIMIT ?",
+      )
+      .all(limit) as Array<{
+      kind: string
+      source: string
+      top1: number
+      vec: Uint8Array | null
+      encoder_model: string
+    }>
+    return rows.map((r) => ({
+      kind: r.kind === 'positive' ? ('positive' as const) : ('negative' as const),
+      source: String(r.source),
+      top1: Number(r.top1),
+      vec: r.vec === null ? null : decodeVec(r.vec as Uint8Array),
+      encoderModel: String(r.encoder_model),
+    }))
   }
 
   /** 关闭连接。关闭时 SQLite 会把 WAL 合并回主文件，故不额外 checkpoint。 */

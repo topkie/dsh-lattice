@@ -218,6 +218,33 @@ export function sampleStats(): SampleCounts {
   }
 }
 
+/**
+ * 读出用于重标的样本（T44 判据 3/5/7 的输入）。
+ *
+ * 读不到就返回空数组、并留一条日志：重标会因此被「无样本」那道闸跳过（判据 5），
+ * 而不是拿着半份样本去算一个不可解释的切点。
+ */
+/** 样本库交出的行形状。与 calibration/trigger.ts 的 SampleLike 同形，但这里自带一份，
+ * 免得 samples 模块为了一个类型去 import 触发模块（依赖方向：触发读样本，样本不认识触发）。 */
+export interface CalibrationSampleRow {
+  kind: 'positive' | 'negative'
+  source: string
+  top1: number
+  vec: Float32Array | null
+  encoderModel: string
+}
+
+export function loadCalibrationSamples(limit: number): CalibrationSampleRow[] {
+  if (!state.enabled || state.dataDir === '') return []
+  try {
+    if (state.store === null) state.store = new SampleStore(state.dataDir, state.limits)
+    return state.store.readForCalibration(limit)
+  } catch (err) {
+    logEvent('warn', 'samples.unavailable', { reason: reasonCodeOf(err) })
+    return []
+  }
+}
+
 /** 记下「最近一次召回」。只放内存，不写库（裁决 #34 ⑥）。 */
 export function noteLastRecall(recall: LastRecall): void {
   state.lastRecall = { ids: [...recall.ids], top1: recall.top1, vec: recall.vec }

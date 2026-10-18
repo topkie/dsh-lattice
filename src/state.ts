@@ -10,15 +10,32 @@ import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import { ensureMeta, META_BUILDER, META_ENTRY_RULE, META_SCHEMA_VERSION } from './db/meta.js'
+import {
+  ensureMeta,
+  getMeta,
+  setMeta,
+  META_BUILDER,
+  META_CALIB_LAST_CHECK,
+  META_CALIB_LAST_ERROR,
+  META_ENTRY_RULE,
+  META_SCHEMA_VERSION,
+} from './db/meta.js'
 import { openVault } from './db/open.js'
 import { SCHEMA_VERSION } from './db/schema.js'
-import { CALIB_VERSION, TIER_SCALE_STABLE_ATOMS, readSnapshotState, type CalibParams } from 'lattice-calib'
+import {
+  CALIB_VERSION,
+  TIER_SCALE_STABLE_ATOMS,
+  calibrate,
+  readSnapshotState,
+  recalibrateAndWrite,
+  type CalibParams,
+} from 'lattice-calib'
+import { evaluateGates, pickCalibrationSamples, RECALIBRATE_SAMPLE_LIMIT } from './calibration/trigger.js'
 import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
 import { closeLog, configureLog, logEvent } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
 import type { RecallMeta } from './pipeline/search.js'
-import { closeSamples, configureSamples } from './samples/index.js'
+import { closeSamples, configureSamples, loadCalibrationSamples, sampleStats } from './samples/index.js'
 import { createWriteCtx, type WriteCtx, type WriteThresholds } from './pipeline/write.js'
 
 /** 插件传给运行时的配置（已解析默认值的形状）。 */
@@ -241,6 +258,91 @@ export function noteRecallDegradations(meta: RecallMeta): void {
     vectorMissing: meta.vectorMissing,
     lexicalDegraded: meta.lexicalDegraded,
     shortTermMiss: meta.shortTermMiss,
+  }
+}
+
+/** 从 meta 读一个数值；缺失或非数返回 null。 */
+function metaNum(db: DatabaseSync, key: string): number | null {
+  const raw = getMeta(db, key)
+  if (raw === null) return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * 错误的原因码：只取短 token（类名 / 错误码）。
+ *
+ * 为什么不直接存 `err.message`：消息里有路径、有 SQL、有用户内容 —— 日志与 meta 都不该装这些。
+ */
+function causeCode(err: unknown): string {
+  const e = err as { code?: unknown; name?: unknown } | null
+  const raw = typeof e?.code === 'string' ? e.code : typeof e?.name === 'string' ? e.name : 'Error'
+  return /^[A-Za-z][A-Za-z0-9_.-]{0,31}$/.test(raw) ? raw : 'Error'
+}
+
+/**
+ * 写入侧的重标尝试（T44 判据 3/5/7/8）。**不抛** —— 调用方是写入路径。
+ *
+ * 顺序按代价排：库规模、正样本数、冷却都不需要算 S；只有这三道过了才花一次抽样。
+ * 「判了 S」本身要记时间 —— 否则每次写入都要重算一次 S（40ms 量级），而写入是高频路径。
+ *
+ * 成功时**整体替换**参数容器（一次赋值，不逐字段改）；失败时一个字都不动，
+ * 只在 meta 里记下原因码 —— 这是判据 8「失败不半改」的实现形态。
+ */
+export async function maybeRecalibrate(): Promise<string> {
+  const rt = current
+  if (rt === null) return 'no_runtime'
+  const now = Date.now()
+  const atoms = Number((rt.db.prepare('SELECT COUNT(*) AS n FROM atom').get() as { n: number | bigint }).n)
+  const { positive: positives, negative: negatives } = sampleStats()
+  const lastCheckAt = metaNum(rt.db, META_CALIB_LAST_CHECK)
+
+  // 第一轮：只验前三道（sBaseline 传 null 时漂移那道自动跳过）。
+  const pre = evaluateGates({ atoms, positives, negatives, now, lastCheckAt, sBaseline: null, currentS: 0 })
+  if (!pre.ok) return pre.reason ?? 'skipped'
+
+  setMeta(rt.db, META_CALIB_LAST_CHECK, String(now))
+
+  // 算 S：伪查询抽样，纯读、不改库。库无向量时 calibrate 会抛 —— 那是「算不出」，按不重标处理。
+  let currentS = 0
+  try {
+    currentS = calibrate(rt.db).sBaseline
+  } catch (err) {
+    logEvent('warn', 'calib.snapshot_missing', {})
+    void causeCode(err)
+    return 'no_vectors'
+  }
+
+  const snap = readSnapshotState(rt.db)
+  const sBaseline = snap.state === 'ok' ? snap.snapshot.sBaseline : null
+  const post = evaluateGates({ atoms, positives, negatives, now, lastCheckAt, sBaseline, currentS })
+  if (!post.ok) return post.reason ?? 'skipped'
+
+  const rows = loadCalibrationSamples(RECALIBRATE_SAMPLE_LIMIT)
+  const samples = pickCalibrationSamples(rows).map((r) => ({
+    kind: r.kind,
+    source: r.source,
+    top1: r.top1,
+    vec: r.vec ?? undefined,
+    encoderModel: r.encoderModel,
+  }))
+
+  try {
+    const result = recalibrateAndWrite(rt.db, samples, { encoderModel: rt.cfg.encoderModel })
+    // 整体替换：新的参数一次换上。读侧要么看到旧的、要么看到新的，不存在「一半新一半旧」。
+    rt.calibration = { state: 'calibrated', params: { ...result.params } }
+    logEvent('warn', 'calib.recalibrate_done', {
+      atoms,
+      samples: samples.length,
+      ms: result.ms,
+      changed: result.changed,
+    })
+    return 'recalibrated'
+  } catch (err) {
+    const code = causeCode(err)
+    setMeta(rt.db, META_CALIB_LAST_ERROR, code)
+    logEvent('warn', 'calib.recalibrate_failed', { stage: 'recalibrate', reason: code })
+    return 'failed'
   }
 }
 

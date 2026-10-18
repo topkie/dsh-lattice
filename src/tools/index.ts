@@ -25,6 +25,7 @@ import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef }
 import { ForgottenError, writeReviewed } from '../pipeline/write.js'
 import {
   getRuntime,
+  maybeRecalibrate,
   noteRecallDegradations,
   runtimeEncode,
   type Runtime,
@@ -245,6 +246,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (multi) {
         lines.push('（原文被切分，topic_hint 未沿用：各段各自落位，以免把几件事硬塞进同一个主题。）')
       }
+
+      // 写入侧重标尝试（T44 判据 7）：**异步、不 await** —— 写入的返回不该等一次标定。
+      // 失败只写日志与 meta，参数一个字都不动（判据 8）。
+      void maybeRecalibrate()
 
       // 取代关系只落在这里：写入侧的事务内固定 O(1) 行数，多一条 UPDATE 就多一份
       // 写锁持有时间，而这不是热路径。
