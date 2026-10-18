@@ -16,6 +16,7 @@ import { ORPHAN_DEFINITION, audit, noDataReport } from '../dist/pipeline/audit.j
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT } from '../dist/pipeline/list.js'
 import { rebuildAtomPairs } from '../dist/cluster/rebuild.js'
 import { VEC_DIM } from '../dist/util/vec.js'
+import { openRuler } from './ro-ruler.mjs'
 
 /** 一行 topic。n_atoms 由调用方按夹具写成与实际成员一致。 */
 function seedTopic(db, id, nAtoms, at = id) {
@@ -304,22 +305,24 @@ describe('体检（audit）：结构指标与两种「空」', () => {
     assert.equal(Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin = 'inferred'").get().n), 1)
   })
 
-  it('只读：跑前后 data_version、atom 行数、recall_hits 总和与文件 mtime 都不变', () => {
+  it('只读：跑前后 data_version、各表行数、recall_hits 总和与文件 mtime 都不变', () => {
     seedTopic(db, 1, 2)
     seedAtom(db, 1, { topicId: 1, recallHits: 3 })
     seedAtom(db, 2, { topicId: 1, recallHits: 5 })
     seedEntry(db, 1, '代理', 'learned', 0.3)
-    const snapshot = () => ({
-      version: Number(db.prepare('PRAGMA data_version').get().data_version),
-      atoms: Number(db.prepare('SELECT COUNT(*) AS n FROM atom').get().n),
-      hits: Number(db.prepare('SELECT COALESCE(SUM(recall_hits), 0) AS n FROM atom').get().n),
-      mtime: statSync(dbFile).mtimeMs,
-    })
-    const before = snapshot()
-    audit(db)
-    audit(db, { limit: 1, offset: 0 })
-    const after = snapshot()
-    assert.deepEqual(after, before)
+    // 观测走另一个只读连接：同连接读 PRAGMA data_version 看不到本连接自己的写，
+    // 只量行数又抓不到「改了某一列」的写。只读连接全程开着，前后用同一个。
+    const ruler = openRuler(dbFile)
+    try {
+      const before = ruler.read()
+      const mtimeBefore = statSync(dbFile).mtimeMs
+      audit(db)
+      audit(db, { limit: 1, offset: 0 })
+      assert.deepEqual(ruler.read(), before)
+      assert.equal(statSync(dbFile).mtimeMs, mtimeBefore, '文件 mtime 不该变')
+    } finally {
+      ruler.close()
+    }
   })
 
   it('输出里没有二值判决词（U2：比例只作参考）', () => {

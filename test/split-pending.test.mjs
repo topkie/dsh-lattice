@@ -28,6 +28,7 @@ import { closeRuntime } from '../dist/state.js'
 import { closeLog, flushLog, logFilePath } from '../dist/log/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 import { VEC_DIM } from '../dist/util/vec.js'
+import { openRuler } from './ro-ruler.mjs'
 
 /** 由文本确定性生成的伪随机单位向量：同一文本恒得同一向量。 */
 function hashVec(text) {
@@ -374,22 +375,24 @@ describe('T29 判据 6：召回不写库', () => {
     for (const s of ['', '-wal', '-shm']) rmSync(dbFile + s, { force: true })
   })
 
-  it('判据 6：召回前后 data_version 与 atom / edge 行数不变', async () => {
+  it('判据 6：召回前后 data_version 与各表行数不变（在另一个只读连接上量）', async () => {
     const ctx = createWriteCtx(db, {}, { encode: async (t) => hashVec(t) })
     const out = await writeReviewed(ctx, { text: longText(2) })
     assert.ok(out.results.length >= 2)
-    const snap = () => ({
-      dataVersion: Number(db.prepare('PRAGMA data_version').get().data_version),
-      atoms: Number(db.prepare('SELECT COUNT(*) AS n FROM atom').get().n),
-      edges: Number(db.prepare('SELECT COUNT(*) AS n FROM edge').get().n),
-    })
     // 预热一次：图路的首次建边（ensureGraphEdges）是召回路径上的既有行为，
     // 不属于「呈现」。先让它建完，再量「呈现」这一次有没有写库。
     recall(db, '代理端口', null, {})
-    const before = snap()
-    const view = assembleView(db, recall(db, '代理端口', null, {}), { scene: '代理端口' })
-    assert.ok(view.text.includes('疑似应拆分'), '这一次召回应当确实命中了候选')
-    assert.deepEqual(snap(), before, '召回 + 组装不得写库')
+    // 同连接读 PRAGMA data_version 看不到本连接自己的写，断言会恒真；
+    // 观测因此换成操作前打开、全程不关的另一个只读连接。
+    const ruler = openRuler(dbFile)
+    try {
+      const before = ruler.read()
+      const view = assembleView(db, recall(db, '代理端口', null, {}), { scene: '代理端口' })
+      assert.ok(view.text.includes('疑似应拆分'), '这一次召回应当确实命中了候选')
+      assert.deepEqual(ruler.read(), before, '召回 + 组装不得写库')
+    } finally {
+      ruler.close()
+    }
   })
 })
 

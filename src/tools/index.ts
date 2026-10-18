@@ -22,7 +22,13 @@ import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
 import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef } from '../samples/index.js'
-import { FLAG_ARCHIVED, type DeclaredEdgeInput, ForgottenError, writeReviewed } from '../pipeline/write.js'
+import {
+  FLAG_ARCHIVED,
+  type DeclaredEdgeInput,
+  type DeclaredEdgeNote,
+  ForgottenError,
+  writeReviewed,
+} from '../pipeline/write.js'
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import {
   getRuntime,
@@ -84,6 +90,35 @@ export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
  * 库现状与锚段之间抢注意力。
  */
 export const DECLARED_EDGE_HINT = '关系可显式声明：lattice_write 的 edges。'
+
+/**
+ * 声明 supersedes / duplicate 边时追加的一句。
+ *
+ * 这两类边只写一行 edge 记录：它们**不写** atom.superseded_by，也不改去重判定 ——
+ * 与写入参数 `supersedes`（那个会真的标记旧条）不是一回事。不说这一句，读回执的人
+ * 会以为取代 / 去重已经生效。
+ */
+export const DECLARED_EDGE_ONLY_NOTE = '（只记录关系，不改变取代/去重状态）'
+
+/** 只记录关系、不改变状态的两类 kind（图路同样不认它们）。 */
+const ONLY_RECORDED_KINDS: readonly string[] = ['supersedes', 'duplicate']
+
+/**
+ * 本次声明里有没有**真的落库**的 supersedes / duplicate 边。
+ *
+ * 被拒的边不算：它们会在下一行逐条说「关系未建立」，再加一句「只记录关系」，
+ * 等于把没发生的事说成发生了。
+ */
+function hasOnlyRecordedEdge(edges: unknown, rejected: DeclaredEdgeNote[] | undefined): boolean {
+  if (!Array.isArray(edges)) return false
+  const rejectedKeys = new Set((rejected ?? []).map((n) => n.type + '\u0000' + String(n.target)))
+  return edges.some((raw) => {
+    const e = raw as { type?: unknown; target?: unknown } | null
+    if (e === null || typeof e !== 'object') return false
+    if (typeof e.type !== 'string' || typeof e.target !== 'number') return false
+    return ONLY_RECORDED_KINDS.includes(e.type) && !rejectedKeys.has(e.type + '\u0000' + String(e.target))
+  })
+}
 
 /**
  * 这次召回的结果值不值得给模型看 —— 是否该在结果前提示「可能不相关」。
@@ -284,7 +319,16 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         for (const n of r.review ?? []) lines.push(n.message)
         // 声明边（T38）：落库的与没落库的分开说。**只拒边、不拒记忆** ——
         // 拒因必须回显，否则调用方会以为关系已经建立（与防写回同一条纪律）。
-        if (r.edgesDeclared !== undefined) lines.push('关系 ' + r.edgesDeclared + ' 条（声明）')
+        if (r.edgesDeclared !== undefined) {
+          // supersedes / duplicate 只记一行关系：不写 superseded_by、不改去重判定。
+          // 回执里点明，否则读的人会以为取代已经生效（与参数 supersedes 分开说）。
+          lines.push(
+            '关系 ' +
+              r.edgesDeclared +
+              ' 条（声明）' +
+              (hasOnlyRecordedEdge(edges, r.edgesRejected) ? DECLARED_EDGE_ONLY_NOTE : ''),
+          )
+        }
         for (const n of r.edgesRejected ?? []) {
           const label =
             (n.type === '' ? '（无 type）' : n.type) + (n.target === null ? '' : ' → #' + n.target)
@@ -485,8 +529,19 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const tail: string[] = []
       if (declared.length > 0) {
         tail.push('', '关系（声明）' + declared.length + ' 条：')
-        for (const d of declared)
-          tail.push('- ' + String(d.kind) + ' → #' + Number(d.oid) + ' ' + String(d.summary))
+        for (const d of declared) {
+          const kind = String(d.kind)
+          // 与回执同一句话：这两类只记录关系，不改变取代 / 去重状态。
+          tail.push(
+            '- ' +
+              kind +
+              ' → #' +
+              Number(d.oid) +
+              ' ' +
+              String(d.summary) +
+              (ONLY_RECORDED_KINDS.includes(kind) ? DECLARED_EDGE_ONLY_NOTE : ''),
+          )
+        }
       }
       return [
         '#' +

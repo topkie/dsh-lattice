@@ -1922,9 +1922,10 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => OUT_DEGREE_CAP,
     definedBy: { file: 'src/graph/infer.ts', name: 'OUT_DEGREE_CAP' },
     affects:
-      '出度硬上限，三处各用一次：生成侧（inferEdges）超出部分被截断；查询侧（graphPath 的' +
-      '每个种子）最多贡献这么多条候选；写入侧（声明边）超过条数的边被拒 —— 否则模型可以' +
-      '用声明绕过「每 atom 出度 ≤ 16」这条不变量',
+      '出度硬上限。两个来源各自用一次、**不合并计数**：推断边每 atom ≤ 16（inferEdges ' +
+      '把超出的邻居截断），声明边每批 ≤ 16（write.ts 把超出的边拒掉）。所以同一个 atom ' +
+      '可以有 16 条推断边 + 16 条声明边，合计不设上限。查询侧（graphPath 的每个种子）' +
+      '也用它截断候选，同样不参与前两者的计数',
     calibration: {
       evidence:
         '**设计文档给的值，未在本库标定**：§33 的降级路径写「出度硬上限（建议 16）+ confidence ' +
@@ -1959,16 +1960,17 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/write.ts', name: 'DECLARED_EDGE_CONFIDENCE' },
     affects:
       '写入声明边（origin = declared）时的 confidence：它是一个常量，不是相似度。' +
-      '只参与图路内部排序（view.ts 的路段按 confidence 降序，声明边因此排在推断边之前），' +
-      '不进任何原子的打分 —— 打分只看四路召回的名次',
+      '**只影响图路内部先后**：每个种子留哪几条邻居（查询侧的出度截断按它排序），' +
+      '以及【路】段的行序。它**不进原子分数** —— 但会经图路的名次间接改变候选的 final：' +
+      '换掉两条声明边的 confidence，可能改变谁先谁后，也可能换掉被截断留下的那几条',
     calibration: {
       evidence:
         '**设计取值，不是标定**：裁决把 declared 定义为真相源，而「声明」本身就是证据，' +
         '因此给满 1.0，与 near 边「没有证据时给中位」的 0.5 相反。' +
-        '取它而不是别的数**不改变任何排序**：图路只提供候选与名次，confidence 只决定' +
-        '一跳邻居内部的先后；T38 的 20 条 gold 对照里逐条名次不变',
+        '1.0 的作用是让声明边在【路】段与邻居截断里排在推断边之前；' +
+        '它不是中性常量 —— 交换两条声明边的 confidence，两个候选的 final 会跟着互换',
     },
-    variesWith: ['（不应变：改它只会改变同行内声明边之间的显示顺序）'],
+    variesWith: ['图路每个种子的出度截断（换值会换掉留下的邻居）', '【路】段的行序'],
   },
   {
     name: 'DECLARED_EDGE_TYPE_MAX',

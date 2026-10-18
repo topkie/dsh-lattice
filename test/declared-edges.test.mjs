@@ -22,8 +22,9 @@ import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
 import { assembleView } from '../dist/pipeline/view.js'
 import { SAMPLE_DB_NAME, SAMPLES_DIR_NAME } from '../dist/samples/store.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
-import { DECLARED_EDGE_HINT } from '../dist/tools/index.js'
+import { DECLARED_EDGE_HINT, DECLARED_EDGE_ONLY_NOTE } from '../dist/tools/index.js'
 import { VEC_DIM } from '../dist/util/vec.js'
+import { openRuler } from './ro-ruler.mjs'
 
 const DUP = { dupCos: 0.92, dupLex: 0.72 }
 
@@ -158,6 +159,42 @@ describe('判据 1：写入声明两条边，展开能看到', () => {
       assert.ok(expanded.includes('关系（声明）2 条'), '展开应当列出声明边：' + expanded)
       assert.ok(expanded.includes('related → #' + a), '展开缺 related 那条：' + expanded)
       assert.ok(expanded.includes('requires → #' + b), '展开缺 requires 那条：' + expanded)
+      // 这两类边不是「只记录关系」：related / requires 不改变任何状态，别给它们加那句说明。
+      assert.equal(receipt.includes(DECLARED_EDGE_ONLY_NOTE), false, receipt)
+    })
+  })
+})
+
+describe('关系边只记录不生效（supersedes / duplicate）', () => {
+  it('回执与展开都点明「只记录关系」，目标行的 superseded_by 仍为 null', async () => {
+    await withTools('c1b', async ({ cfg, tool }) => {
+      const w = tool('lattice_write')
+      const oldId = atomIdOf(await w.execute({ text: '旧说法：缓存击穿是热点 key 同时失效导致的。' }))
+      const receipt = await w.execute({
+        text: '新说法：缓存击穿发生在单个热点 key 失效的瞬间。',
+        edges: [
+          { type: 'supersedes', target: oldId },
+          { type: 'duplicate', target: oldId },
+        ],
+      })
+      const fresh = atomIdOf(receipt)
+      // 声明一条 supersedes 边只写 edge 行，不写 atom.superseded_by —— 回执必须说出来。
+      assert.ok(receipt.includes('关系 2 条（声明）' + DECLARED_EDGE_ONLY_NOTE), receipt)
+      const db = getRuntime(cfg).db
+      const supersededBy = (id) =>
+        db.prepare('SELECT superseded_by FROM atom WHERE id = ?').get(id).superseded_by
+      assert.equal(supersededBy(oldId), null, '声明 supersedes 边不该写旧条的 superseded_by')
+      assert.equal(supersededBy(fresh), null)
+      assert.deepEqual(declaredRows(db, fresh), [
+        ['duplicate', oldId, 'declared', 1],
+        ['supersedes', oldId, 'declared', 1],
+      ])
+
+      const expanded = await tool('lattice_expand').execute({ atom_id: fresh })
+      const noted = expanded.split('\n').filter((l) => l.includes(DECLARED_EDGE_ONLY_NOTE))
+      assert.equal(noted.length, 2, '两条只记录关系的边各带一句：' + expanded)
+      assert.ok(expanded.includes('supersedes → #' + oldId + ' '), expanded)
+      assert.ok(expanded.includes('duplicate → #' + oldId + ' '), expanded)
     })
   })
 })
@@ -437,26 +474,34 @@ describe('判据 7：可发现性（工具描述 + 召回末尾提示）', () =>
     })
   })
 
-  it('有命中时末尾出现提示句，且提示不改排序、不写库', async () => {
-    await withTools('c7b', async ({ cfg, tool }) => {
+  it('有命中时末尾出现提示句，且提示不写表、不引入额外写入', async () => {
+    await withTools('c7b', async ({ dir, tool }) => {
       const w = tool('lattice_write')
       await w.execute({ text: '系统代理必须走本地端口，否则访问境外源会超时。' })
-      const db = getRuntime(cfg).db
-      const snapshot = () => ({
-        atoms: Number(db.prepare('SELECT COUNT(*) AS n FROM atom').get().n),
-        edges: Number(db.prepare('SELECT COUNT(*) AS n FROM edge').get().n),
-        version: Number(db.prepare('PRAGMA data_version').get().data_version),
-      })
       // 先跑一次让图路建边（首次召回会建），第二次才是「提示本身有没有副作用」的对照。
       await tool('lattice_recall').execute({ query: '系统代理' })
-      const before = snapshot()
-      const out = await tool('lattice_recall').execute({ query: '系统代理' })
-      const after = snapshot()
+      // 观测走另一个只读连接：同连接读 PRAGMA data_version 看不到本连接自己的写，
+      // 那样写成的断言恒真。只读连接必须在被测操作之前打开、前后用同一个。
+      const ruler = openRuler(join(dir, 'lattice.db'))
+      try {
+        const before = ruler.read()
+        const out = await tool('lattice_recall').execute({ query: '系统代理' })
+        const after = ruler.read()
 
-      assert.ok(out.includes('【锚】'), '应当有命中：' + out)
-      assert.ok(out.trimEnd().endsWith('（' + DECLARED_EDGE_HINT + '）'), '末尾应当有提示句：' + out)
-      assert.equal(out.split(DECLARED_EDGE_HINT).length - 1, 1, '提示句只出现一次')
-      assert.deepEqual(after, before, '提示不得写库（atom / edge 行数与 data_version 都不变）')
+        assert.ok(out.includes('【锚】'), '应当有命中：' + out)
+        assert.ok(out.trimEnd().endsWith('（' + DECLARED_EDGE_HINT + '）'), '末尾应当有提示句：' + out)
+        assert.equal(out.split(DECLARED_EDGE_HINT).length - 1, 1, '提示句只出现一次')
+        // 召回工具本身会记命中计数（recordRecall）：那是「召回」的既有语义，不是提示带来的写入。
+        // 所以这里断言的是「除这一次计数之外，提示不产生任何写入」：
+        // 表行数与库结构版本不变；data_version 只涨 1（命中计数那一次提交）；
+        // recall_hits 总和只涨 1（本例库里只有一条 atom，两次召回各命中它一次）。
+        assert.equal(after.userVersion, before.userVersion, '提示不得改库结构')
+        assert.deepEqual(after.rows, before.rows, '提示不得写任何表')
+        assert.equal(after.dataVersion, before.dataVersion + 1, '除召回自己的命中计数外不得有别的提交')
+        assert.equal(after.recallHits, before.recallHits + 1, '除召回自己的命中计数外不得改数据')
+      } finally {
+        ruler.close()
+      }
     })
   })
 })
