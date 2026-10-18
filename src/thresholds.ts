@@ -76,6 +76,18 @@ import {
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import {
+  BUSY_TIMEOUT_FLOOR_MS,
+  BUSY_TIMEOUT_MULTIPLIER,
+  CACHE_CEIL_BYTES,
+  CACHE_FLOOR_BYTES,
+  CACHE_RATIO,
+  MMAP_FLOOR_BYTES,
+  MMAP_GROWTH,
+  MMAP_LIMIT_BYTES,
+  MMAP_MEMORY_DIVISOR,
+  WRITE_COST_MEASURED_MS,
+} from './util/memory.js'
+import {
   RECALIBRATE_COOLDOWN_MS,
   RECALIBRATE_DRIFT,
   RECALIBRATE_MIN_ATOMS,
@@ -1514,13 +1526,12 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   // ──────────────────────── 资源参数（util/memory.ts）─────────────────────────
   {
-    name: 'MmapCeilBytes（推导）',
+    name: 'MMAP_LIMIT_BYTES',
     area: '资源',
-    value: () => 256 * 1024 * 1024,
+    value: () => MMAP_LIMIT_BYTES,
     display: '256 MB（上限，与「内存的八分之一」取更小者）',
-    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_LIMIT_BYTES' },
     affects: 'mmap 窗口上限',
-    inline: { file: 'src/util/memory.ts', source: 'Math.min(256 * 1024 * 1024, mem / 8)' },
     calibration: {
       evidence:
         'devnotes M1《按「跨机器是否一致」分类》C 类（真正与机器相关）：256 MB 的 mmap 在 8 GB 机器上' +
@@ -1530,24 +1541,22 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     diverges: '**已从常量改成推导值**（M1 待办一第 2、3 项），但仍是一个写死的上限',
   },
   {
-    name: 'MmapFloorBytes（推导）',
+    name: 'MMAP_FLOOR_BYTES',
     area: '资源',
-    value: () => 64 * 1024 * 1024,
+    value: () => MMAP_FLOOR_BYTES,
     display: '64 MB（下限）',
-    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_FLOOR_BYTES' },
     affects: 'mmap 窗口下限（库很小时也至少给这么多）',
-    inline: { file: 'src/util/memory.ts', source: 'dbFileSize * 1.5 : 64 * 1024 * 1024' },
     calibration: { evidence: '**无记录**。与上限同处，1.5x / 1/8 / 64 MB 三个数都没有出处' },
     variesWith: ['机器内存'],
   },
   {
-    name: 'CacheRatio（推导）',
+    name: 'CACHE_RATIO',
     area: '资源',
-    value: () => 0.05,
+    value: () => CACHE_RATIO,
     display: '内存的 5%',
-    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    definedBy: { file: 'src/util/memory.ts', name: 'CACHE_RATIO' },
     affects: 'SQLite 页缓存目标大小（内存 × 5%）',
-    inline: { file: 'src/util/memory.ts', source: 'clamp(mem * 0.05, 16 * 1024 * 1024, 128 * 1024 * 1024)' },
     calibration: {
       evidence:
         'memory.ts:31-42 注释：SQLite 默认只有 2 MB，对万级 atom 偏小；也不能无上限，' +
@@ -1556,35 +1565,32 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['机器内存', '库的访问模式'],
   },
   {
-    name: 'CacheMinBytes（推导）',
+    name: 'CACHE_FLOOR_BYTES',
     area: '资源',
-    value: () => 16 * 1024 * 1024,
+    value: () => CACHE_FLOOR_BYTES,
     display: '16 MB',
-    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    definedBy: { file: 'src/util/memory.ts', name: 'CACHE_FLOOR_BYTES' },
     affects: '页缓存下限',
-    inline: { file: 'src/util/memory.ts', source: '16 * 1024 * 1024, 128 * 1024 * 1024' },
     calibration: { evidence: '**无记录**（同 CacheRatio）' },
     variesWith: ['机器内存'],
   },
   {
-    name: 'CacheMaxBytes（推导）',
+    name: 'CACHE_CEIL_BYTES',
     area: '资源',
-    value: () => 128 * 1024 * 1024,
+    value: () => CACHE_CEIL_BYTES,
     display: '128 MB',
-    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    definedBy: { file: 'src/util/memory.ts', name: 'CACHE_CEIL_BYTES' },
     affects: '页缓存上限',
-    inline: { file: 'src/util/memory.ts', source: '128 * 1024 * 1024)' },
     calibration: { evidence: '**无记录**（同 CacheRatio）' },
     variesWith: ['机器内存'],
   },
   {
-    name: 'BusyTimeoutFloorMs（推导）',
+    name: 'BUSY_TIMEOUT_FLOOR_MS',
     area: '资源',
-    value: () => 5000,
+    value: () => BUSY_TIMEOUT_FLOOR_MS,
     display: '5000 ms',
-    definedBy: { file: 'src/util/memory.ts', name: 'deriveResourceParams（内联）' },
+    definedBy: { file: 'src/util/memory.ts', name: 'BUSY_TIMEOUT_FLOOR_MS' },
     affects: '写锁等待下限：max(5000, 单条写入耗时 × 200)',
-    inline: { file: 'src/util/memory.ts', source: 'Math.max(5000, Math.round(3.5 * 200))' },
     calibration: {
       evidence:
         'memory.ts:40-41 注释：**实测单条写入约 3.5 ms**，5 秒已能排下上千次写入；慢盘上按写入耗时' +
@@ -1592,6 +1598,52 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     },
     variesWith: ['磁盘延迟', '并发写入压力'],
     diverges: '**这个数同时是「本机实测」的产物**：3.5 ms × 200 里的 200 与 3.5 都没有文档出处',
+  },
+  {
+    name: 'MMAP_MEMORY_DIVISOR',
+    area: '资源',
+    value: () => MMAP_MEMORY_DIVISOR,
+    display: '8（内存的八分之一）',
+    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_MEMORY_DIVISOR' },
+    affects: 'mmap 上限的第二个约束：与固定 256 MB 取更小者',
+    calibration: {
+      evidence: '**无记录**：mmap 是虚拟地址占用，但被访问的页会驻留物理内存；给内存的八分之一是经验取法',
+    },
+    variesWith: ['机器内存', '库的访问局部性'],
+  },
+  {
+    name: 'MMAP_GROWTH',
+    area: '资源',
+    value: () => MMAP_GROWTH,
+    display: '库文件的 1.5 倍',
+    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_GROWTH' },
+    affects: 'mmap 目标窗口相对库文件大小的倍数：让整个库文件能落进窗口',
+    calibration: { evidence: '**无记录**：1.5 只为「留一点余量让整个文件进窗口」，没有实测出处' },
+    variesWith: ['库文件大小'],
+  },
+  {
+    name: 'WRITE_COST_MEASURED_MS',
+    area: '资源',
+    value: () => WRITE_COST_MEASURED_MS,
+    display: '3.5 ms（本机实测的单条写入耗时）',
+    definedBy: { file: 'src/util/memory.ts', name: 'WRITE_COST_MEASURED_MS' },
+    affects: '写锁等待时间的推导基数：慢盘上按它放大，而不是拍一个更大的常数',
+    calibration: {
+      evidence: 'memory.ts 注释里的实测值（本机磁盘、单条写入）。换机器后这个数会变，届时等待时间自动跟着变',
+    },
+    variesWith: ['磁盘延迟', '机器负载'],
+  },
+  {
+    name: 'BUSY_TIMEOUT_MULTIPLIER',
+    area: '资源',
+    value: () => BUSY_TIMEOUT_MULTIPLIER,
+    display: '200 倍',
+    definedBy: { file: 'src/util/memory.ts', name: 'BUSY_TIMEOUT_MULTIPLIER' },
+    affects: '等待时间 = 单条写入耗时 × 200（约能排下几百次写入）',
+    calibration: {
+      evidence: '**无记录**：按「一次等待里最多排多少次写入」的经验取法，没有实测出处',
+    },
+    variesWith: ['并发写入压力'],
   },
   {
     name: 'VEC_DIM',

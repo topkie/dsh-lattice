@@ -40,13 +40,59 @@ export interface ResourceOverrides {
  * - busyTimeout = max(5000, 单条写入耗时 × 200)。实测单条写入约 3.5 ms，
  *   5 秒已能排下上千次写入；慢盘上按写入耗时放大，而不是拍一个更大的常数。
  */
-export function deriveResourceParams(dbFileSize = 0, overrides: ResourceOverrides = {}): ResourceParams {
-  const mem = totalmem()
-  const mmapCeil = Math.min(256 * 1024 * 1024, mem / 8)
-  const mmapWant = dbFileSize > 0 ? dbFileSize * 1.5 : 64 * 1024 * 1024
-  const mmap = clamp(mmapWant, 64 * 1024 * 1024, Math.max(mmapCeil, 64 * 1024 * 1024))
-  const cache = clamp(mem * 0.05, 16 * 1024 * 1024, 128 * 1024 * 1024)
-  const busy = Math.max(5000, Math.round(3.5 * 200))
+// ── 推导规则里的每个数字，都在这里有个名字 ──────────────────
+//
+// 为什么具名：这些数原先直接写在算式里，读代码只能看到 `Math.min(256 * 1024 * 1024, mem / 8)`，
+// 看不出「256 MB 是上限还是目标」「8 是从哪来的」。具名之后阈值登记表能定位到它们，
+// 改的时候也知道改的是哪一条规则。
+
+/** mmap 窗口的固定上限。 */
+export const MMAP_LIMIT_BYTES = 256 * 1024 * 1024
+
+/** mmap 上限同时受「机器内存的几分之一」约束（取更小者）。 */
+export const MMAP_MEMORY_DIVISOR = 8
+
+/** mmap 相对库文件的倍数：让整个库文件能落进窗口。 */
+export const MMAP_GROWTH = 1.5
+
+/** mmap 下限，也是「还不知道库多大」时的默认窗口。 */
+export const MMAP_FLOOR_BYTES = 64 * 1024 * 1024
+
+/** 页缓存占机器内存的比例。 */
+export const CACHE_RATIO = 0.05
+
+/** 页缓存下限（SQLite 默认只有 2 MB，对万级 atom 偏小）。 */
+export const CACHE_FLOOR_BYTES = 16 * 1024 * 1024
+
+/** 页缓存上限（大内存机器上按 5% 算会凭空多占几百 MB，而收益早已饱和）。 */
+export const CACHE_CEIL_BYTES = 128 * 1024 * 1024
+
+/** 写锁等待的下限。 */
+export const BUSY_TIMEOUT_FLOOR_MS = 5000
+
+/** 实测的单条写入耗时（毫秒）：慢盘上按它放大等待时间，而不是拍一个更大的常数。 */
+export const WRITE_COST_MEASURED_MS = 3.5
+
+/** 等待时间相对单条写入耗时的倍数。 */
+export const BUSY_TIMEOUT_MULTIPLIER = 200
+
+/**
+ * 推导资源参数。
+ *
+ * `memBytes` 可注入：**判据要求用构造的内存输入断言输出**，而 totalmem() 读的是真机 ——
+ * 不注入就只能测「本机这一种内存」，那不是对规则的检验。
+ */
+export function deriveResourceParams(
+  dbFileSize = 0,
+  overrides: ResourceOverrides = {},
+  memBytes: number = totalmem(),
+): ResourceParams {
+  const mem = memBytes
+  const mmapCeil = Math.min(MMAP_LIMIT_BYTES, mem / MMAP_MEMORY_DIVISOR)
+  const mmapWant = dbFileSize > 0 ? dbFileSize * MMAP_GROWTH : MMAP_FLOOR_BYTES
+  const mmap = clamp(mmapWant, MMAP_FLOOR_BYTES, Math.max(mmapCeil, MMAP_FLOOR_BYTES))
+  const cache = clamp(mem * CACHE_RATIO, CACHE_FLOOR_BYTES, CACHE_CEIL_BYTES)
+  const busy = Math.max(BUSY_TIMEOUT_FLOOR_MS, Math.round(WRITE_COST_MEASURED_MS * BUSY_TIMEOUT_MULTIPLIER))
   return {
     mmapSize: overrides.mmapSize ?? Math.round(mmap),
     cacheSize: overrides.cacheSize ?? Math.round(cache),
