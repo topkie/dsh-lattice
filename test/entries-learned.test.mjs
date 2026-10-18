@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
 import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
 import { recall } from '../dist/pipeline/search.js'
-import { ENTRY_WEIGHT, LEARNED_MAX_PER_ATOM, feedLearned } from '../dist/pipeline/entries.js'
+import { ENTRY_WEIGHT, LEARNED_MAX_PER_ATOM, clearLearned, feedLearned } from '../dist/pipeline/entries.js'
 
 const DAY = 86_400_000
 /** 固定的「现在」：反哺的所有判据都与时间有关，用真时钟会让用例不可复现。 */
@@ -234,5 +234,36 @@ describe('召回路径的只读性', () => {
     for (const q of [Q_COVERED, '代理', '数据库并发读写', 'WAL']) recall(db, q, null, { topN: 8 })
     assert.equal(snap(), before, 'recall() 不该写库（反哺是它在工具层之后的一次独立调用）')
     assert.equal(learnedRows().length, 0)
+  })
+})
+
+describe('重建入口时清空反哺（M4-D4）', () => {
+  it('clearLearned 只删 learned 行，并返回条数（N=0 返回 0）', async () => {
+    await writeAtom(createWriteCtx(db, {}, {}), { text: '罗盘校准记录：磁偏角随时间缓慢变化。' })
+    const atomId = Number(db.prepare('SELECT id FROM atom LIMIT 1').get().id)
+    // learned 行只有召回事件会造出来，测试里直接插最省事。
+    const ins = db.prepare(
+      "INSERT INTO entry (atom_id, term, bigram, weight, origin, hits, created_at) VALUES (?, ?, '', ?, 'learned', 1, ?)",
+    )
+    ins.run(atomId, '磁偏角', 0.5, NOW)
+    ins.run(atomId, '校準', 0.5, NOW)
+    const learnedBefore = Number(
+      db.prepare("SELECT COUNT(*) AS n FROM entry WHERE origin = 'learned'").get().n,
+    )
+    const othersBefore = Number(
+      db.prepare("SELECT COUNT(*) AS n FROM entry WHERE origin <> 'learned'").get().n,
+    )
+    assert.equal(learnedBefore, 2)
+
+    assert.equal(clearLearned(db), 2, '返回被清掉的条数 —— 调用方要靠它留痕')
+    assert.equal(Number(db.prepare("SELECT COUNT(*) AS n FROM entry WHERE origin = 'learned'").get().n), 0)
+    assert.equal(
+      Number(db.prepare("SELECT COUNT(*) AS n FROM entry WHERE origin <> 'learned'").get().n),
+      othersBefore,
+      '只清使用史，extracted / declared 不动',
+    )
+
+    // 再清一次必须是 0 而不是 undefined：判据「N=0 也要打印」依赖这个返回值可打印。
+    assert.equal(clearLearned(db), 0)
   })
 })

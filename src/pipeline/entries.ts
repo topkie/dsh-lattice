@@ -612,6 +612,21 @@ function entryKey(atomId: number, term: string): string {
  * 库大到这一步成为瓶颈时，正确做法是给 entry(origin) 加索引，而不是把扫描改成抽样 ——
  * 抽样会让「谁被淘汰」变成不可复现的。
  */
+/**
+ * 清空 learned 入口（使用史），返回清掉的条数。
+ *
+ * 用在**重建入口**的时候：重建按 atom 重新抽词，会把 learned 行一起删掉 ——
+ * 而那是召回事件累积出来的，重算不出来（PRINCIPLES §六 的第三类）。
+ *
+ * 为什么必须把条数交出去、由调用方打印：使用史**可以丢，丢时必须留痕**。
+ * 否则「重建一次库就把反哺静默清零」这件事无法被看见。N=0 也要打印 ——
+ * 分不清「没清」与「没打印」，等于没有留痕。
+ */
+export function clearLearned(db: DatabaseSync): number {
+  const r = db.prepare("DELETE FROM entry WHERE origin = 'learned'").run()
+  return Number(r.changes)
+}
+
 function sweepLearned(db: DatabaseSync, now: number, out: LearnedFeedback): void {
   const rows = db
     .prepare("SELECT id, atom_id, hits, last_seen, weight FROM entry WHERE origin = 'learned'")

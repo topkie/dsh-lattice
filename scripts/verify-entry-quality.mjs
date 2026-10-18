@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import { openVault } from '../dist/db/open.js'
 import { ensureEncoder, encode } from '../dist/encoder/index.js'
 import { recall } from '../dist/pipeline/search.js'
-import { buildEntries } from '../dist/pipeline/entries.js'
+import { buildEntries, clearLearned } from '../dist/pipeline/entries.js'
 import { copyToWork, describeDb, requireBeforeDb, requireGold, ruleOf } from './lib/compare-db.mjs'
 
 const OUT = '.probe'
@@ -103,6 +103,10 @@ async function main() {
   const { db } = openVault(WORK)
   const afterRule = ruleOf(db)
   const atoms = db.prepare('SELECT id, text FROM atom').all()
+  // D4：重建入口会把 learned（使用史）一起删掉 —— 按 PRINCIPLES §六 第三类，丢必须留痕。
+  // 先数再删，N=0 也打印：分不清「没清」与「没打印」就等于没有留痕。
+  const clearedLearned = clearLearned(db)
+  console.log('  已清空 ' + clearedLearned + ' 条反哺')
   const del = db.prepare('DELETE FROM entry WHERE atom_id = ?')
   const ins = db.prepare(
     'INSERT OR REPLACE INTO entry (atom_id, term, bigram, weight, origin, hits, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)',
