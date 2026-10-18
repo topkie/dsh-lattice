@@ -4,15 +4,16 @@
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
 //   2. 注册四个工具：ping（健康检查）、write、recall、expand
 //
-// 外加六条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
+// 外加七条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
 //   /api/lattice-ping-mini    库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
 //   /api/lattice-atoms        目录：分页 + 过滤，与 lattice_list 同一条数据路径
 //   /api/lattice-search       搜索：与 lattice_recall 同一条数据路径，但**不记命中**
+//   /api/lattice-audit        体检：只读结构指标，供面板与维护者（M4-T35；不进模型侧）
 //   /api/lattice-log-export   降级日志导出：只读，返回 CSV 附件（M4-T44）
 //   /api/lattice-forget       **删除**：物理删除 + 留痕（§44）。写端点
 //   /api/lattice-log-clear    清空降级日志：写端点，要求 { confirm: true }（M4-T44）
 //
-// 四条只读路由的栅栏只留「本机回环」一道；两条写端点三道（回环 + POST +
+// 五条只读路由的栅栏只留「本机回环」一道；两条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
 //
 // `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
@@ -21,8 +22,10 @@
 // **只有工具，没有 hook**：禁用 LLM 后「轮次结束自动沉淀」必然要调 LLM 做结构化，
 // 与本插件的定位冲突。写入与召回都必须是显式动作。
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
 import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
@@ -34,7 +37,9 @@ import {
   type RuntimeConfig,
 } from './state.js'
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
+import { audit, noDataReport } from './pipeline/audit.js'
 import { recall } from './pipeline/search.js'
+import { openVault } from './db/open.js'
 import { forgetAtom } from './pipeline/forget.js'
 import { configureSamples, sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
@@ -76,6 +81,15 @@ const ATOMS_ROUTE_PATH = '/api/lattice-atoms'
 
 /** 搜索路由：一条查询进去，若干条命中出来。 */
 const SEARCH_ROUTE_PATH = '/api/lattice-search'
+
+/**
+ * 体检路由：只读结构指标（M4-T35）。
+ *
+ * 为什么是路由而不是工具（裁决 #26）：体检是维护/诊断动作，不在模型的工作流里；
+ * 结构指标又只作参考，工具化等于把参考值直接递给模型、容易被读成结论。
+ * 面板（M4-T28）只做展示，口径与数据都在 pipeline/audit.ts 这一处。
+ */
+const AUDIT_ROUTE_PATH = '/api/lattice-audit'
 
 /**
  * 删除路由：本插件**唯一**的写端点，也是界面上唯一的删除入口（§11.1：物理删除归用户）。
@@ -258,7 +272,7 @@ export function apply(ctx: Context, config: unknown): void {
   // 这里拿不到只可能是宿主契约变了，那时早失败比挂一条路由到 undefined 上好。
   ctx.inject(['webServer'], (ctx: Context) => {
     const webServer = hostService(ctx, 'webServer')!
-    // 三条路由同生同灭，所以共用**一个** effect、返回一个合并的 disposer：
+    // 这些路由同生同灭，所以共用**一个** effect、返回一个合并的 disposer：
     // 分开写会长出三段一模一样的样板。ping 那条仍然是实测通过的基线，只是
     // 外形跟着一起规整，函数体（miniPing）不动。
     ctx.effect(() => {
@@ -277,6 +291,11 @@ export function apply(ctx: Context, config: unknown): void {
           kind: 'exact',
           path: SEARCH_ROUTE_PATH,
           handler: (req, res) => searchRoute(runtimeCfg, req, res),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: AUDIT_ROUTE_PATH,
+          handler: (req, res) => auditRoute(runtimeCfg, req, res),
         }),
         webServer.register({
           kind: 'exact',
@@ -428,7 +447,7 @@ function reasonOf(e: unknown): string {
  * 为什么只有这两道（对照 §44 给写端点准备的那套）：另两道（要求 POST + application/json）
  * 是给**写**路由防 CSRF 的，本组路由无请求体、只读，跨站页面即使发得出去也读不到响应
  * （插件路由不带任何 CORS 头）。回环这道仍然必须留：宿主对插件路由不做鉴权
- * （见 dsh-host-webserver 的说明），而这三条路由会把整个记忆库报给任何能连上的人。
+ * （见 dsh-host-webserver 的说明），而这些路由会把整个记忆库报给任何能连上的人。
  *
  * 与 miniPing 里那段是有意的重复：那条路由是 T19 实测通过的基线，本轮不动它的函数体。
  */
@@ -505,6 +524,51 @@ function atomsRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerRespons
     jsonOut(res, 200, { ok: true, total: r.total, offset: r.offset, limit: r.limit, rows: r.rows })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'read-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 体检：只读结构指标（M4-T35）。
+ *
+ * 与其他只读路由的**一处有意的不同**：这里不用 getRuntime，而是自己只读打开库。
+ * 三个理由：
+ *   - getRuntime 会补 meta（stampVault）、会按标定状态写独立日志库；而体检的契约是
+ *     「不改库、不写日志」；
+ *   - getRuntime 在库不存在时会建库；体检面对「还没有库」应当报「无数据」，而不是顺手造一个；
+ *   - 只读连接不迁移旧库：体检要能读改动前的快照或旧版本库，那正是诊断的用法。
+ * 代价是只读连接不能建 inferred 边 —— 那正是要的：体检不触发任何重建。
+ *
+ * 分页参数在这里只用一次（limit / offset），页大小与上界复用目录的两个数：
+ * 体检看的是分布，不允许「一次拉全库」。
+ */
+function auditRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): void {
+  if (!guardReadOnly(req, res)) return
+  const params = queryOf(req)
+  const opts = {
+    limit: intParam(params, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT),
+    offset: intParam(params, 'offset', 0, 0, Number.MAX_SAFE_INTEGER),
+  }
+  const file = join(resolveDataDir(cfg.dataDir), 'lattice.db')
+  if (!existsSync(file)) {
+    // 没有库不是错误：它表示「还没有写过任何记忆」。必须与「有库、没发现」分开报。
+    jsonOut(res, 200, {
+      ok: true,
+      ...noDataReport(opts, '数据库文件不存在：还没有写入过任何记忆，这是「无数据」，不是「没有发现」。'),
+    })
+    return
+  }
+  let db: DatabaseSync | null = null
+  try {
+    db = openVault(file, { readOnly: true }).db
+    jsonOut(res, 200, { ok: true, ...audit(db, opts) })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'read-failed', message: reasonOf(e) })
+  } finally {
+    try {
+      db?.close()
+    } catch {
+      /* 已经关闭 */
+    }
   }
 }
 

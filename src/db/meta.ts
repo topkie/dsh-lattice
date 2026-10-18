@@ -26,6 +26,16 @@ export const META_CALIB_LAST_CHECK = 'calib_last_check_at'
 /** 上次重标失败的原因码：判据 8 要求「失败要有记录」，而且不能只活在日志里。 */
 export const META_CALIB_LAST_ERROR = 'calib_last_error'
 
+/**
+ * 上次重建 atom_pair 的时间（epoch 毫秒）。
+ *
+ * 为什么要有：atom_pair 只在重聚类时填，空表因此有两种含义 —— 「没建过」与
+ * 「建过、但没有达到重复线的对」。体检（pipeline/audit.ts）要分开报这两件事
+ * （T35 判据 7），而表自身没有留痕的列；由建立者写一个时间戳是最小的代价。
+ * 只写不读的旧库缺这个键时按「没建过」处理：保守，且指向正确的下一步。
+ */
+export const META_RECLUSTER_AT = 'recluster_at'
+
 /** 写入一个键（已存在则覆盖）。 */
 export function setMeta(db: DatabaseSync, key: string, value: string, now = Date.now()): void {
   db.prepare(

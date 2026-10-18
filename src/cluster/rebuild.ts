@@ -18,6 +18,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { decodeVec, encodeVec, isValidVecBlob, normalizeInPlace, dot, VEC_DIM } from '../util/vec.js'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { DUP_COS, DUP_LEX } from '../pipeline/search.js'
+import { setMeta, META_RECLUSTER_AT } from '../db/meta.js'
 
 /**
  * 分批回填的每批 atom 数。
@@ -501,6 +502,9 @@ export function rebuildAtomPairs(
     safeRollback(db)
     throw err
   }
+  // 留痕：体检要靠它区分「没建过」与「建过但没有」—— 空表本身没有这两种含义。
+  // 放在 COMMIT 之后：事务回滚时旧标记与旧表内容一起留在原处。
+  setMeta(db, META_RECLUSTER_AT, String(Date.now()))
   return { rows, scanned, batches, cosHistogram: hist }
 }
 

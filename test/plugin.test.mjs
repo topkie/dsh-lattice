@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { EventEmitter } from 'node:events'
 import { Config, apply, inject, name } from '../dist/index.js'
+import { openVault } from '../dist/db/open.js'
 
 /**
  * 最小假 ctx：只实现插件用到的那两个服务，外加 `inject`。
@@ -78,6 +82,8 @@ describe('插件契约', () => {
       'lattice_write',
     ])
     assert.equal(names.length, 6)
+    // T35 判据 8：audit 是内部模块 + 只读路由，绝不进模型侧（裁决 #26）。
+    assert.ok(!names.includes('lattice_audit'), '体检不得注册成工具')
     for (const t of ctx.registered) assert.equal(typeof t.output.render, 'function')
   })
 
@@ -102,7 +108,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把六条路由挂上去（四条只读 + 两条写）', () => {
+  it('宿主提供 webServer 时把七条路由挂上去（五条只读 + 两条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -119,11 +125,13 @@ describe('插件契约', () => {
     assert.deepEqual(ctx.injected, [['webServer']], '只对 webServer 做条件注入')
 
     // M3-T19 加了目录与搜索（共三条只读），M3-T20 加了删除（写端点），
-    // M4-T44 加了日志导出（只读）与日志清空（写端点）。
+    // M4-T44 加了日志导出（只读）与日志清空（写端点），
+    // M4-T35 加了体检（只读；裁决 #26 明确它只出现在路由，不出现在工具表）。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
-    assert.equal(routes.length, 6, '四条只读路由 + 两条写路由都应挂上')
+    assert.equal(routes.length, 7, '五条只读路由 + 两条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-atoms',
+      '/api/lattice-audit',
       '/api/lattice-forget',
       '/api/lattice-log-clear',
       '/api/lattice-log-export',
@@ -245,6 +253,84 @@ describe('插件契约', () => {
     await handler(fakeReq({ body: 'not json' }), res)
     assert.equal(res.out.status, 400)
     assert.equal(res.out.body.error, 'bad-body')
+  })
+
+  /**
+   * 体检端点（M4-T35）：栅栏与最近一条只读路由同形；没有库时**报无数据**，
+   * 而不是 500、也不是「全部正常」。这条路由不走 getRuntime，所以不会顺手建库。
+   */
+  it('体检端点：非回环 403、非 GET 405、没有库时报无数据', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lattice-audit-route-'))
+    try {
+      const routes = []
+      const webServer = {
+        register: (route) => {
+          routes.push(route)
+          return () => {}
+        },
+      }
+      apply(fakeCtx({ webServer }), { ...baseConfig, dataDir: dir })
+      const handler = routes.find((r) => r.path === '/api/lattice-audit').handler
+      assert.equal(typeof handler, 'function')
+
+      const denied = fakeRes()
+      handler(fakeReq({ remote: '10.0.0.7', method: 'GET' }), denied)
+      assert.equal(denied.out.status, 403)
+      assert.equal(denied.out.body.error, 'forbidden')
+
+      const wrongMethod = fakeRes()
+      handler(fakeReq({ method: 'POST' }), wrongMethod)
+      assert.equal(wrongMethod.out.status, 405)
+      assert.equal(wrongMethod.out.body.error, 'method')
+
+      const empty = fakeRes()
+      handler(fakeReq({ method: 'GET' }), empty)
+      assert.equal(empty.out.status, 200)
+      assert.equal(empty.out.body.ok, true)
+      assert.equal(empty.out.body.dataState, 'empty')
+      assert.equal(empty.out.body.duplicates.state, 'no-data')
+      assert.equal(empty.out.body.graph.state, 'no-data')
+      assert.equal(empty.out.body.topics.singleMemberRatio, null)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('体检端点：有库时返回结构指标（只读打开，不建库）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lattice-audit-route-data-'))
+    try {
+      const file = join(dir, 'lattice.db')
+      const { db } = openVault(file)
+      db.prepare(
+        'INSERT INTO topic(id, label, sum_vec, n_atoms, mean_fit, created_at, rebuilt_at) ' +
+          'VALUES (1, ?, zeroblob(2048), 1, 0, 1, 1)',
+      ).run('主题')
+      db.prepare(
+        'INSERT INTO atom(id, kind, text, summary, embedding, topic_id, fit, scope, origin, created_at, updated_at) ' +
+          "VALUES (1, '结论', '正文', '摘要', zeroblob(2048), 1, 1.0, 'global', 'model', 1, 1)",
+      ).run()
+      db.close()
+
+      const routes = []
+      const webServer = {
+        register: (route) => {
+          routes.push(route)
+          return () => {}
+        },
+      }
+      apply(fakeCtx({ webServer }), { ...baseConfig, dataDir: dir })
+      const handler = routes.find((r) => r.path === '/api/lattice-audit').handler
+      const res = fakeRes()
+      handler(fakeReq({ method: 'GET' }), res)
+      assert.equal(res.out.status, 200)
+      assert.equal(res.out.body.ok, true)
+      assert.equal(res.out.body.dataState, 'ready')
+      assert.equal(res.out.body.topics.atoms, 1)
+      assert.equal(res.out.body.topics.singleMemberRatio, 1)
+      assert.equal(res.out.body.duplicates.state, 'no-data')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('宿主没有 webServer 时不注册路由、不抛，六个工具照常在', () => {
