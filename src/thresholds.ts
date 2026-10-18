@@ -80,7 +80,7 @@ import {
   TRIM_PATHS_LIMIT,
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
-import { FLAG_AMBIGUOUS, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './pipeline/write.js'
+import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './pipeline/write.js'
 import {
   BUSY_TIMEOUT_FLOOR_MS,
   BUSY_TIMEOUT_MULTIPLIER,
@@ -2213,6 +2213,20 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_UNCLASSIFIED' },
     affects: 'atom.flags 的 bit2：与任何已有主题都不像（未归类）',
     calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
+    variesWith: ['（不应变）'],
+  },
+  {
+    name: 'FLAG_ARCHIVED',
+    area: '写入',
+    value: () => FLAG_ARCHIVED,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_ARCHIVED' },
+    affects:
+      'atom.flags 的 bit4：已归档（T26）。默认不召回、不进注入三段、列表默认不列；' +
+      '显式检索（lattice_list 给 flags、界面勾「显示已归档」）仍可见。不是删除：内容与边都还在',
+    calibration: {
+      evidence: '位值由设计文档对 flags 的命名确定（技术文档 §5），**不可改**；改它会把历史行解释错',
+      at: '2026-10-19',
+    },
     variesWith: ['（不应变）'],
   },
   // ──────────────────────── 重标触发（calibration/trigger.ts）────────────────────────

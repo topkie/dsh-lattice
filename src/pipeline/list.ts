@@ -9,6 +9,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { atomKindFilterValues } from '../db/schema.js'
+import { FLAG_ARCHIVED } from './write.js'
 
 /** 一页最多给多少条。 */
 export const LIST_MAX_LIMIT = 50
@@ -22,8 +23,15 @@ export interface ListOptions {
   scope?: string
   origin?: string
   topicId?: number
-  /** 按位过滤：`flags & 该值` 非 0 即命中（位定义见 write.ts 的 FLAG_*）。 */
+  /**
+   * 按位过滤：`flags & 该值` 非 0 即命中（位定义见 write.ts 的 FLAG_*）。
+   *
+   * **给了位过滤就不过滤归档**：那是显式检索 —— 例如 `flags: FLAG_ARCHIVED`
+   * 就是要看归档条目。没给时默认排除（见 listAtoms 里的分支）。
+   */
   flags?: number
+  /** 显式要求把归档条目也列出来（界面上的「显示已归档」）。给 flags 时本项无意义。 */
+  includeArchived?: boolean
   limit?: number
   offset?: number
 }
@@ -109,8 +117,16 @@ export function listAtoms(db: DatabaseSync, opts: ListOptions = {}): ListResult 
   if (opts.flags !== undefined && opts.flags !== 0) {
     // 按位过滤而不是等值：一个 atom 可以同时有多个标记，等值匹配会让「查歧义」漏掉
     // 同时被标了「未归类」的行。
+    //
+    // 这一支**不排除归档**（T26）：给了位过滤就是显式检索。于是 flags=16 能列出归档条目，
+    // flags=2 仍然能列出「既歧义又归档」的行 —— 两个条件都在问具体标记，不该互相遮蔽。
     where.push('(flags & ?) <> 0')
     args.push(opts.flags)
+  } else if (opts.includeArchived !== true) {
+    // 默认结果不含归档（T26：默认不召回）。这是「没给位过滤」的那一支，
+    // 与上面互斥 —— 两个分支都写归档条件会让 flags=16 永远为空。
+    where.push('(flags & ?) = 0')
+    args.push(FLAG_ARCHIVED)
   }
   const clause = where.length > 0 ? ' WHERE ' + where.join(' AND ') : ''
   const total = Number(

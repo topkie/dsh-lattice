@@ -14,6 +14,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
 import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { FLAG_ARCHIVED } from './write.js'
 
 /** 召回路的名字，也是融合时的权重键。 */
 export type Channel = 'vec' | 'entry' | 'body' | 'graph'
@@ -220,11 +221,27 @@ function entryPath(db: DatabaseSync, query: string, k: number, scope?: string): 
         ') f JOIN entry e ON e.id = f.rid JOIN atom a ON a.id = e.atom_id ' +
         ' WHERE 1 = 1' +
         scopeSql +
+        notArchived() +
         ' GROUP BY a.id ORDER BY s LIMIT ?',
     )
     .all(...args) as Array<{ id: number | bigint; s: number }>
   return rows.map((r) => Number(r.id))
 }
+
+/**
+ * 默认召回不含已归档的 atom（T26：归档 = 默认不出现，显式检索才出现）。
+ *
+ * 写成 SQL 片段而不是在结果上过滤：三路词面/图路本来就是 SQL，加在结果上要多一次
+ * 往返，还会让 meta.counts 与实际候选数对不上。向量路没有 SQL 可加，见 vecPath。
+ *
+ * 为什么是函数而不是模块级字符串常量：模块图里有一条环 write → review → search → write。
+ * 模块级拼串会在 write.ts 还没初始化完时读 FLAG_ARCHIVED（TDZ 报错）；函数在调用时读，
+ * 那时它早已就绪。拆这条环属于 review/search 的职责边界，不是本任务该动的地方。
+ */
+function notArchived(): string {
+  return ' AND (a.flags & ' + FLAG_ARCHIVED + ') = 0'
+}
+
 /**
  * 正文路：trigram 索引。
  *
@@ -245,6 +262,7 @@ function bodyPath(db: DatabaseSync, query: string, k: number, scope?: string): n
         'JOIN atom a ON a.id = atom_fts.rowid ' +
         ' WHERE atom_fts MATCH ?' +
         scopeSql +
+        notArchived() +
         ' ORDER BY s LIMIT ?',
     )
     .all(...args) as Array<{ id: number | bigint; s: number }>
@@ -280,6 +298,7 @@ function graphPath(db: DatabaseSync, seeds: number[], k: number, scope?: string)
     ph +
     ')' +
     scopeSql +
+    notArchived() +
     ' UNION ALL ' +
     'SELECT e.dst_id AS seed, e.src_id AS id, e.confidence AS c FROM edge e ' +
     'JOIN atom a ON a.id = e.src_id WHERE ' +
@@ -288,6 +307,7 @@ function graphPath(db: DatabaseSync, seeds: number[], k: number, scope?: string)
     ph +
     ')' +
     scopeSql +
+    notArchived() +
     '), ranked AS (' +
     'SELECT id, c, ROW_NUMBER() OVER (PARTITION BY seed ORDER BY c DESC) AS rn FROM nb WHERE id <> seed' +
     ') SELECT id, MAX(c) AS s FROM ranked WHERE rn <= ? GROUP BY id ORDER BY s DESC LIMIT ?'
@@ -335,6 +355,21 @@ interface VecHit {
 }
 
 /**
+ * 已归档的 atom id 集合，供向量路跳过。
+ *
+ * 为什么不把 flags 一起塞进向量缓存：那个缓存只按**行数**失效，而归档不改行数。
+ * 把状态缓存进去，归档会对向量路静默失效（词面三路已经过滤、向量路照旧命中），
+ * 这种「一路漏过滤」正是 T26 要防的形态。现查一次走 `idx_atom_flags` 的部分索引，
+ * 代价远小于一次召回本身。
+ */
+function archivedIdSet(db: DatabaseSync): Set<number> {
+  const rows = db.prepare('SELECT id FROM atom WHERE (flags & ?) <> 0').all(FLAG_ARCHIVED) as Array<{
+    id: number | bigint
+  }>
+  return new Set(rows.map((r) => Number(r.id)))
+}
+
+/**
  * 向量路：暴力点积。
  *
  * 为什么不用 SQL 逐条读向量：BLOB 解码 + 跨语言边界调用的开销远大于点积本身。
@@ -343,6 +378,7 @@ interface VecHit {
 function vecPath(db: DatabaseSync, q: Float32Array | null, k: number, scope?: string): VecHit[] {
   if (q === null || q.length !== VEC_DIM) return []
   const cache = loadVecCache(db)
+  const archived = archivedIdSet(db)
   const allowed =
     scope === undefined
       ? null
@@ -357,6 +393,7 @@ function vecPath(db: DatabaseSync, q: Float32Array | null, k: number, scope?: st
   const best: VecHit[] = []
   for (let i = 0; i < cache.ids.length; i++) {
     const id = cache.ids[i]!
+    if (archived.has(id)) continue
     if (allowed !== null && !allowed.has(id)) continue
     const v = cache.vecs[i]!
     let s = 0

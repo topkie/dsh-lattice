@@ -13,7 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
 import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
-import { TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
+import { FLAG_ARCHIVED, TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -180,12 +180,20 @@ function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
   return out
 }
 
-/** 某个主题下命中的 atom 的入口词，按权重降序。 */
+/**
+ * 某个主题下命中的 atom 的入口词，按权重降序。
+ *
+ * 已归档的 atom 不进【入口】段（T26）：它的 entry 行还在库里，但默认不该被看见 ——
+ * 漏了这一处，模型仍然能从入口词读出归档内容，而锚段看起来一切正常。
+ */
 function topicEntries(db: DatabaseSync, topicId: number, limit: number): string[] {
   const rows = db
     .prepare(
       'SELECT e.term AS term, MAX(e.weight) AS w FROM entry e' +
         ' JOIN atom a ON a.id = e.atom_id WHERE a.topic_id = ?' +
+        ' AND (a.flags & ' +
+        FLAG_ARCHIVED +
+        ') = 0' +
         ' GROUP BY e.term ORDER BY w DESC, e.term LIMIT ?',
     )
     .all(topicId, limit) as Array<{ term: string; w: number }>
@@ -235,6 +243,10 @@ function pathLinesFor(
     ph +
     ')' +
     scopeSql +
+    // 已归档的邻居不进【路】段（T26）：边还在（归档不删边），但默认不该被看见。
+    '   AND (b.flags & ' +
+    FLAG_ARCHIVED +
+    ') = 0' +
     ' ORDER BY e.confidence DESC LIMIT ?'
   const args: Array<string | number> =
     scope === undefined

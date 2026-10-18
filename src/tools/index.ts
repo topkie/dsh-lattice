@@ -22,7 +22,7 @@ import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
 import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
 import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef } from '../samples/index.js'
-import { type DeclaredEdgeInput, ForgottenError, writeReviewed } from '../pipeline/write.js'
+import { FLAG_ARCHIVED, type DeclaredEdgeInput, ForgottenError, writeReviewed } from '../pipeline/write.js'
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import {
   getRuntime,
@@ -110,6 +110,8 @@ function originLabel(o: string): string {
  */
 function formatListRow(r: ListRow): string {
   const marks: string[] = [originLabel(r.origin)]
+  // 归档标记只在显式检索（给了 flags）时才会出现，所以读到这里就说明调用方要的是它们。
+  if ((r.flags & FLAG_ARCHIVED) !== 0) marks.push('已归档')
   if (r.supersededBy !== null) marks.push('已被 #' + r.supersededBy + ' 取代')
   if (r.recallHits > 0) marks.push('取回 ' + r.recallHits + ' 次')
   const scopeMark = r.scope === 'global' ? '' : ' {' + r.scope + '}'
@@ -505,7 +507,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       topic: { type: 'number', description: '只看某个主题下的记忆' },
       flags: {
         type: 'number',
-        description: '只列需要留意的：2 = 两个主题都像（歧义）、4 = 未归类；3 = 两类都要',
+        description:
+          '只列需要留意的：2 = 两个主题都像（歧义）、4 = 未归类、16 = 已归档' +
+          '（默认不列，显式给 flags 时才列）；3 = 两类都要',
       },
       limit: { type: 'number', description: '本页条数，默认 20，上限 50' },
       offset: { type: 'number', description: '从第几条开始，用于翻页' },

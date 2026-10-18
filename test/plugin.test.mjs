@@ -131,7 +131,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把七条路由挂上去（五条只读 + 两条写）', () => {
+  it('宿主提供 webServer 时把九条路由挂上去（五条只读 + 四条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -149,10 +149,12 @@ describe('插件契约', () => {
 
     // M3-T19 加了目录与搜索（共三条只读），M3-T20 加了删除（写端点），
     // M4-T44 加了日志导出（只读）与日志清空（写端点），
-    // M4-T35 加了体检（只读；裁决 #26 明确它只出现在路由，不出现在工具表）。
+    // M4-T35 加了体检（只读；裁决 #26 明确它只出现在路由，不出现在工具表），
+    // M4-T26 加了归档与恢复（两条写端点；模型侧不新增工具）。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
-    assert.equal(routes.length, 7, '五条只读路由 + 两条写路由都应挂上')
+    assert.equal(routes.length, 9, '五条只读路由 + 四条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
+      '/api/lattice-archive',
       '/api/lattice-atoms',
       '/api/lattice-audit',
       '/api/lattice-forget',
@@ -160,6 +162,7 @@ describe('插件契约', () => {
       '/api/lattice-log-export',
       '/api/lattice-ping-mini',
       '/api/lattice-search',
+      '/api/lattice-unarchive',
     ])
     for (const route of routes) {
       assert.equal(route.kind, 'exact')
@@ -278,6 +281,150 @@ describe('插件契约', () => {
     assert.equal(res.out.body.error, 'bad-body')
   })
 
+  /**
+   * 归档 / 恢复两条写端点（T26 判据 5、6）：栅栏与删除同形；重复调用是幂等而不是报错。
+   *
+   * 四条栅栏各拒一次，而不是只挑一条：四条挡的是四种不同的越权形态
+   * （外站 / 方法 / 跨站简单请求的类型 / 超大请求体），漏一条就是漏一种。
+   */
+  it('归档路由：四条栅栏各拒一次（非回环 / 非 POST / 非 json / 超长体）', async () => {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    apply(fakeCtx({ webServer }), baseConfig)
+    const archive = routes.find((r) => r.path === '/api/lattice-archive').handler
+    const unarchive = routes.find((r) => r.path === '/api/lattice-unarchive').handler
+
+    for (const handler of [archive, unarchive]) {
+      let res = fakeRes()
+      await handler(fakeReq({ remote: '10.0.0.7' }), res)
+      assert.equal(res.out.status, 403, '非回环必须拒')
+
+      res = fakeRes()
+      await handler(fakeReq({ method: 'GET' }), res)
+      assert.equal(res.out.status, 405, '只认 POST')
+
+      res = fakeRes()
+      await handler(fakeReq({ type: 'text/plain' }), res)
+      assert.equal(res.out.status, 415, '只认 application/json')
+
+      // 上限 4096 字节；超限要 400，不能被静默截断后当成合法请求。
+      res = fakeRes()
+      await handler(fakeReq({ body: '{"atom_id":' + '1'.repeat(5000) + '}' }), res)
+      assert.equal(res.out.status, 400, '超长体必须拒')
+      assert.equal(res.out.body.error, 'bad-body')
+    }
+  })
+
+  it('归档路由：置位 / 清位 / 重复调用幂等，且不动正文与向量', async () => {
+    const dir = baseConfig.dataDir
+    const seedDb = openVault(join(dir, 'lattice.db')).db
+    const now = Date.now()
+    const id = Number(
+      seedDb
+        .prepare(
+          'INSERT INTO atom (kind, text, summary, embedding, created_at, updated_at, flags)' +
+            ' VALUES (?, ?, ?, ?, ?, ?, 0)',
+        )
+        .run(
+          '知识',
+          '归档路由用例：这条记忆的正文不该被改。',
+          '归档路由用例',
+          new Uint8Array(512 * 4),
+          now,
+          now,
+        ).lastInsertRowid,
+    )
+    const vecBefore = seedDb.prepare('SELECT hex(embedding) AS h FROM atom WHERE id = ?').get(id).h
+    seedDb.close()
+
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    apply(fakeCtx({ webServer }), baseConfig)
+    const archive = routes.find((r) => r.path === '/api/lattice-archive').handler
+    const unarchive = routes.find((r) => r.path === '/api/lattice-unarchive').handler
+
+    let res = fakeRes()
+    await archive(fakeReq({ body: JSON.stringify({ atom_id: id }) }), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.archived, true)
+    assert.equal(res.out.body.changed, true)
+    assert.equal(Number(res.out.body.flags) & 16, 16)
+
+    // 第二次归档：不报错、不再写库，只把 changed 说成 false（界面据此说「之前就是」）。
+    res = fakeRes()
+    await archive(fakeReq({ body: JSON.stringify({ id }) }), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.changed, false)
+    assert.equal(Number(res.out.body.flags), 16)
+
+    res = fakeRes()
+    await unarchive(fakeReq({ body: JSON.stringify({ atom_id: id }) }), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.archived, false)
+    assert.equal(Number(res.out.body.flags), 0)
+
+    res = fakeRes()
+    await unarchive(fakeReq({ body: JSON.stringify({ atom_id: id }) }), res)
+    assert.equal(res.out.body.changed, false)
+    assert.equal(Number(res.out.body.flags), 0)
+
+    // 不存在的 id 报 404，而不是 200 —— 界面要能区分「改了」与「本来就不在」。
+    res = fakeRes()
+    await archive(fakeReq({ body: JSON.stringify({ atom_id: 999999 }) }), res)
+    assert.equal(res.out.status, 404)
+
+    const checkDb = openVault(join(dir, 'lattice.db')).db
+    const row = checkDb.prepare('SELECT text, hex(embedding) AS h, flags FROM atom WHERE id = ?').get(id)
+    checkDb.close()
+    assert.equal(row.text, '归档路由用例：这条记忆的正文不该被改。', '归档不改正文')
+    assert.equal(row.h, vecBefore, '归档不改向量')
+    assert.equal(Number(row.flags), 0, '恢复之后位应当回到 0')
+  })
+  it('目录路由的 includeArchived：默认不列，显式传 1 时列出（T26 判据 4 的界面一侧）', () => {
+    const seedDb = openVault(join(baseConfig.dataDir, 'lattice.db')).db
+    const now = Date.now()
+    seedDb
+      .prepare(
+        'INSERT INTO atom (kind, text, summary, embedding, created_at, updated_at, flags)' +
+          ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('知识', '归档条目不该出现在默认目录里。', '归档条目', new Uint8Array(512 * 4), now, now, 16)
+    seedDb.close()
+
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    apply(fakeCtx({ webServer }), baseConfig)
+    const handler = routes.find((r) => r.path === '/api/lattice-atoms').handler
+
+    let req = fakeReq({ method: 'GET' })
+    req.url = '/api/lattice-atoms'
+    let res = fakeRes()
+    handler(req, res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.total, 0, '默认结果不含归档条目')
+
+    req = fakeReq({ method: 'GET' })
+    req.url = '/api/lattice-atoms?includeArchived=1'
+    res = fakeRes()
+    handler(req, res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.total, 1, '勾选「显示已归档」时要列出来')
+  })
   /**
    * 体检端点（M4-T35）：栅栏与最近一条只读路由同形；没有库时**报无数据**，
    * 而不是 500、也不是「全部正常」。这条路由不走 getRuntime，所以不会顺手建库。

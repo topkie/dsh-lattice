@@ -52,10 +52,18 @@ export type WriteAction = 'joined' | 'created'
  *
  * bit0 留给「待拆分」（`pending_split` 候选）：那一层还没实现，所以现在没有写入方。
  * 定义先占位，是因为 DDL 里那一位已经在设计文档中被命名，不能临时改叫别的。
+ *
+ * bit4 是「已归档」（T26）：默认不召回，仍可显式检索。它与删除**不是**同一件事 ——
+ * 归档只改这一位，内容、向量、入口、边都还在库里；取消归档即恢复可见，
+ * 读路径上的过滤是唯一开关（见 pipeline/archive.ts 的文件头）。
+ *
+ * bit3（8）按设计文档留给「已被取代」。**本次不实现、不占位**：被取代关系已经有
+ * `superseded_by` 列这个唯一真相源，再补一个位就是两个真相源。
  */
 export const FLAG_SPLIT_PENDING = 1
 export const FLAG_AMBIGUOUS = 2
 export const FLAG_UNCLASSIFIED = 4
+export const FLAG_ARCHIVED = 16
 
 export type CreateReason = 'far' | 'ambiguous'
 

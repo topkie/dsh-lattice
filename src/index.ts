@@ -2,18 +2,20 @@
 //
 // 插件只做两件事：
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
-//   2. 注册四个工具：ping（健康检查）、write、recall、expand
+//   2. 注册六个工具：ping（健康检查）、write、recall、expand、list、feedback
 //
-// 外加七条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
-//   /api/lattice-ping-mini    库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
-//   /api/lattice-atoms        目录：分页 + 过滤，与 lattice_list 同一条数据路径
-//   /api/lattice-search       搜索：与 lattice_recall 同一条数据路径，但**不记命中**
-//   /api/lattice-audit        体检：只读结构指标，供面板与维护者（M4-T35；不进模型侧）
-//   /api/lattice-log-export   降级日志导出：只读，返回 CSV 附件（M4-T44）
-//   /api/lattice-forget       **删除**：物理删除 + 留痕（§44）。写端点
-//   /api/lattice-log-clear    清空降级日志：写端点，要求 { confirm: true }（M4-T44）
+// 外加九条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
+//   /api/lattice-ping-mini      库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
+//   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径
+//   /api/lattice-search         搜索：与 lattice_recall 同一条数据路径，但**不记命中**
+//   /api/lattice-audit          体检：只读结构指标，供面板与维护者（M4-T35；不进模型侧）
+//   /api/lattice-log-export     降级日志导出：只读，返回 CSV 附件（M4-T44）
+//   /api/lattice-forget         **删除**：物理删除 + 留痕（§44）。写端点
+//   /api/lattice-log-clear      清空降级日志：写端点，要求 { confirm: true }（M4-T44）
+//   /api/lattice-archive        **归档**：置 flags 的 bit4，内容不删（T26）。写端点
+//   /api/lattice-unarchive      取消归档：清 bit4，恢复默认可见（T26）。写端点
 //
-// 五条只读路由的栅栏只留「本机回环」一道；两条写端点三道（回环 + POST +
+// 五条只读路由的栅栏只留「本机回环」一道；四条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
 //
 // `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
@@ -43,6 +45,7 @@ import { DEFAULT_BUDGET } from './pipeline/view.js'
 import { DEFAULT_THRESHOLDS } from './pipeline/write.js'
 import { openVault } from './db/open.js'
 import { forgetAtom } from './pipeline/forget.js'
+import { setArchived } from './pipeline/archive.js'
 import { configureSamples, sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
@@ -94,13 +97,27 @@ const SEARCH_ROUTE_PATH = '/api/lattice-search'
 const AUDIT_ROUTE_PATH = '/api/lattice-audit'
 
 /**
- * 删除路由：本插件**唯一**的写端点，也是界面上唯一的删除入口（§11.1：物理删除归用户）。
+ * 删除路由：界面上唯一的删除入口（§11.1：物理删除归用户）。
  *
  * 为什么必须是一个写端点而不是工具：模型只能**提议**删除。`lattice_forget` 因此不进
  * 模型可见的工具表（表达方式见 tools/index.ts 里那段注释），删除这个动作只能由用户
  * 在界面上点出来。
  */
 const FORGET_ROUTE_PATH = '/api/lattice-forget'
+
+/**
+ * 归档 / 恢复路由：只改 `atom.flags` 的 bit4（T26）。
+ *
+ * 为什么不是工具、也不加模型侧参数：设计报告 §11.1 把三权分开 —— 「是否仍然有效」
+ * 归模型（写入时声明 supersedes），「失效后是否还要被检索到」归插件（这一位），
+ * 「物理删除」归用户。归档是可见性动作，模型侧多一个动作就等于让模型替用户决定
+ * 什么该消失；工具表因此仍是六个。
+ *
+ * 为什么两条路由而不是一条 `{ archived: true/false }`：动作方向写进路径，日志与
+ * 界面调用都不必再解释一个布尔值的含义；两条路由共用一个 handler，不存在第二套实现。
+ */
+const ARCHIVE_ROUTE_PATH = '/api/lattice-archive'
+const UNARCHIVE_ROUTE_PATH = '/api/lattice-unarchive'
 
 /**
  * 降级日志的导出路由：只读。
@@ -331,6 +348,18 @@ export function apply(ctx: Context, config: unknown): void {
           path: LOG_CLEAR_ROUTE_PATH,
           handler: (req, res) => logClearRoute(runtimeCfg, req, res),
         }),
+        // 归档与恢复共用同一个 handler：差别只有一个布尔值，分成两份实现只会让
+        // 「两边行为应当对称」变成一句要靠比对两份代码来验证的话。
+        webServer.register({
+          kind: 'exact',
+          path: ARCHIVE_ROUTE_PATH,
+          handler: (req, res) => archiveRoute(runtimeCfg, req, res, true),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: UNARCHIVE_ROUTE_PATH,
+          handler: (req, res) => archiveRoute(runtimeCfg, req, res, false),
+        }),
       ]
       return () => {
         for (const dispose of disposers) dispose()
@@ -446,7 +475,9 @@ function miniPing(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse)
       ok: true,
       plugin: name,
       version: VERSION,
-      atoms: listAtoms(rt.db, { limit: 1 }).total,
+      // 规模含已归档（T26）：这一项回答的是「库有多大」，不是「默认列表有多少条」。
+      // 用默认口径会让归档悄悄改变库的规模读数 —— 而归档什么都没删。
+      atoms: listAtoms(rt.db, { limit: 1, includeArchived: true }).total,
     })
   } catch (e) {
     // 读库失败要说出来 —— 页面上一句「取数失败」比空白更能定位问题。
@@ -532,10 +563,13 @@ function atomsRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerRespons
   const params = queryOf(req)
   try {
     const rt = getRuntime(cfg)
+    // includeArchived 是界面上的「显示已归档」勾选（T26）：默认不传 = 只看未归档。
+    // 它只影响这一条只读路由；`lattice_list` 的显式检索走 flags 位过滤，两者不共用一个参数。
     const r = listAtoms(rt.db, {
       kind: params.get('kind') ?? '',
       origin: params.get('origin') ?? '',
       scope: params.get('scope') ?? '',
+      includeArchived: params.get('includeArchived') === '1',
       limit: intParam(params, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT),
       offset: intParam(params, 'offset', 0, 0, Number.MAX_SAFE_INTEGER),
     })
@@ -650,6 +684,8 @@ async function searchRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
           affiliation: h.affiliation,
           kind: fact?.kind ?? '',
           scope: fact?.scope ?? '',
+          // 归档位要一起给：界面每行要按它决定画「归档」还是「恢复」。
+          flags: fact?.flags ?? 0,
           recallHits: fact?.recallHits ?? 0,
           lastRecalledAt: fact?.lastRecalledAt ?? null,
         }
@@ -776,6 +812,56 @@ async function forgetRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
     })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'forget-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 归档 / 恢复：改 flags 的 bit4（T26）。
+ *
+ * 与删除的区别写在 pipeline/archive.ts 的文件头：归档不删内容、不留墓碑、不做防写回。
+ * 这里因此没有二次确认（比删除轻），也没有「回收站」这种中间态 —— 归档本身就是那个中间态。
+ */
+async function archiveRoute(
+  cfg: RuntimeConfig,
+  req: IncomingMessage,
+  res: ServerResponse,
+  archived: boolean,
+): Promise<void> {
+  // 与删除同三道栅栏：归档同样是「不需要读到响应就已经造成后果」的写动作。
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  // 字段名与删除路由一致（atom_id）；`id` 一并接受，因为这两条路由的请求体只有一个整数，
+  // 为名字不同而让调用方猜字段是没必要的失败模式。
+  const atomId = Number(raw.atom_id ?? raw.id)
+  if (!Number.isInteger(atomId) || atomId <= 0) {
+    jsonOut(res, 400, { ok: false, error: 'bad-id', message: 'atom_id 必须是正整数' })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const r = setArchived(rt.db, { atomId, archived })
+    if (r === null) {
+      // 与删除一致：404 而不是 200 —— 界面要能区分「改了」与「这条本来就不在」。
+      jsonOut(res, 404, { ok: false, error: 'not-found', message: '记忆 #' + atomId + ' 不在库里' })
+      return
+    }
+    // changed=false 不是错误：重复归档 / 重复恢复都落在这一支，界面据此说「之前就是」。
+    jsonOut(res, 200, {
+      ok: true,
+      atomId: r.atomId,
+      flags: r.flags,
+      archived: r.archived,
+      changed: r.changed,
+    })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'archive-failed', message: reasonOf(e) })
   }
 }
 

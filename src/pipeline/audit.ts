@@ -13,7 +13,7 @@
 // 口径只写在这一处：T28 面板、维护脚本、测试都从这里取数；面板只做展示，不另算一套。
 //
 // 指标清单（括号里是它回答的问题）：
-//   · atom 总数、topic 数（n_atoms > 0 的那些）
+//   · atom 总数（含已归档）、其中已归档的条数、topic 数（n_atoms > 0 的那些）
 //   · 单成员 topic 占比（topic 层退化的可观测形态之一）
 //   · atom / topic 比（另一个形态；1.0 = 每条记忆各自成主题）
 //   · 图路状态（inferred 边在不在、各类多少 —— 与 search.ts 的 graphStatus 同一件事）
@@ -31,6 +31,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { getMeta, META_RECLUSTER_AT } from '../db/meta.js'
 import { GRAPH_INFER_MAX_ATOMS, INFERRED_ORIGIN } from '../graph/infer.js'
 import { DUP_COS, DUP_LEX } from './search.js'
+import { FLAG_ARCHIVED } from './write.js'
 // 分页上界与页大小**复用目录的两个数**：两者防的是同一件事（一次拉爆上下文），
 // 各写一份只会让「界面一屏能放多少行」出现两个口径。
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT } from './list.js'
@@ -86,8 +87,21 @@ export interface AuditReport {
   /** 口径出处与行为检查的位置。不含任何「通过 / 失败」式结论。 */
   note: string
   topics: {
-    /** atom 总数（活着的记忆；墓碑在 forgotten 表，不在这个数里）。 */
+    /**
+     * atom 总数（活着的记忆；墓碑在 forgotten 表，不在这个数里）。
+     *
+     * **含已归档**：归档不是删除，内容仍在库里，也仍参与建边与重聚类。体检是给
+     * 维护者看的库形态，把归档从分母里剔除会让「库里有多少条」与「有多少条可能被召回」
+     * 变成两个不说明的数。两者都报：总数在这里，归档数在下一项。
+     */
     atoms: number
+    /**
+     * 其中已归档（flags 的 bit4）的条数，archived ≤ atoms。
+     *
+     * 口径与 atoms 一致：下面所有按 atom 计数的项（单成员 topic、孤立、从未被召回、
+     * 入口平均、重复对）**都包含归档条目**。没有一处偷偷排除，也没有一处只算归档。
+     */
+    archived: number
     /** 有成员的 topic 数（n_atoms > 0；空 topic 不计）。 */
     withAtoms: number
     /** 单成员 topic 数。 */
@@ -198,6 +212,7 @@ export function noDataReport(opts: AuditOptions = {}, detail = ''): AuditReport 
     note: NOTE,
     topics: {
       atoms: 0,
+      archived: 0,
       withAtoms: 0,
       singleMember: 0,
       singleMemberRatio: null,
@@ -262,7 +277,11 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
       ?.user_version ?? 0,
   )
 
+  // 口径（T26 判据 8）：体检按**整库**计数，归档条目照常计入每一项 ——
+  // 它们是还活着的记忆（内容、入口、边都在），只是默认不召回。为避免「一个总数、两种口径」，
+  // 归档数单独报一项（topics.archived），不把任何一项的分母改成「未归档的子集」。
   const atoms = count(db, 'SELECT COUNT(*) AS n FROM atom')
+  const archived = count(db, 'SELECT COUNT(*) AS n FROM atom WHERE (flags & ?) <> 0', FLAG_ARCHIVED)
   const withAtoms = count(db, 'SELECT COUNT(*) AS n FROM topic WHERE n_atoms > 0')
   const singleMember = count(db, 'SELECT COUNT(*) AS n FROM topic WHERE n_atoms = 1')
   const withoutTopic = count(db, 'SELECT COUNT(*) AS n FROM atom WHERE topic_id IS NULL')
@@ -387,6 +406,7 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
     note: NOTE,
     topics: {
       atoms,
+      archived,
       withAtoms,
       singleMember,
       singleMemberRatio: withAtoms === 0 ? null : singleMember / withAtoms,
