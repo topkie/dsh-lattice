@@ -60,6 +60,9 @@ export const EVENT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
   // 校准样本库写不进 / 读不到。样本是旁路：失败只留痕，不影响召回与写入。
   // 只记原因码 —— 路径与查询文本都不进这张表。
   'samples.unavailable': ['reason'],
+  // 用户忽略了一条待拆分候选（T29）。这是留痕而不是待办：没有状态、没有后续动作。
+  // **不带 atom id**：这张表的白名单里没有 id 通道，忽略这件事只需要「发生过」。
+  'split.ignored': [],
 }
 
 /** 允许落库的等级。 */

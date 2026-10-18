@@ -275,7 +275,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           const tags: string[] = []
           if ((r.flags & 2) !== 0) tags.push('歧义（两个候选接近）')
           if ((r.flags & 4) !== 0) tags.push('未归类')
-          if ((r.flags & 1) !== 0) tags.push('待拆分')
+          // 待拆分（T29）：只说是**怎么来的**，不说「该拆」—— 切点按长度定，没读内容。
+          if ((r.flags & 1) !== 0) tags.push('待拆分（按长度切出）')
           lines.push('标记：' + tags.join('；') + '（flags=' + r.flags + '）')
         }
         // 重复 / 高相似的提示挂在这里。**写入已经发生**，提示只是让调用方知道
@@ -291,7 +292,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         }
       })
       if (multi) {
-        lines.push('（原文被切分，topic_hint 未沿用：各段各自落位，以免把几件事硬塞进同一个主题。）')
+        // 两件事都只说后果：切分是**按长度**做的（判据 7 不允许暗示做过内容判断），
+        // topic_hint 不沿用是切分的直接结果，不是「这段一定能独立成主题」。
+        lines.push('（原文按长度切分，topic_hint 未沿用：各段各自落位、各自判断主题归属。）')
         // 边只落在第一条。不说的话，调用方会以为每一段都挂上了同一批关系。
         if (out.results.some((r) => r.edgesDeclared !== undefined || r.edgesRejected !== undefined)) {
           lines.push('（关系只落在第一条。）')
@@ -355,6 +358,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         budget: num(args?.budget, cfg.viewBudget),
         // 本地标定值（快照）优先于按规模插值；未标定时为 undefined，pipeline 自己会回落。
         briefMin: calibParams?.briefMin,
+        // 本次查询词，只用于待拆分候选的「使用场景」（T29）：设计要的就是「把这条疑似
+        // 该拆的记忆连同它被用来解决什么一起给出来」。其他锚行不受影响。
+        scene: q,
       })
       // 会话级「最近一次召回」：只留在内存里（裁决 #34 ⑥），lattice_feedback 的 ref 靠它解析。
       // 记的是 view.anchorIds（真正展示给模型的那批），不是融合后的全部候选。
@@ -508,7 +514,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       flags: {
         type: 'number',
         description:
-          '只列需要留意的：2 = 两个主题都像（歧义）、4 = 未归类、16 = 已归档' +
+          '只列需要留意的：1 = 待拆分（写入时按长度切出，切点未判内容）、' +
+          '2 = 两个主题都像（歧义）、4 = 未归类、16 = 已归档' +
           '（默认不列，显式给 flags 时才列）；3 = 两类都要',
       },
       limit: { type: 'number', description: '本页条数，默认 20，上限 50' },

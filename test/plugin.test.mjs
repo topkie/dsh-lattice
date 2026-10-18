@@ -131,7 +131,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把九条路由挂上去（五条只读 + 四条写）', () => {
+  it('宿主提供 webServer 时把十一条路由挂上去（五条只读 + 六条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -151,8 +151,9 @@ describe('插件契约', () => {
     // M4-T44 加了日志导出（只读）与日志清空（写端点），
     // M4-T35 加了体检（只读；裁决 #26 明确它只出现在路由，不出现在工具表），
     // M4-T26 加了归档与恢复（两条写端点；模型侧不新增工具）。
+    // M4-T29 加了拆分候选的确认与忽略（两条写端点；模型侧仍不新增工具）。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
-    assert.equal(routes.length, 9, '五条只读路由 + 四条写路由都应挂上')
+    assert.equal(routes.length, 11, '五条只读路由 + 六条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-archive',
       '/api/lattice-atoms',
@@ -162,6 +163,8 @@ describe('插件契约', () => {
       '/api/lattice-log-export',
       '/api/lattice-ping-mini',
       '/api/lattice-search',
+      '/api/lattice-split-confirm',
+      '/api/lattice-split-ignore',
       '/api/lattice-unarchive',
     ])
     for (const route of routes) {

@@ -36,6 +36,15 @@ export const META_CALIB_LAST_ERROR = 'calib_last_error'
  */
 export const META_RECLUSTER_AT = 'recluster_at'
 
+/**
+ * 用户已确认「这条应当拆分」的 atom id 清单（JSON 数组，T29）。
+ *
+ * 为什么放 meta 而不是新表：它没有查询维度（只在召回时整份读出来），也不需要与 atom
+ * 行同生命周期；而新建一张表要一次迁移，本任务的约束是不升 user_version。
+ * 上限与 FIFO 淘汰在 pipeline/split.ts 的 SPLIT_CONFIRMED_MAX。
+ */
+export const META_SPLIT_CONFIRMED = 'split_confirmed'
+
 /** 写入一个键（已存在则覆盖）。 */
 export function setMeta(db: DatabaseSync, key: string, value: string, now = Date.now()): void {
   db.prepare(

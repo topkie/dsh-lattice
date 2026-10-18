@@ -197,7 +197,7 @@ describe('写入侧审核：工具返回值（M3-T22）', () => {
   it('过长：返回值逐条报出切分结果，条数与库里的 atom 数一致', async () => {
     const text = '甲'.repeat(300) + '。' + '乙'.repeat(300) + '。' + '丙'.repeat(300) + '。'
     const out = await tool('lattice_write').execute({ text })
-    assert.ok(out.includes('自动切成 3 条'), '输出: ' + out)
+    assert.ok(out.includes('按长度切成 3 条'), '输出: ' + out)
     assert.ok(out.includes('第 1/3 条'), '输出: ' + out)
     assert.ok(out.includes('第 3/3 条'), '输出: ' + out)
     assert.equal((out.match(/已写入记忆 #/g) ?? []).length, 3, '输出: ' + out)

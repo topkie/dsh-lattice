@@ -15,6 +15,7 @@ import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
 import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { FLAG_ARCHIVED } from './write.js'
+import { readConfirmedSplits } from './split.js'
 
 /** 召回路的名字，也是融合时的权重键。 */
 export type Channel = 'vec' | 'entry' | 'body' | 'graph'
@@ -64,6 +65,11 @@ export interface RecallHit {
   origin: string
   /** 被哪条记忆取代（atom id）；未被取代时为 null。 */
   supersededBy: number | null
+  /**
+   * 整行的 `atom.flags`。注入层要按位判读（bit0 = 待拆分），不能只带一个布尔 ——
+   * 位定义只有 write.ts 一处，读侧按位取用，不新造第二套状态字段。
+   */
+  flags: number
 }
 
 /** 召回元数据。退化必须可观测，不允许静默失效。 */
@@ -102,6 +108,15 @@ export interface RecallMeta {
    * 读者分不清它是不是重建一次就没了。
    */
   graphStatus: string
+  /**
+   * 用户已确认「这条应当拆分」的 atom id（T29）。来自 meta 的 split_confirmed 清单，
+   * 上限由 SPLIT_CONFIRMED_MAX 夹住（FIFO）。注入层据此把锚行提示换成「已确认」的说法。
+   *
+   * 为什么由召回带出来而不是让注入层自己读：meta 是库里的东西，注入层只该认识
+   * RecallResult —— 它连 getMeta 都不该 import（依赖方向是 tools → pipeline：读库的
+   * 决定在这里做一次，而不是每个渲染分支各做一次）。
+   */
+  splitConfirmed: number[]
   elapsedMs: number
 }
 
@@ -126,6 +141,7 @@ interface AtomRow {
   summary: string
   origin: string
   supersededBy: number | null
+  flags: number
 }
 
 /**
@@ -542,7 +558,9 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
   if (ids.length === 0) return out
   const ph = ids.map(() => '?').join(', ')
   const rows = db
-    .prepare('SELECT id, topic_id, fit, summary, origin, superseded_by FROM atom WHERE id IN (' + ph + ')')
+    .prepare(
+      'SELECT id, topic_id, fit, summary, origin, superseded_by, flags FROM atom WHERE id IN (' + ph + ')',
+    )
     .all(...ids) as Array<{
     id: number | bigint
     topic_id: number | bigint
@@ -550,6 +568,7 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
     summary: string
     origin: string
     superseded_by: number | bigint | null
+    flags: number | bigint | null
   }>
   for (const r of rows) {
     out.set(Number(r.id), {
@@ -559,6 +578,7 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
       summary: String(r.summary),
       origin: String(r.origin),
       supersededBy: r.superseded_by === null ? null : Number(r.superseded_by),
+      flags: r.flags === null ? 0 : Number(r.flags),
     })
   }
   return out
@@ -679,6 +699,7 @@ export function recall(
       summary: row.summary,
       origin: row.origin,
       supersededBy: row.supersededBy,
+      flags: row.flags,
       ranks: acc.ranks,
       affiliation: aff,
     })
@@ -725,6 +746,8 @@ export function recall(
       topCosine,
       primaryHits,
       secondaryHits,
+      // 只读一次 meta（一个键）。它不进任何打分，只决定锚行那句提示的措辞。
+      splitConfirmed: readConfirmedSplits(db),
       elapsedMs: Date.now() - t0,
     },
   }

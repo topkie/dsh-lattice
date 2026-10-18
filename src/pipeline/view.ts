@@ -13,7 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
 import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
-import { FLAG_ARCHIVED, TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
+import { FLAG_ARCHIVED, FLAG_SPLIT_PENDING, TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -39,6 +39,16 @@ export type TrimStep = (typeof TRIM_ORDER)[number]
  * 改这里必须同步那个字符串 —— 这也是它此前一直没有名字的代价。
  */
 export const TRIM_PATHS_LIMIT = 5
+
+/**
+ * 锚行里「使用场景」（本次查询词）最多给多少个字符。
+ *
+ * 16 不是标定值，是**预算护栏**：这句提示挂在每一条待拆分候选上，而锚段的预算是按字符
+ * 算的。查询词本身可以任意长（有的查询是一整句），直接拼进去会让一条锚多出几十上百字，
+ * 同一段预算下能装下的记忆随之变少。取 16 字足以认出「这是用来干什么的那次查询」，
+ * 又保证单锚的文本增量不超过 40 字（本任务的判据 3）。
+ */
+export const SPLIT_SCENE_CHARS = 16
 
 export interface ViewOptions {
   /** 总字符预算。 */
@@ -70,6 +80,13 @@ export interface ViewOptions {
    * 依赖方向是 `tools → pipeline`，反向引用会把「谁读库」这件事弄乱。
    */
   briefMin?: number
+  /**
+   * 本次查询词，作为「使用场景」标在待拆分候选的锚行上（T29）。
+   *
+   * 为什么由调用方传：查询词只存在于调用方（`lattice_recall` 的 q、搜索路由的 q），
+   * 注入层不读请求上下文。省略时那句话不出现 —— 它只对待拆分候选有意义。
+   */
+  scene?: string
 }
 
 export interface ViewResult {
@@ -294,17 +311,42 @@ function clip(s: string, max: number): string {
  * 默认（模型写的、未被取代的）**不加标记** —— 大多数记忆都是这一类，给它们各加两个字
  * 只是白占预算。只标需要区分的：用户亲口说的、从别处导入的、已被取代的。
  *
- * 为什么标在锚段、而不是另起一段清单：这三件事都改变「这条记忆该不该信」，而模型读到
+ * 为什么标在锚段、而不是另起一段清单：这几件事都改变「这条记忆该不该信」，而模型读到
  * 锚段的时刻，正是它要做这个判断的时刻。id 本身是自增的，也就等于天然的写入顺序。
+ *
+ * T29 的两种标记也挂在这里（与「已被取代」同一位置）：
+ *   - 待拆分（flags 的 bit0）：候选状态，由写入时的长度切分置位。说法必须带上
+ *     「切点按长度、未判内容」，否则模型会把它读成「系统判断过该拆」。
+ *   - 用户已确认应拆分：人在界面上按过确认（状态在 meta 的 split_confirmed 里）。
+ *     这时给的是**下一步**，因为实际拆分不做（裁决 #42）。
+ * 使用场景（本次查询词）只挂在候选上：没有它，模型不知道这条记忆曾被用来回答什么，
+ * 而那正是人判断「该不该拆」时缺的那半句。
  */
-function stateMark(h: { origin?: string; supersededBy?: number | null }): string {
+function stateMark(
+  h: { id: number; origin?: string; supersededBy?: number | null; flags?: number },
+  scene: string | undefined,
+  confirmed: ReadonlySet<number>,
+): string {
   const parts: string[] = []
   if (h.origin === 'user') parts.push('我')
   else if (h.origin === 'import') parts.push('导入')
   if (h.supersededBy !== null && h.supersededBy !== undefined) {
     parts.push('已被 #' + h.supersededBy + ' 取代')
   }
+  if (confirmed.has(h.id)) {
+    parts.push('用户已确认应拆分（可按内容重写并声明 supersedes）')
+  } else if (((h.flags ?? 0) & FLAG_SPLIT_PENDING) !== 0) {
+    parts.push('疑似应拆分（切点按长度，未判内容）')
+    const used = sceneText(scene)
+    if (used !== '') parts.push('用于：' + used)
+  }
   return parts.length === 0 ? '' : '·' + parts.join('·')
+}
+
+/** 使用场景的可见文本；没给或给了空白串时不产生任何字。 */
+function sceneText(scene: string | undefined): string {
+  const s = String(scene ?? '').trim()
+  return s === '' ? '' : clip(s, SPLIT_SCENE_CHARS)
 }
 
 /**
@@ -352,6 +394,8 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
     db,
     recalled.hits.map((h) => h.id),
   )
+  // 确认清单只在这里转成 Set 一次：它在三段渲染里每次 build() 都要查，而 hits 最多几十条。
+  const splitConfirmed = new Set(recalled.meta.splitConfirmed ?? [])
   const anchorQuota = Math.floor(budget * SEGMENT_RATIO.anchors)
   const entryQuota = Math.floor(budget * SEGMENT_RATIO.entries)
   const pathQuota = Math.floor(budget * SEGMENT_RATIO.paths)
@@ -382,7 +426,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
       const isSummary = st.anchorToSummary || full === h.summary
       const body = clip(full, st.anchorToSummary ? ANCHOR_SUMMARY_CHARS : anchorMax)
       // 带 atom id：它是 lattice_expand 的入参；id 自增，也就等于天然的写入顺序。
-      const line = '- [' + h.id + stateMark(h) + '] ' + body
+      const line = '- [' + h.id + stateMark(h, opts.scene, splitConfirmed) + '] ' + body
       const cost = line.length + 1
       // 前 MIN_ANCHORS 条无论如何都要留下（保底），之后才看配额。
       if (anchorLines.length < MIN_ANCHORS || anchorsUsed + cost <= anchorQuota) {
@@ -391,7 +435,12 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
         anchorsUsed += cost
         if (isSummary) demoted++
       } else if (!st.anchorToSummary) {
-        const short = '- [' + h.id + stateMark(h) + '] ' + clip(h.summary, DEMOTED_ANCHOR_CHARS)
+        const short =
+          '- [' +
+          h.id +
+          stateMark(h, opts.scene, splitConfirmed) +
+          '] ' +
+          clip(h.summary, DEMOTED_ANCHOR_CHARS)
         const sc = short.length + 1
         if (anchorsUsed + sc <= anchorQuota) {
           anchorLines.push(short)

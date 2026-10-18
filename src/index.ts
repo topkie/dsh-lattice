@@ -4,7 +4,7 @@
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
 //   2. 注册六个工具：ping（健康检查）、write、recall、expand、list、feedback
 //
-// 外加九条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
+// 外加十一条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
 //   /api/lattice-ping-mini      库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
 //   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径
 //   /api/lattice-search         搜索：与 lattice_recall 同一条数据路径，但**不记命中**
@@ -14,8 +14,10 @@
 //   /api/lattice-log-clear      清空降级日志：写端点，要求 { confirm: true }（M4-T44）
 //   /api/lattice-archive        **归档**：置 flags 的 bit4，内容不删（T26）。写端点
 //   /api/lattice-unarchive      取消归档：清 bit4，恢复默认可见（T26）。写端点
+//   /api/lattice-split-confirm  确认某条待拆分：清 bit0 + 记一条状态（T29）。写端点
+//   /api/lattice-split-ignore   忽略某条待拆分：清 bit0 + 写日志（T29）。写端点
 //
-// 五条只读路由的栅栏只留「本机回环」一道；四条写端点三道（回环 + POST +
+// 五条只读路由的栅栏只留「本机回环」一道；六条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
 //
 // `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
@@ -46,6 +48,7 @@ import { DEFAULT_THRESHOLDS } from './pipeline/write.js'
 import { openVault } from './db/open.js'
 import { forgetAtom } from './pipeline/forget.js'
 import { setArchived } from './pipeline/archive.js'
+import { confirmSplit, ignoreSplit } from './pipeline/split.js'
 import { configureSamples, sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
@@ -118,6 +121,22 @@ const FORGET_ROUTE_PATH = '/api/lattice-forget'
  */
 const ARCHIVE_ROUTE_PATH = '/api/lattice-archive'
 const UNARCHIVE_ROUTE_PATH = '/api/lattice-unarchive'
+
+/**
+ * 拆分候选的两个决定（T29）：确认 / 忽略。
+ *
+ * 为什么不是工具、也不加模型侧参数：这两个动作是**人的判断**。写入时的切分是自动的，
+ * 但「这条到底该不该拆」要读内容，而读内容作判断正是模型侧不该被要求做的事（§11.1：
+ * 插件不做判断，只提供判断所需的信息）。模型侧因此仍是六个工具。
+ *
+ * 为什么两条路由而不是一条 `{ confirmed: true/false }`：与归档 / 恢复同一条理由 ——
+ * 动作方向写进路径，日志与界面调用都不必再解释一个布尔值的含义；两条共用一个 handler。
+ *
+ * **两者都不执行拆分**（裁决 #42）：只清 bit0（确认另记一条状态），正文、条数、入口与边
+ * 一律不动。执行拆分要动 topic 归属与入口迁移，设计里没有定义，留给后续任务。
+ */
+const SPLIT_CONFIRM_ROUTE_PATH = '/api/lattice-split-confirm'
+const SPLIT_IGNORE_ROUTE_PATH = '/api/lattice-split-ignore'
 
 /**
  * 降级日志的导出路由：只读。
@@ -359,6 +378,17 @@ export function apply(ctx: Context, config: unknown): void {
           kind: 'exact',
           path: UNARCHIVE_ROUTE_PATH,
           handler: (req, res) => archiveRoute(runtimeCfg, req, res, false),
+        }),
+        // 拆分候选的两个决定共用同一个 handler，理由同归档 / 恢复。
+        webServer.register({
+          kind: 'exact',
+          path: SPLIT_CONFIRM_ROUTE_PATH,
+          handler: (req, res) => splitRoute(runtimeCfg, req, res, true),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: SPLIT_IGNORE_ROUTE_PATH,
+          handler: (req, res) => splitRoute(runtimeCfg, req, res, false),
         }),
       ]
       return () => {
@@ -862,6 +892,62 @@ async function archiveRoute(
     })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'archive-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 拆分候选的决定：确认或忽略（T29）。
+ *
+ * 两者的共同点：都清 `atom.flags` 的 bit0，所以界面上的候选提示消失。差别只有一处 ——
+ * 确认另记一条状态（meta 的 split_confirmed），下次召回会在锚行提示「用户已确认应拆分」；
+ * 忽略只写一条日志，没有状态、没有待办。
+ *
+ * 三道写栅栏与删除 / 归档相同：这个动作同样「不需要读到响应就已经造成了后果」。
+ * 请求体的上限也共用 FORGET_BODY_MAX_BYTES —— 它只有一个整数 id。
+ *
+ * `changed=false` 不是错误：重复确认 / 重复忽略都落在这一支，界面据此说「之前就是」。
+ */
+async function splitRoute(
+  cfg: RuntimeConfig,
+  req: IncomingMessage,
+  res: ServerResponse,
+  confirm: boolean,
+): Promise<void> {
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  // 字段名与删除 / 归档一致（atom_id）；`id` 一并接受，理由同归档路由。
+  const atomId = Number(raw.atom_id ?? raw.id)
+  if (!Number.isInteger(atomId) || atomId <= 0) {
+    jsonOut(res, 400, { ok: false, error: 'bad-id', message: 'atom_id 必须是正整数' })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const r = confirm ? confirmSplit(rt.db, atomId) : ignoreSplit(rt.db, atomId)
+    if (r === null) {
+      // 与删除 / 归档一致：404 而不是 200 —— 界面要能区分「改了」与「这条本来就不在」。
+      jsonOut(res, 404, { ok: false, error: 'not-found', message: '记忆 #' + atomId + ' 不在库里' })
+      return
+    }
+    // 确认之后的有效确认条数：界面与验收都能据此看出「这份清单有没有被写进去」，
+    // 而不必再去读 meta（那是实现细节）。
+    const payload: Record<string, unknown> = {
+      ok: true,
+      atomId: r.atomId,
+      flags: r.flags,
+      changed: r.changed,
+    }
+    if (confirm) payload.confirmedCount = r.confirmed?.length ?? 0
+    jsonOut(res, 200, payload)
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'split-failed', message: reasonOf(e) })
   }
 }
 

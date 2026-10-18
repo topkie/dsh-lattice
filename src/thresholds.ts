@@ -74,6 +74,7 @@ import {
   MIN_ANCHORS,
   PATH_SUMMARY_CHARS,
   SEGMENT_RATIO,
+  SPLIT_SCENE_CHARS,
   TIER_BRIEF_MIN,
   TIER_FULL_MIN,
   TRIM_ORDER,
@@ -81,6 +82,7 @@ import {
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './pipeline/write.js'
+import { SPLIT_CONFIRMED_MAX } from './pipeline/split.js'
 import {
   BUSY_TIMEOUT_FLOOR_MS,
   BUSY_TIMEOUT_MULTIPLIER,
@@ -2190,12 +2192,42 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '写入',
     value: () => FLAG_SPLIT_PENDING,
     definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_SPLIT_PENDING' },
-    affects: 'atom.flags 的 bit0：待拆分（pending_split 候选）。那一层未实现，当前无写入方',
+    affects:
+      'atom.flags 的 bit0：待拆分（T29）。写入侧**按长度切分**时置上（每段都置），召回时锚行标「疑似应拆分」，由人在界面上确认或忽略（两者都清这一位）',
     calibration: {
-      evidence: '位定义来自设计报告对 flags 的命名（待拆分 / 歧义 / 未归类）。**位值一旦落库就不能改**',
-      at: '2026-10-18',
+      evidence:
+        '位定义来自设计报告对 flags 的命名（待拆分 / 歧义 / 未归类）。**位值一旦落库就不能改**。置位判据是长度（review.ts 的 maxChars），不是自洽度评分 —— 候选按长度给出、不判断内容',
+      at: '2026-10-19',
     },
     variesWith: ['（不应变：改它等于把历史行解释错）'],
+  },
+  {
+    name: 'SPLIT_CONFIRMED_MAX',
+    area: '写入',
+    value: () => SPLIT_CONFIRMED_MAX,
+    definedBy: { file: 'src/pipeline/split.ts', name: 'SPLIT_CONFIRMED_MAX' },
+    affects:
+      '「用户已确认应拆分」清单的条数上限（meta 的 split_confirmed，FIFO 淘汰最早的一条）。满了只影响更早的确认还能不能出现在锚行提示里，不改变任何召回与写入行为',
+    calibration: {
+      evidence:
+        '**未标定，是护栏**：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长',
+      at: '2026-10-19',
+    },
+    variesWith: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度'],
+  },
+  {
+    name: 'SPLIT_SCENE_CHARS',
+    area: '写入',
+    value: () => SPLIT_SCENE_CHARS,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'SPLIT_SCENE_CHARS' },
+    affects:
+      '锚行「用于：<查询词>」里查询词最多给几个字符（只对 flags 的 bit0 命中生效）。保证单条锚的文本增量不超过 40 字',
+    calibration: {
+      evidence:
+        '**未标定，是预算护栏**：锚段按字符算预算，查询词可以是一整句；不截断会让一条锚多出几十上百字，同一段预算能装下的记忆随之变少',
+      at: '2026-10-19',
+    },
+    variesWith: ['查询词长度分布', '锚段预算', '「单锚增量 ≤ 40 字」这条判据'],
   },
   {
     name: 'FLAG_AMBIGUOUS',

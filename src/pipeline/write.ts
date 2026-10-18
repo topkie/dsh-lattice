@@ -50,8 +50,10 @@ export type WriteAction = 'joined' | 'created'
 /**
  * `atom.flags` 的位定义（M4-T36）。**位值一旦写进库就不能改** —— 改它等于把历史行解释错。
  *
- * bit0 留给「待拆分」（`pending_split` 候选）：那一层还没实现，所以现在没有写入方。
- * 定义先占位，是因为 DDL 里那一位已经在设计文档中被命名，不能临时改叫别的。
+ * bit0 是「待拆分」（`pending_split` 候选，T29）：**写入侧按长度切分时置上**（见
+ * `writeReviewed`），召回时在锚行标一句「疑似应拆分」，由人在界面上确认或忽略。
+ * 它说的是「切点按长度定的，没有按内容判断过」，**不是**「这条一定该拆」—— 一条只讲
+ * 一件事的长文本同样会被标上。确认与忽略都清这一位，见 pipeline/split.ts。
  *
  * bit4 是「已归档」（T26）：默认不召回，仍可显式检索。它与删除**不是**同一件事 ——
  * 归档只改这一位，内容、向量、入口、边都还在库里；取消归档即恢复可见，
@@ -836,8 +838,16 @@ function readTopicOf(db: DatabaseSync, atomId: number): number {
  *
  * 失败语义分层：可预期的输入问题抛 Error（调用方给错参数，不该静默吞掉）；环境问题
  * （编码失败）不抛——降级为词面模式继续，并把降级痕迹留在 evidence.lexicalOnly。
+ *
+ * `opts.pendingSplit` 由 `writeReviewed` 在「按长度切分」时传入，不是模型侧参数：
+ * 它回答的是「这次写入是不是切出来的」，属于「调几次、带什么标记」这类调用方的决定，
+ * 与单条写入的落位判定无关。
  */
-export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<WriteResult> {
+export async function writeAtom(
+  ctx: WriteCtx,
+  input: WriteInput,
+  opts: { pendingSplit?: boolean } = {},
+): Promise<WriteResult> {
   const text = String(input.text ?? '').trim()
   if (text.length === 0) throw new Error('text 不能为空')
   const summary = extractSummary(text, SUMMARY_CHARS)
@@ -943,6 +953,16 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   // 结论只走返回值。
   const declared = validateDeclaredEdges((input as { edges?: unknown }).edges)
 
+  // 落库的位：落位那一层只决定「歧义 / 未归类」，T29 的待拆分位与落位无关 ——
+  // 按长度切出来的每一段都带上它，哪怕这一段并入了已有主题（并入说明归属已确认，
+  // 但切点仍然没有按内容判断过，那是两件事）。
+  const flags =
+    (!newTopic
+      ? 0
+      : decision.kind === 'create' && decision.reason === 'ambiguous'
+        ? FLAG_AMBIGUOUS
+        : FLAG_UNCLASSIFIED) | (opts.pendingSplit === true ? FLAG_SPLIT_PENDING : 0)
+
   const committed = commitWrite(
     ctx,
     {
@@ -960,13 +980,7 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
       origin: normalizeOrigin(input.origin),
       nearId,
       nearConf,
-      // 落库的位：只有「新建」才有理由标 —— 并入已有主题说明归属已确认。
-      // far 标「未归类」、ambiguous 标「歧义」；两者都是**说明**，不参与任何打分（判据 4）。
-      flags: !newTopic
-        ? 0
-        : decision.kind === 'create' && decision.reason === 'ambiguous'
-          ? FLAG_AMBIGUOUS
-          : FLAG_UNCLASSIFIED,
+      flags,
     },
     entries,
     declared.accepted,
@@ -997,9 +1011,8 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   const edgesRejected = declared.rejected.concat(committed.edgesRejected)
   if (edgesRejected.length > 0) result.edgesRejected = edgesRejected
   // 位标志交给回执（判据 6）：只给数，不给解释 —— 解释在工具层统一写一处。
-  if (newTopic)
-    result.flags =
-      decision.kind === 'create' && decision.reason === 'ambiguous' ? FLAG_AMBIGUOUS : FLAG_UNCLASSIFIED
+  // 原样交出**落库的那个值**，而不是重新推一遍：两处各推一次就会分叉。
+  if (flags !== 0) result.flags = flags
 
   // 归一可见：只在实际发生过纠正时带原值（写入方没给类型不算纠正）。
   if (kindInput !== '' && kindInput !== kind) {
@@ -1045,13 +1058,20 @@ export async function writeReviewed(ctx: WriteCtx, input: WriteInput): Promise<R
     //
     // 声明边同理**只落在第一条**：切分后的几段是几件不同的事，把同一批关系挂到每一段上
     // 会凭空多出几条边（破坏「事务内固定行数」的那个上界），而模型声明时说的是「这一条」。
+    // 待拆分位只标在「按长度切分」这一次写入上，**每一段都标**：切点是同一个判据给出的，
+    // 只标第一段会让后面几段在召回时看不出自己同样是切出来的，用户也就无从确认它们。
+    // 单条写入（action='keep'）时该位不置 —— 那条没有切点，没有需要确认的东西。
     results.push(
-      await writeAtom(ctx, {
-        ...input,
-        text: seg,
-        topicHint: split ? undefined : input.topicHint,
-        edges: i === 0 ? input.edges : [],
-      }),
+      await writeAtom(
+        ctx,
+        {
+          ...input,
+          text: seg,
+          topicHint: split ? undefined : input.topicHint,
+          edges: i === 0 ? input.edges : [],
+        },
+        { pendingSplit: split },
+      ),
     )
   }
   return { length, results }

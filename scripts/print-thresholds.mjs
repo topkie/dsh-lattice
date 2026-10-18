@@ -121,6 +121,7 @@ const EXEMPT_NON_NUMERIC = {
   META_BUILT_AT: 'meta 表的键名',
   META_SOURCE: 'meta 表的键名',
   META_BUILDER: 'meta 表的键名',
+  META_SPLIT_CONFIRMED: 'meta 表的键名',
   ATOM_ORIGINS: '类型枚举的取值表',
   ENTRY_RULE_ID: '规则标识：不是取值阈值，但**改入口规则必须改它**（见 docs/DEVELOPMENT.md）',
   EMPTY_VOCAB: '空词表实现，不是阈值',

@@ -234,15 +234,17 @@ export function reviewLength(text: string, t: ReviewThresholds = DEFAULT_REVIEW_
   return {
     action: 'split',
     segments,
+    // 措辞只给后果、不给判断（T29 判据 7）：切点是**按长度**定的，这里没有读过内容。
+    // 早先写的是「装了不止一件事」—— 那句话替写入方做了一个它没做过的判断。
     note: {
       level: 'auto',
       code: 'too-long',
       message:
         '这条 ' +
         body.length +
-        ' 个字里装了不止一件事，已**自动切成 ' +
+        ' 个字超过单条上限，已**按长度切成 ' +
         segments.length +
-        ' 条**分别写入（按句边界切，过短的段已并回相邻段）。',
+        ' 条**分别写入（切点按句边界定，没有按内容判断；过短的段已并回相邻段）。',
     },
   }
 }
