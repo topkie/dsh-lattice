@@ -39,6 +39,8 @@ import {
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
 import { audit, noDataReport } from './pipeline/audit.js'
 import { recall } from './pipeline/search.js'
+import { DEFAULT_BUDGET } from './pipeline/view.js'
+import { DEFAULT_THRESHOLDS } from './pipeline/write.js'
 import { openVault } from './db/open.js'
 import { forgetAtom } from './pipeline/forget.js'
 import { configureSamples, sampleStats } from './samples/index.js'
@@ -128,29 +130,46 @@ const FORGET_BODY_MAX_BYTES = 4096
  * 最低约 0.75——区间重叠，单靠余弦会把不同主题静默合并。词面重叠的区分度更高，
  * 两者互补。这些值是初值，应随真实语料重新标定。
  */
+/**
+ * 默认编码模型。
+ *
+ * 这个字符串原先写了两遍（zod 的 `default` 与运行时兜底各一份）—— 同一份默认值两处定义，
+ * 改一处就会让「配置里没写」与「运行时兜底」给出不同模型。现在只有这一份。
+ */
+const DEFAULT_ENCODER_MODEL = 'Xenova/bge-small-zh-v1.5'
+
+/**
+ * 交注入层的默认候选数。
+ *
+ * 与 `pipeline/search.ts` 的 `RECALL_TOP_N` 同为 24，但**不是同一个量**：那个是
+ * `recall()` 自己的兜底，这个是**配置项 topN 的默认值**（运行时真正生效的是后者）。
+ * 两者同值纯属巧合 —— 合并会把「改注入条数」变成「改 recall 的默认参数」。
+ */
+const DEFAULT_TOP_N = 24
+
 export const Config = z.object({
   enabled: z.boolean().default(true),
   /** 数据目录；留空表示 <数据目录>/lattice */
   dataDir: z.string().default(''),
   /** 关掉即纯词面模式（降级路径） */
   encoderEnabled: z.boolean().default(true),
-  encoderModel: z.string().default('Xenova/bge-small-zh-v1.5'),
+  encoderModel: z.string().default(DEFAULT_ENCODER_MODEL),
   /** 模型下载源；留空用官方源，网络受限环境可指向镜像 */
   encoderMirror: z.string().default(''),
   /** 模型缓存目录；留空用运行时默认位置 */
   encoderCacheDir: z.string().default(''),
   /** 并入阈值（余弦） */
-  tauJoin: z.number().min(0.6).max(0.95).default(0.78),
+  tauJoin: z.number().min(0.6).max(0.95).default(DEFAULT_THRESHOLDS.tauJoin),
   /** 并入所需的词面重叠（bigram-Jaccard；实测标定依据见 pipeline/write.ts） */
-  tauLex: z.number().min(0.02).max(0.5).default(0.05),
+  tauLex: z.number().min(0.02).max(0.5).default(DEFAULT_THRESHOLDS.tauLex),
   /** 无向量（encoder 降级）时并入所需的词面重叠 */
-  tauLexOnly: z.number().min(0.02).max(0.6).default(0.1),
+  tauLexOnly: z.number().min(0.02).max(0.6).default(DEFAULT_THRESHOLDS.tauLexOnly),
   /** 新建主题阈值 */
-  tauNew: z.number().min(0.2).max(0.8).default(0.5),
+  tauNew: z.number().min(0.2).max(0.8).default(DEFAULT_THRESHOLDS.tauNew),
   /** 注入字符预算 */
-  viewBudget: z.number().min(1000).max(20000).default(6000),
+  viewBudget: z.number().min(1000).max(20000).default(DEFAULT_BUDGET),
   /** 交注入层的候选数 */
-  topN: z.number().min(5).max(50).default(24),
+  topN: z.number().min(5).max(50).default(DEFAULT_TOP_N),
   /**
    * 下面三项与**机器**相关，留 0 表示按机器内存与库大小自动推导（见 util/memory.ts）。
    * 之所以做成可选覆盖而不是固定默认值：合理取值取决于内存与磁盘，写死必然在别的机器上不合适。
@@ -223,17 +242,17 @@ export function apply(ctx: Context, config: unknown): void {
   const runtimeCfg: RuntimeConfig = {
     dataDir: String(cfg.dataDir ?? ''),
     encoderEnabled: cfg.encoderEnabled !== false,
-    encoderModel: String(cfg.encoderModel ?? 'Xenova/bge-small-zh-v1.5'),
+    encoderModel: String(cfg.encoderModel ?? DEFAULT_ENCODER_MODEL),
     encoderMirror: String(cfg.encoderMirror ?? ''),
     encoderCacheDir: String(cfg.encoderCacheDir ?? ''),
     thresholds: {
-      tauJoin: Number(cfg.tauJoin ?? 0.78),
-      tauLex: Number(cfg.tauLex ?? 0.05),
-      tauLexOnly: Number(cfg.tauLexOnly ?? 0.1),
-      tauNew: Number(cfg.tauNew ?? 0.5),
+      tauJoin: Number(cfg.tauJoin ?? DEFAULT_THRESHOLDS.tauJoin),
+      tauLex: Number(cfg.tauLex ?? DEFAULT_THRESHOLDS.tauLex),
+      tauLexOnly: Number(cfg.tauLexOnly ?? DEFAULT_THRESHOLDS.tauLexOnly),
+      tauNew: Number(cfg.tauNew ?? DEFAULT_THRESHOLDS.tauNew),
     },
-    viewBudget: Number(cfg.viewBudget ?? 6000),
-    topN: Number(cfg.topN ?? 24),
+    viewBudget: Number(cfg.viewBudget ?? DEFAULT_BUDGET),
+    topN: Number(cfg.topN ?? DEFAULT_TOP_N),
     samplesEnabled: cfg.samplesEnabled !== false,
     resources: {
       mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,

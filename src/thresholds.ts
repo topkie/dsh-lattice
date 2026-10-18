@@ -18,6 +18,10 @@
 //
 // **本模块不改变任何行为**：只被打印脚本与覆盖检查读取，插件运行时不 import 它。
 //
+// **otherSites 记的是「还有第二个取值点」**：2026-10-19 把配置层的 `?? <字面量>` 兜底
+// 改为引用同一常量（`DEFAULT_THRESHOLDS` / `DEFAULT_BUDGET` / `DEFAULT_TOP_N`），
+// 原先记在 otherSites 里的六条随之删除 —— 删掉的是「重复」这个事实，而那六处确实曾经重复过。
+//
 // 标定场景只能来自代码注释、`dsh-lattice-devnotes/` 的报告或实证记录。**查不到就写「无记录」**
 // —— 把缺口暴露出来正是本模块的产出之一；编一个看起来合理的场景比留空更糟。
 
@@ -300,7 +304,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     constName: null,
     design: { doc: DESIGN_DOC, key: 'tauJoin', default: 0.75, min: 0.6, max: 0.95 },
     zod: { file: 'src/index.ts', name: 'tauJoin', default: 0.78, min: 0.6, max: 0.95 },
-    otherSites: ['src/index.ts:98 `Number(cfg.tauJoin ?? 0.78)` —— 同一默认值写了第二遍'],
     diverges: '设计文档默认 0.75，代码与 zod 都是 0.78（标定后上调，文档未同步）',
   },
   {
@@ -319,7 +322,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     constName: null,
     design: { doc: DESIGN_DOC, key: 'tauLex', default: 0.12, min: 0.05, max: 0.5 },
     zod: { file: 'src/index.ts', name: 'tauLex', default: 0.05, min: 0.02, max: 0.5 },
-    otherSites: ['src/index.ts:99 `Number(cfg.tauLex ?? 0.05)`'],
     diverges: '设计文档默认 0.12（其下界恰为 0.05），代码取的正是那个下界；zod 下界 0.02 比文档更宽',
   },
   {
@@ -338,7 +340,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     constName: null,
     design: { doc: DESIGN_DOC, key: 'tauNew', default: 0.5, min: 0.2, max: 0.8 },
     zod: { file: 'src/index.ts', name: 'tauNew', default: 0.5, min: 0.2, max: 0.8 },
-    otherSites: ['src/index.ts:101 `Number(cfg.tauNew ?? 0.5)`'],
   },
   {
     name: 'DEFAULT_THRESHOLDS.tauLexOnly',
@@ -355,7 +356,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['词面判据本身的变化（tauLex）', '编码器可用率与其降级路径'],
     constName: null,
     zod: { file: 'src/index.ts', name: 'tauLexOnly', default: 0.1, min: 0.02, max: 0.6 },
-    otherSites: ['src/index.ts:100 `Number(cfg.tauLexOnly ?? 0.1)`'],
     diverges: '**设计文档 §7 没有这个键** —— 代码新增（降级路径），文档未同步',
   },
   {
@@ -1039,7 +1039,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['注入字符预算', '一次注入能容纳的摘要条数'],
     design: { doc: DESIGN_DOC, key: 'topN', default: 24, min: 5, max: 50 },
     zod: { file: 'src/index.ts', name: 'topN', default: 24, min: 5, max: 50 },
-    otherSites: ['src/index.ts `Number(cfg.topN ?? 24)` —— 同一个默认值的第二处写法（配置层）'],
     diverges:
       '**与 DEFAULT_TOP_N 同为 24、不同量**（T45 批一判定为恰好同值，不合并）：那个是落位时取多少' +
       '个 topic 候选，这个是召回交注入层的条数。设计文档 §7 的 topN 指后者',
@@ -1300,7 +1299,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['模型上下文窗口', '一次注入里锚段的平均长度'],
     design: { doc: DESIGN_DOC, key: 'viewBudget', default: 6000, min: 1000, max: 20000 },
     zod: { file: 'src/index.ts', name: 'viewBudget', default: 6000, min: 1000, max: 20000 },
-    otherSites: ['src/index.ts:103 `Number(cfg.viewBudget ?? 6000)`'],
     diverges:
       '**同一个默认值写了三遍**：view.ts 的 DEFAULT_BUDGET、zod 的 .default(6000)、index.ts 的 `?? 6000`。' +
       '三处目前一致',
