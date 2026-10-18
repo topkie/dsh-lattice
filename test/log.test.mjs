@@ -313,6 +313,22 @@ describe('降级日志：导出（判据 10）', () => {
     assert.equal(out.truncated, false)
   })
 
+  it('构造失败：导出文件不含查询文本 / atom id / 路径', () => {
+    // 三条都是「调用点写错」的最可能形态：把查询文本、路径或 atom id 塞进 detail。
+    // 它们必须在导出之前就被丢弃。
+    logEvent('warn', 'recall.query', { query: '不能出现的查询' })
+    logEvent('warn', 'encoder.unavailable', {
+      reason: 'D:/secret/模型.bin',
+      detail: '原子 987654321',
+    })
+    logEvent('warn', 'recall.short_term_miss', { atom_id: 987654321 })
+    flushLog()
+    const out = exportLogCsv(dir)
+    for (const bad of ['不能出现的查询', 'D:/secret', '987654321']) {
+      assert.equal(out.csv.includes(bad), false, '导出里不得出现 ' + bad)
+    }
+  })
+
   it('超过上限截断并标记 # truncated', () => {
     for (let i = 0; i < 5; i++) logEvent('warn', 'recall.short_term_miss')
     flushLog()
@@ -371,6 +387,9 @@ describe('降级日志：清空（判据 11）', () => {
     assert.deepEqual(logFiles(dir), [], '日志文件（含历史）都不存在')
     const after = Number(main.prepare('PRAGMA data_version').get().data_version)
     assert.equal(after, before, '清空只动日志库，不动主库')
+    // 主库还在、还能查 —— 防「清空把主库一起动」。
+    assert.ok(existsSync(join(dir, 'lattice.db')))
+    assert.equal(Number(main.prepare('SELECT COUNT(*) AS n FROM atom').get().n), 0)
 
     // 清空后立刻还能写（库会自动重建），且没有「已清空」事件。
     logEvent('warn', 'recall.short_term_miss')
