@@ -6,6 +6,7 @@ import { describe, it } from 'node:test'
 import { EventEmitter } from 'node:events'
 import { Config, apply, inject, name } from '../dist/index.js'
 import { openVault } from '../dist/db/open.js'
+import { closeRuntime } from '../dist/state.js'
 
 /**
  * 最小假 ctx：只实现插件用到的那两个服务，外加 `inject`。
@@ -88,14 +89,25 @@ describe('插件契约', () => {
   })
 
   it('健康检查返回版本与配置摘要', async () => {
-    const ctx = fakeCtx()
-    apply(ctx, baseConfig)
-    // 按名字取 ping，不依赖注册顺序 —— 顺序是实现细节，不该被测试绑住。
-    const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
-    const out = JSON.parse(await ping.execute({}, {}))
-    assert.equal(out.ok, true)
-    assert.equal(out.plugin, 'lattice')
-    assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
+    // 必须给临时目录：baseConfig 的 dataDir 是空串，而 ping 会**打开库** ——
+    // 空串会回落到用户的真实库（~/.dsh/lattice）。2026-10-19 实测：宿主进程正持有那个库时，
+    // 这里以读写打开会失败（SQLITE_CANTOPEN），整套测试挂在一件与被测行为无关的事情上。
+    // 更糟的是它本来就在读写用户的真实记忆库 —— 用例只该碰自己建的库。
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-ping-'))
+    closeRuntime()
+    try {
+      const ctx = fakeCtx()
+      apply(ctx, { ...baseConfig, dataDir: dir })
+      // 按名字取 ping，不依赖注册顺序 —— 顺序是实现细节，不该被测试绑住。
+      const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
+      const out = JSON.parse(await ping.execute({}, {}))
+      assert.equal(out.ok, true)
+      assert.equal(out.plugin, 'lattice')
+      assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
+    } finally {
+      closeRuntime()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('enabled=false 时不注册任何工具', () => {
