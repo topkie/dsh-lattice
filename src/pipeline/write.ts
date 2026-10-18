@@ -11,7 +11,7 @@
 // 糊掉）。词面的区分度更高，两票都过才允许并入。
 
 import type { DatabaseSync } from 'node:sqlite'
-import { normalizeOrigin } from '../db/schema.js'
+import { type AtomKind, normalizeAtomKind, normalizeOrigin } from '../db/schema.js'
 import {
   cosine,
   decodeVec,
@@ -132,6 +132,15 @@ export interface WriteResult {
   reviewScan?: { scanned: number; truncated: boolean }
   /** 落库的位标志（T36）。回执里据此给一句摘要，模型不必去读中文猜。 */
   flags?: number
+  /**
+   * 写入方给的类型不是六类之一、被归一到 `kind` 时，这里带上原值。
+   *
+   * 为什么交出去：归一本身是对的（标签不该让整条记忆写不进去），但**纠正不静默** ——
+   * 调用方要能看出「我写的『事实』被记成了『结论』」，否则它会以为库里真有「事实」这一类。
+   */
+  kindAdjusted?: string
+  /** 实际落库的类型；只有发生归一时才带（与 `kindAdjusted` 成对）。 */
+  kind?: AtomKind
 }
 
 /**
@@ -641,7 +650,10 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   const text = String(input.text ?? '').trim()
   if (text.length === 0) throw new Error('text 不能为空')
   const summary = extractSummary(text, SUMMARY_CHARS)
-  const kind = String(input.kind ?? '结论')
+  // 类型是标签，不是约束：认不出的值归一到「结论」，但要**可见**（回执里说明），
+  // 否则统计口径会悄悄漂移 —— 库里有「命令与参数」这类历史值就是没归一的后果。
+  const kindInput = String(input.kind ?? '').trim()
+  const kind = normalizeAtomKind(kindInput)
 
   // ① 编码。事务外、可失败、失败即降级。
   let vec: Float32Array | null = null
@@ -784,6 +796,12 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
   if (newTopic)
     result.flags =
       decision.kind === 'create' && decision.reason === 'ambiguous' ? FLAG_AMBIGUOUS : FLAG_UNCLASSIFIED
+
+  // 归一可见：只在实际发生过纠正时带原值（写入方没给类型不算纠正）。
+  if (kindInput !== '' && kindInput !== kind) {
+    result.kindAdjusted = kindInput
+    result.kind = kind
+  }
 
   afterWrite(ctx, result.topicId, atomId, entries.length)
   return result

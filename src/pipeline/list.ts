@@ -8,6 +8,7 @@
 // 行为是把能拿到的都拿上。所以这里**总是**分页，没有「一次给全部」的开关。
 
 import type { DatabaseSync } from 'node:sqlite'
+import { atomKindFilterValues } from '../db/schema.js'
 
 /** 一页最多给多少条。 */
 export const LIST_MAX_LIMIT = 50
@@ -86,8 +87,10 @@ export function listAtoms(db: DatabaseSync, opts: ListOptions = {}): ListResult 
   const where: string[] = []
   const args: Array<string | number> = []
   if (opts.kind !== undefined && opts.kind !== '') {
-    where.push('kind = ?')
-    args.push(opts.kind)
+    // 主名与历史别名一起匹配：改名不回溯旧行，只匹配主名会让旧条目从结果里消失。
+    const values = atomKindFilterValues(opts.kind)
+    where.push('kind IN (' + values.map(() => '?').join(', ') + ')')
+    args.push(...values)
   }
   if (opts.origin !== undefined && opts.origin !== '') {
     where.push('origin = ?')

@@ -149,7 +149,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       },
       kind: {
         type: 'string',
-        description: '只能是：结论 / 坑 / 步骤 / 参数。默认 结论。填别的值无效。',
+        description: '记忆类型：结论 / 坑 / 命令与参数 / 环境 / 步骤 / 数据。默认 结论；认不出的值按结论记。',
       },
       refs: {
         type: 'array',
@@ -238,6 +238,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         )
         if (r.hintMiss !== undefined) {
           lines.push('注意：指定的主题 #' + r.hintMiss + ' 不存在，已按几何定位处理。')
+        }
+        // 类型归一可见：纠正不静默，否则调用方会以为库里真有那一类。
+        if (r.kindAdjusted !== undefined) {
+          lines.push('类型「' + r.kindAdjusted + '」认不出，已按「' + String(r.kind) + '」记。')
         }
         // 位标志摘要（T36 判据 6）：给出**可核对的说法**，不让模型靠读中文猜。
         // 位定义在 write.ts 的 FLAG_*，与 ARCHITECTURE 一一对应。
@@ -441,7 +445,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       '列出库里有哪些记忆（目录视图，不是搜索）。用户问「你记得哪些关于 X 的事」「库里有什么」时，' +
       '先用它看清楚有什么，再决定要不要 recall 或 expand。分页返回，按写入顺序倒序（最近写的在前）。',
     parameters: {
-      kind: { type: 'string', description: '只看某一类：结论 / 坑 / 步骤 / 参数' },
+      kind: { type: 'string', description: '只看某一类：结论 / 坑 / 命令与参数 / 环境 / 步骤 / 数据' },
       origin: {
         type: 'string',
         description: '只看某一来源：user（用户说的）/ model（你推断的）/ import（导入的）',

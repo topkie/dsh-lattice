@@ -10,7 +10,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
+import { ATOM_KINDS, atomKindFilterValues } from '../dist/db/schema.js'
 import { VEC_DIM, decodeVec, l2norm } from '../dist/util/vec.js'
+import { listAtoms } from '../dist/pipeline/list.js'
 import { buildEntries, buildVocabIndex, extractedEntries } from '../dist/pipeline/entries.js'
 import { createWriteCtx, decidePlacement, invalidateVocab, writeAtom } from '../dist/pipeline/write.js'
 
@@ -503,5 +505,66 @@ describe('写入管线：批量导入', () => {
       '不允许出现无主属的 atom',
     )
     assert.ok(topicCount() >= 1 && topicCount() <= 40)
+  })
+})
+
+describe('记忆类型：六类白名单、历史别名与归一', () => {
+  /** 编码替身恒返回 null：本组只验类型落库，不涉及落位。 */
+  const noEncode = { encode: async () => null }
+
+  it('六类都能写入并原样落库', async () => {
+    const ctx = createWriteCtx(db, {}, noEncode)
+    for (const kind of ATOM_KINDS) {
+      const r = await writeAtom(ctx, { text: '关于「' + kind + '」的一条记忆，用来验类型落库。', kind })
+      assert.equal(r.kindAdjusted, undefined, kind + ' 不该被归一')
+      const row = db.prepare('SELECT kind FROM atom WHERE id = ?').get(r.atomId)
+      assert.equal(row.kind, kind)
+    }
+  })
+
+  it('历史别名「参数」归一到「命令与参数」，原值随回执交回', async () => {
+    const ctx = createWriteCtx(db, {}, noEncode)
+    const r = await writeAtom(ctx, { text: '门禁要带着分支名跑，这条是命令与参数类的记忆。', kind: '参数' })
+    const row = db.prepare('SELECT kind FROM atom WHERE id = ?').get(r.atomId)
+    assert.equal(row.kind, '命令与参数')
+    assert.equal(r.kindAdjusted, '参数')
+    assert.equal(r.kind, '命令与参数')
+  })
+
+  it('认不出的类型按结论记，纠正在回执里可见', async () => {
+    const ctx = createWriteCtx(db, {}, noEncode)
+    const r = await writeAtom(ctx, {
+      text: '这条记忆的类型故意写成一个不存在的词，看它落到哪一类。',
+      kind: '事实',
+    })
+    const row = db.prepare('SELECT kind FROM atom WHERE id = ?').get(r.atomId)
+    assert.equal(row.kind, '结论')
+    assert.equal(r.kindAdjusted, '事实')
+  })
+
+  it('不写类型时不产生「纠正」记录', async () => {
+    const ctx = createWriteCtx(db, {}, noEncode)
+    const r = await writeAtom(ctx, { text: '这条没有指定类型，应当安静地记成结论，不该报纠正。' })
+    assert.equal(r.kindAdjusted, undefined)
+    const row = db.prepare('SELECT kind FROM atom WHERE id = ?').get(r.atomId)
+    assert.equal(row.kind, '结论')
+  })
+
+  it('列表过滤：主名与历史别名互相能查到，认不出的值不回落', async () => {
+    const ctx = createWriteCtx(db, {}, noEncode)
+    const r = await writeAtom(ctx, {
+      text: '一条命令与参数类的记忆，用来验列表过滤的新旧别名。',
+      kind: '命令与参数',
+    })
+    // 手工插一行改名前的旧值：旧行不回溯，只能靠过滤兼容。
+    db.prepare('UPDATE atom SET kind = ? WHERE id = ?').run('参数', r.atomId)
+
+    assert.deepEqual(atomKindFilterValues('参数'), ['命令与参数', '参数'])
+    assert.deepEqual(atomKindFilterValues('命令与参数'), ['命令与参数', '参数'])
+    assert.deepEqual(atomKindFilterValues('事实'), ['事实'], '认不出的值原样返回，不悄悄变成结论')
+
+    assert.equal(listAtoms(db, { kind: '参数' }).total, 1)
+    assert.equal(listAtoms(db, { kind: '命令与参数' }).total, 1, '用新名也要查得到旧行')
+    assert.equal(listAtoms(db, { kind: '事实' }).total, 0)
   })
 })

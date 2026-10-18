@@ -223,6 +223,53 @@ const DDL_V3: readonly string[] = [
 export type AtomOrigin = 'user' | 'model' | 'import'
 export const ATOM_ORIGINS: readonly AtomOrigin[] = ['user', 'model', 'import']
 
+/**
+ * 记忆类型。与开发笔记 §2.5「什么该进记忆库」的六类对齐。
+ *
+ * **为什么是这六类**：它们各自回答「下次做同类事时能省下什么」—— 一个坑省一次错误，
+ * 一条命令省一次翻文档，一条环境事实省一次试探。类型不参与检索（检索靠向量与词面），
+ * 它只决定写的人怎么归类、读的人怎么用。
+ *
+ * 「命令与参数」是一个整体，不拆两档：一条命令脱离参数没有可执行价值，而参数脱离
+ * 命令不知道该填给谁。
+ */
+export type AtomKind = '结论' | '坑' | '命令与参数' | '环境' | '步骤' | '数据'
+export const ATOM_KINDS: readonly AtomKind[] = ['结论', '坑', '命令与参数', '环境', '步骤', '数据']
+
+/**
+ * 历史别名：改名之前写进来的值。
+ *
+ * 库里已有存量，而旧行**不回溯**（与 flags 同一条纪律）。所以写入时归一到主名，
+ * 查询时主名与别名一起匹配 —— 否则一次改名会让旧条目从过滤结果里消失。
+ */
+export const ATOM_KIND_ALIASES: Readonly<Record<string, AtomKind>> = { 参数: '命令与参数' }
+
+/**
+ * 收敛写入方给的 kind：认识的原样返回（别名归一到主名），不认识的回落到 fallback。
+ *
+ * 为什么回落而不是抛错：类型是**供人读的标签**，不是约束。为一个标签拒收整条记忆，
+ * 代价明显更大 —— 但回落必须可见（回执里说明），否则统计口径会悄悄漂移。
+ */
+export function normalizeAtomKind(v: unknown, fallback: AtomKind = '结论'): AtomKind {
+  const s = String(v ?? '').trim()
+  if ((ATOM_KINDS as readonly string[]).includes(s)) return s as AtomKind
+  return ATOM_KIND_ALIASES[s] ?? fallback
+}
+
+/**
+ * 查询 `kind` 时要一起匹配的库内值：主名 + 映射到它的历史别名。
+ *
+ * 不认识的值**原样返回**（而不是回落到结论）：查一个不存在的类型应该得到空结果，
+ * 而不是「悄悄返回结论类条目」——后者会让调用方以为库里真有这一类。
+ */
+export function atomKindFilterValues(kind: string): string[] {
+  const s = String(kind ?? '').trim()
+  if (s === '') return []
+  const main = ATOM_KIND_ALIASES[s] ?? s
+  const old = Object.keys(ATOM_KIND_ALIASES).filter((k) => ATOM_KIND_ALIASES[k] === main)
+  return [main, ...old]
+}
+
 /** 收敛写入方给的 origin：不认识的值退回 fallback，不让脏值进库。 */
 export function normalizeOrigin(v: unknown, fallback: AtomOrigin = 'model'): AtomOrigin {
   const s = String(v ?? '')
