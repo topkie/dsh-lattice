@@ -32,7 +32,7 @@ import {
 } from 'lattice-calib'
 import { evaluateGates, pickCalibrationSamples, RECALIBRATE_SAMPLE_LIMIT } from './calibration/trigger.js'
 import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
-import { closeLog, configureLog, logEvent } from './log/index.js'
+import { closeLog, configureLog, log } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
 import type { RecallMeta } from './pipeline/search.js'
 import { closeSamples, configureSamples, loadCalibrationSamples, sampleStats } from './samples/index.js'
@@ -173,12 +173,12 @@ function noteCalibration(cal: CalibrationState): void {
   lastCalibrationKey = key
   if (cal.state === 'calibrated') return
   if (cal.reason === 'snapshot_invalid') {
-    logEvent('warn', 'calib.snapshot_invalid', { field: 'calib_version' })
-    logEvent('warn', 'calib.unlocalized', { reason: 'snapshot_invalid' })
+    log.warn('calib.snapshot_invalid', { field: 'calib_version' })
+    log.warn('calib.unlocalized', { reason: 'snapshot_invalid' })
     return
   }
-  if (cal.reason === 'never') logEvent('warn', 'calib.snapshot_missing')
-  logEvent('warn', 'calib.unlocalized', { reason: cal.reason ?? 'never' })
+  if (cal.reason === 'never') log.warn('calib.snapshot_missing')
+  log.warn('calib.unlocalized', { reason: cal.reason ?? 'never' })
 }
 
 /** 补上库的自描述，**已存在的一律不动**。
@@ -238,7 +238,7 @@ function noteEncoderState(ok: boolean): void {
   const reason = encoderErrorCode() ?? 'unknown'
   if (lastEncoderFailure === reason) return
   lastEncoderFailure = reason
-  logEvent('warn', 'encoder.unavailable', { reason })
+  log.warn('encoder.unavailable', { reason })
 }
 
 /** 上一次召回的三类降级状态（同样按变化记）。 */
@@ -247,13 +247,13 @@ let lastRecallDegraded = { vectorMissing: false, lexicalDegraded: false, shortTe
 /**
  * 召回降级埋点：只读 RecallMeta 里的布尔，**不接触查询文本**。
  *
- * 工具召回与界面搜索两条路径各调一次；logEvent 只入队，不在召回路径上加同步 IO。
+ * 工具召回与界面搜索两条路径各调一次；写日志只入队，不在召回路径上加同步 IO。
  * 状态回到正常时不记事件（日志里没有「一切正常」这一档），只把游标复位。
  */
 export function noteRecallDegradations(meta: RecallMeta): void {
-  if (meta.vectorMissing && !lastRecallDegraded.vectorMissing) logEvent('warn', 'recall.vector_missing')
-  if (meta.lexicalDegraded && !lastRecallDegraded.lexicalDegraded) logEvent('warn', 'recall.lexical_degraded')
-  if (meta.shortTermMiss && !lastRecallDegraded.shortTermMiss) logEvent('warn', 'recall.short_term_miss')
+  if (meta.vectorMissing && !lastRecallDegraded.vectorMissing) log.warn('recall.vector_missing')
+  if (meta.lexicalDegraded && !lastRecallDegraded.lexicalDegraded) log.warn('recall.lexical_degraded')
+  if (meta.shortTermMiss && !lastRecallDegraded.shortTermMiss) log.warn('recall.short_term_miss')
   lastRecallDegraded = {
     vectorMissing: meta.vectorMissing,
     lexicalDegraded: meta.lexicalDegraded,
@@ -310,7 +310,7 @@ export async function maybeRecalibrate(): Promise<string> {
     // 换来 12 小时冷却 —— 用户看到的现象是「明明有样本、库也够大，却一直不重标」，而门禁不会红。
     // 失败只留原因码；条件恢复后下一次写入立刻能再试。
     setMeta(rt.db, META_CALIB_LAST_ERROR, causeCode(err))
-    logEvent('warn', 'calib.snapshot_missing')
+    log.warn('calib.snapshot_missing')
     return 'no_vectors'
   }
 
@@ -335,7 +335,7 @@ export async function maybeRecalibrate(): Promise<string> {
     const result = recalibrateAndWrite(rt.db, samples, { encoderModel: rt.cfg.encoderModel })
     // 整体替换：新的参数一次换上。读侧要么看到旧的、要么看到新的，不存在「一半新一半旧」。
     rt.calibration = { state: 'calibrated', params: { ...result.params } }
-    logEvent('warn', 'calib.recalibrate_done', {
+    log.info('calib.recalibrate_done', {
       atoms,
       samples: samples.length,
       ms: result.ms,
@@ -345,7 +345,7 @@ export async function maybeRecalibrate(): Promise<string> {
   } catch (err) {
     const code = causeCode(err)
     setMeta(rt.db, META_CALIB_LAST_ERROR, code)
-    logEvent('warn', 'calib.recalibrate_failed', { stage: 'recalibrate', reason: code })
+    log.warn('calib.recalibrate_failed', { stage: 'recalibrate', reason: code })
     return 'failed'
   }
 }

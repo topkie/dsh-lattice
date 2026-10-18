@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { logEvent } from '../log/index.js'
+import { log } from '../log/index.js'
 import { reasonCodeOf } from '../log/policy.js'
 import type { RecallMeta } from '../pipeline/search.js'
 import {
@@ -213,7 +213,7 @@ export function sampleStats(): SampleCounts {
     if (state.store === null) state.store = new SampleStore(state.dataDir, state.limits)
     return state.store.counts()
   } catch (err) {
-    logEvent('warn', 'samples.unavailable', { reason: reasonCodeOf(err) })
+    log.warn('samples.unavailable', { reason: reasonCodeOf(err) })
     return zero
   }
 }
@@ -243,7 +243,7 @@ export function loadCalibrationSamples(limit: number): CalibrationSampleRow[] {
     if (state.store === null) state.store = new SampleStore(state.dataDir, state.limits)
     return state.store.readForCalibration(limit)
   } catch (err) {
-    logEvent('warn', 'samples.unavailable', { reason: reasonCodeOf(err) })
+    log.warn('samples.unavailable', { reason: reasonCodeOf(err) })
     return []
   }
 }
@@ -431,7 +431,7 @@ function flushNow(): boolean {
     state.store?.close()
     state.store = null
     state.queue = batch.concat(state.queue).slice(-SAMPLE_QUEUE_MAX)
-    logEvent('warn', 'samples.unavailable', { reason: reasonCodeOf(err) })
+    log.warn('samples.unavailable', { reason: reasonCodeOf(err) })
     return false
   }
 }

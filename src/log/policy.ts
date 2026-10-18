@@ -15,8 +15,14 @@
 // 据此，查询文本、atom 正文与 id、文件路径、模型名都没有进入这张表的路径 —— 不是靠
 // 调用方「记得不要传」，而是传了也落不下去。
 
-/** 日志等级：只保留两档。notice 级别的「一切正常」不需要日志库。 */
-export type LogLevel = 'warn' | 'error'
+/**
+ * 日志等级，三档。
+ *
+ * 为什么有 `info`：不是给「一切正常」用的（那不需要日志库），而是给**做成了的事**用的 ——
+ * 「重标成功」这类事件原先只能记成 warn，因为当时只有两档可用。级别该由事件本身决定，
+ * 不该由「有哪些档可用」倒推。
+ */
+export type LogLevel = 'info' | 'warn' | 'error'
 
 /** 待落盘的一行。ts 由队列在入队时给定（「当场」= 入队时刻）。 */
 export interface LogRow {
@@ -57,7 +63,12 @@ export const EVENT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
 }
 
 /** 允许落库的等级。 */
-export const LOG_LEVELS: readonly LogLevel[] = ['warn', 'error']
+export const LOG_LEVELS: readonly LogLevel[] = ['info', 'warn', 'error']
+
+/** 等级守卫：写入口与过滤层共用一份定义，避免两处各列一遍。 */
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value)
+}
 
 /**
  * 字符串值的合法形状：以字母开头、只含字母数字与 `_.:-`、最长 64。
@@ -85,7 +96,7 @@ function cleanValue(value: unknown): number | boolean | string | undefined {
  * 不抛错是刻意的：日志是旁路，它不能因为调用方传错而影响召回或写入。
  */
 export function sanitizeEvent(level: unknown, event: unknown, detail: unknown): Omit<LogRow, 'ts'> | null {
-  if (level !== 'warn' && level !== 'error') return null
+  if (!isLogLevel(level)) return null
   if (typeof event !== 'string') return null
   if (!Object.prototype.hasOwnProperty.call(EVENT_DETAIL_KEYS, event)) return null
   const allowed = EVENT_DETAIL_KEYS[event] ?? []

@@ -23,6 +23,7 @@ import {
   configureLog,
   exportLogCsv,
   flushLog,
+  log,
   logDroppedCount,
   logEvent,
   logFilePath,
@@ -123,7 +124,7 @@ function mainTableNames(dataDir) {
 function rotateSome(rounds = 30) {
   configureLog(dir, { fileMaxBytes: 300, keepFiles: 5, totalMaxBytes: 100000 })
   for (let i = 0; i < rounds; i++) {
-    logEvent('warn', 'recall.short_term_miss')
+    log.warn('recall.short_term_miss')
     flushLog()
   }
 }
@@ -160,9 +161,9 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
 
   it('未知事件整条丢弃，白名单外的字段不落库', () => {
     // 构造失败：试图把查询文本当事件名 / 当字段塞进去。
-    logEvent('warn', 'recall.query', { query: '秘密查询文本' })
-    logEvent('warn', 'encoder.unavailable', { reason: 'Error', query: '秘密查询文本', atom_id: 42 })
-    logEvent('warn', 'recall.vector_missing', { atom_id: 42 })
+    log.warn('recall.query', { query: '秘密查询文本' })
+    log.warn('encoder.unavailable', { reason: 'Error', query: '秘密查询文本', atom_id: 42 })
+    log.warn('recall.vector_missing', { atom_id: 42 })
     flushLog()
 
     const rows = rowsOf(dir)
@@ -178,8 +179,8 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
   })
 
   it('字符串值只收短 token：路径 / 自由文本被替换成 other', () => {
-    logEvent('warn', 'graph.unavailable', { reason: 'D:/secret/path/模型.bin' })
-    logEvent('warn', 'calib.unlocalized', { reason: 'model_changed' })
+    log.warn('graph.unavailable', { reason: 'D:/secret/path/模型.bin' })
+    log.warn('calib.unlocalized', { reason: 'model_changed' })
     flushLog()
     const rows = rowsOf(dir)
     assert.equal(JSON.parse(rows[0].detail).reason, 'other', '非 token 的 reason 被替换')
@@ -208,15 +209,44 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
       'recall.vector_missing',
       'samples.unavailable',
     ])
-    // 等级也白名单化：notice / info 不被接受。
-    assert.equal(sanitizeEvent('info', 'encoder.unavailable', { reason: 'Error' }), null)
+    // 等级也白名单化：三档之外的一律拒收（notice / debug 不接受）。
+    assert.equal(sanitizeEvent('notice', 'encoder.unavailable', { reason: 'Error' }), null)
+    assert.equal(sanitizeEvent('debug', 'encoder.unavailable', { reason: 'Error' }), null)
+    // 三档本身都接受，等级原样落库。
+    for (const level of ['info', 'warn', 'error']) {
+      assert.equal(sanitizeEvent(level, 'encoder.unavailable', { reason: 'Error' })?.level, level)
+    }
     assert.equal(reasonCodeOf(new TypeError('x')), 'TypeError')
     assert.equal(reasonCodeOf({ code: 'ENOENT' }), 'ENOENT')
   })
 
+  it('按等级入口：log.info / log.warn / log.error 落库的等级各自正确，且不绕过白名单', () => {
+    configureLog(dir)
+    log.info('calib.recalibrate_done', { atoms: 331, samples: 12, ms: 40, changed: true })
+    log.warn('recall.vector_missing')
+    log.error('log.write_failed', { reason: 'ENOENT' })
+    // 包装层不做判断：不在白名单里的事件照样被丢，不会因为「换了新入口」就绕过校验。
+    log.info('recall.query', { query: '不该出现的查询' })
+    flushLog()
+    const rows = rowsOf(dir)
+    assert.deepEqual(
+      rows.map((r) => r.level),
+      ['info', 'warn', 'error'],
+    )
+    assert.deepEqual(
+      rows.map((r) => r.event),
+      ['calib.recalibrate_done', 'recall.vector_missing', 'log.write_failed'],
+    )
+
+    // 底层 logEvent 仍在：按变量传等级时要靠它，走同一套过滤。
+    logEvent('warn', 'recall.short_term_miss')
+    flushLog()
+    assert.equal(rowsOf(dir).length, 4)
+  })
+
   it('缓冲：1000 条只入队、不触发同步 IO；队列有界并丢最旧', () => {
     const t0 = performance.now()
-    for (let i = 0; i < 1000; i++) logEvent('warn', 'recall.short_term_miss')
+    for (let i = 0; i < 1000; i++) log.warn('recall.short_term_miss')
     const elapsed = performance.now() - t0
     assert.ok(elapsed < 50, '1000 次入队耗时 ' + elapsed.toFixed(1) + 'ms，应远小于 50ms')
     // flush 之前连库文件都不该存在 —— 入队路径上没有任何同步 IO。
@@ -237,7 +267,7 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
       return (performance.now() - t0) / rounds
     }
     const baseline = time(20)
-    for (let i = 0; i < 1000; i++) logEvent('warn', 'recall.short_term_miss')
+    for (let i = 0; i < 1000; i++) log.warn('recall.short_term_miss')
     const withQueue = time(20)
     // 倍数是宽口径：这里要否掉的是「入队走了同步 IO」这种数量级差异，不是几微秒。
     assert.ok(
@@ -253,7 +283,7 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
     assert.ok(rotated.length >= 1, '应出现历史文件')
     assert.ok(files.length <= 5, '文件数（含当前库）不超过上限：' + files.length)
     // 清理后仍能继续写。
-    logEvent('warn', 'recall.short_term_miss')
+    log.warn('recall.short_term_miss')
     flushLog()
     assert.ok(countOf(dir) >= 1)
   })
@@ -273,7 +303,7 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
     assert.equal(typeof text, 'string')
     assert.ok(text.length > 0)
     for (let i = 0; i < 5; i++) {
-      logEvent('warn', 'recall.short_term_miss')
+      log.warn('recall.short_term_miss')
       flushLog()
     }
     assert.ok(logWriteFailureCount() >= 5, '每次 flush 都失败并计数')
@@ -289,8 +319,8 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
 
 describe('降级日志：导出（判据 10）', () => {
   it('CSV 四列表头；行数与导出范围内 COUNT(*) 一致；导出不写库', () => {
-    logEvent('warn', 'encoder.unavailable', { reason: 'Error' })
-    logEvent('error', 'log.write_failed', { reason: 'ENOENT' })
+    log.warn('encoder.unavailable', { reason: 'Error' })
+    log.error('log.write_failed', { reason: 'ENOENT' })
     flushLog()
     const file = logFilePath(dir)
     const db = openReadOnly(file)
@@ -312,7 +342,7 @@ describe('降级日志：导出（判据 10）', () => {
     const main = openVault(join(dir, 'lattice.db')).db
     extraDbs.push(main)
     const before = Number(main.prepare('PRAGMA data_version').get().data_version)
-    logEvent('warn', 'recall.vector_missing')
+    log.warn('recall.vector_missing')
     flushLog()
     exportLogCsv(dir)
     const after = Number(main.prepare('PRAGMA data_version').get().data_version)
@@ -329,12 +359,12 @@ describe('降级日志：导出（判据 10）', () => {
   it('构造失败：导出文件不含查询文本 / atom id / 路径', () => {
     // 三条都是「调用点写错」的最可能形态：把查询文本、路径或 atom id 塞进 detail。
     // 它们必须在导出之前就被丢弃。
-    logEvent('warn', 'recall.query', { query: '不能出现的查询' })
-    logEvent('warn', 'encoder.unavailable', {
+    log.warn('recall.query', { query: '不能出现的查询' })
+    log.warn('encoder.unavailable', {
       reason: 'D:/secret/模型.bin',
       detail: '原子 987654321',
     })
-    logEvent('warn', 'recall.short_term_miss', { atom_id: 987654321 })
+    log.warn('recall.short_term_miss', { atom_id: 987654321 })
     flushLog()
     const out = exportLogCsv(dir)
     for (const bad of ['不能出现的查询', 'D:/secret', '987654321']) {
@@ -343,7 +373,7 @@ describe('降级日志：导出（判据 10）', () => {
   })
 
   it('超过上限截断并标记 # truncated', () => {
-    for (let i = 0; i < 5; i++) logEvent('warn', 'recall.short_term_miss')
+    for (let i = 0; i < 5; i++) log.warn('recall.short_term_miss')
     flushLog()
     const byRows = exportLogCsv(dir, { maxRows: 2 })
     assert.equal(byRows.rows, 2)
@@ -356,7 +386,7 @@ describe('降级日志：导出（判据 10）', () => {
   })
 
   it('路由：导出的响应是 CSV 附件，四列表头', async () => {
-    logEvent('warn', 'encoder.unavailable', { reason: 'Error' })
+    log.warn('encoder.unavailable', { reason: 'Error' })
     flushLog()
     const handler = routeSet().find((r) => r.path === '/api/lattice-log-export').handler
     const res = fakeRes()
@@ -405,7 +435,7 @@ describe('降级日志：清空（判据 11）', () => {
     assert.equal(Number(main.prepare('SELECT COUNT(*) AS n FROM atom').get().n), 0)
 
     // 清空后立刻还能写（库会自动重建），且没有「已清空」事件。
-    logEvent('warn', 'recall.short_term_miss')
+    log.warn('recall.short_term_miss')
     flushLog()
     const rows = rowsOf(dir)
     assert.equal(rows.length, 1)
@@ -417,7 +447,7 @@ describe('降级日志：清空（判据 11）', () => {
   })
 
   it('文件被占用 → 抛可读错误，日志库仍可用', () => {
-    logEvent('warn', 'recall.short_term_miss')
+    log.warn('recall.short_term_miss')
     flushLog()
     // 同名前缀的目录删不掉（Windows 上是 EPERM，POSIX 上是 EISDIR）—— 用文件名模式模拟占用。
     mkdirSync(join(dir, 'logs', 'lattice-log-9999999999999.db'))
@@ -426,14 +456,14 @@ describe('降级日志：清空（判据 11）', () => {
       (err) => err instanceof LogClearError && /被占用/.test(err.message) && /重试/.test(err.message),
     )
     // 失败之后仍然能写、能读：不出现「删了一半，库不可用」。
-    logEvent('warn', 'recall.short_term_miss')
+    log.warn('recall.short_term_miss')
     flushLog()
     assert.equal(countOf(dir), 1)
   })
 
   it('路由：不带 {confirm:true} 的 POST 被 400 拒绝，带确认才清空', async () => {
     configureLog(dir)
-    logEvent('warn', 'recall.short_term_miss')
+    log.warn('recall.short_term_miss')
     flushLog()
 
     const routes = routeSet()

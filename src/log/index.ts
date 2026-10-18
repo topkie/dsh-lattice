@@ -101,10 +101,13 @@ export function configureLog(dir: string, overrides?: Partial<LogLimits>): void 
 }
 
 /**
- * 记一条降级事件。**唯一的写入口**。
+ * 记一条事件。**唯一的写入口**：等级校验、白名单过滤、入队都在这里。
  *
  * 不合格的等级/事件/字段被 sanitizeEvent 丢弃；这里不抛错，也不返回值 ——
  * 调用方（召回、写入、标定）不该需要处理日志的失败。
+ *
+ * **调用方一般不该直接用它**，用下面的 `log.info / log.warn / log.error`：
+ * 那里的函数名就是等级，没有可以写错的字面量。
  */
 export function logEvent(level: LogLevel, event: string, detail?: Record<string, unknown>): void {
   if (!state.active || state.dataDir === '') return
@@ -112,6 +115,28 @@ export function logEvent(level: LogLevel, event: string, detail?: Record<string,
   if (row === null) return
   enqueue({ ts: Date.now(), ...row })
 }
+
+/**
+ * 按等级分的写入口。**写日志用这三个，不要手写级别字符串。**
+ *
+ * 为什么包一层：`logEvent('warn', ...)` 的等级是一个裸字面量 —— 打错字编译器拦不住，
+ * 把一个「做成了的事」记成 warn 也没人拦。而这三者的名字就是等级本身，读调用点时
+ * 不需要先认出字符串再判断严重程度。
+ *
+ * 这一层**不做任何判断**：等级是否合法、事件在不在白名单、字段能不能落库，全部由
+ * `logEvent` → `sanitizeEvent` 那一层决定。所以它不会成为「绕过校验的后门」。
+ *
+ * 什么时候仍用 `logEvent`：需要按变量传等级的批量写入（目前没有）、以及测试里专门
+ * 验证底层过滤的那几条用例。
+ */
+export const log = {
+  /** 做成了的事（如重标完成）。不是「一切正常」的流水账 —— 那不需要日志库。 */
+  info: (event: string, detail?: Record<string, unknown>): void => logEvent('info', event, detail),
+  /** 降级但还能用：词面路失效、图路不可用、样本库写不进。 */
+  warn: (event: string, detail?: Record<string, unknown>): void => logEvent('warn', event, detail),
+  /** 日志模块自身或重标这类「本应成功、实际失败」的事。 */
+  error: (event: string, detail?: Record<string, unknown>): void => logEvent('error', event, detail),
+} as const
 
 /** 立即 flush（关闭前、测试里、清空前用）。失败同样不抛。 */
 export function flushLog(): void {
