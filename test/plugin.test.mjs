@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it } from 'node:test'
 import { EventEmitter } from 'node:events'
 import { Config, apply, inject, name } from '../dist/index.js'
 import { openVault } from '../dist/db/open.js'
@@ -41,19 +41,41 @@ function fakeCtx({ webServer } = {}) {
   return ctx
 }
 
-const baseConfig = {
-  enabled: true,
-  dataDir: '',
-  encoderEnabled: true,
-  encoderModel: 'Xenova/bge-small-zh-v1.5',
-  tauJoin: 0.75,
-  tauLex: 0.05,
-  tauNew: 0.38,
-  viewBudget: 6000,
-  topN: 24,
-}
+/**
+ * 用例配置。**每个用例一个临时库目录**，由 describe 内的 beforeEach 填。
+ *
+ * 为什么不能留空：`dataDir` 为空串时 `resolveDataDir` 会回落到用户的**真实库**
+ * （`~/.dsh/lattice`）。任何会打开库的用例（ping、体检路由、工具 execute）都会读写它 ——
+ * 宿主进程正持有时还会以 SQLITE_CANTOPEN 直接失败（2026-10-19 实际发生过，整套门禁挂在
+ * 一件与被测行为无关的事情上）。用例只该碰自己建的库。
+ */
+let baseConfig = null
+/** 本 describe 建过的临时目录，afterEach 统一清掉。 */
+const tempDirs = []
 
 describe('插件契约', () => {
+  beforeEach(() => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-plugin-'))
+    tempDirs.push(dir)
+    baseConfig = {
+      enabled: true,
+      dataDir: dir,
+      encoderEnabled: true,
+      encoderModel: 'Xenova/bge-small-zh-v1.5',
+      tauJoin: 0.75,
+      tauLex: 0.05,
+      tauNew: 0.38,
+      viewBudget: 6000,
+      topN: 24,
+    }
+  })
+
+  afterEach(() => {
+    // 全局单例先复位，否则下一个用例拿到的还是这个目录的运行时。
+    closeRuntime()
+    for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
   it('导出宿主所需的四个入口', () => {
     assert.equal(name, 'lattice')
     assert.ok(inject.includes('tools'))
@@ -89,25 +111,14 @@ describe('插件契约', () => {
   })
 
   it('健康检查返回版本与配置摘要', async () => {
-    // 必须给临时目录：baseConfig 的 dataDir 是空串，而 ping 会**打开库** ——
-    // 空串会回落到用户的真实库（~/.dsh/lattice）。2026-10-19 实测：宿主进程正持有那个库时，
-    // 这里以读写打开会失败（SQLITE_CANTOPEN），整套测试挂在一件与被测行为无关的事情上。
-    // 更糟的是它本来就在读写用户的真实记忆库 —— 用例只该碰自己建的库。
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-ping-'))
-    closeRuntime()
-    try {
-      const ctx = fakeCtx()
-      apply(ctx, { ...baseConfig, dataDir: dir })
-      // 按名字取 ping，不依赖注册顺序 —— 顺序是实现细节，不该被测试绑住。
-      const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
-      const out = JSON.parse(await ping.execute({}, {}))
-      assert.equal(out.ok, true)
-      assert.equal(out.plugin, 'lattice')
-      assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
-    } finally {
-      closeRuntime()
-      rmSync(dir, { recursive: true, force: true })
-    }
+    const ctx = fakeCtx()
+    apply(ctx, baseConfig)
+    // 按名字取 ping，不依赖注册顺序 —— 顺序是实现细节，不该被测试绑住。
+    const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
+    const out = JSON.parse(await ping.execute({}, {}))
+    assert.equal(out.ok, true)
+    assert.equal(out.plugin, 'lattice')
+    assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
   })
 
   it('enabled=false 时不注册任何工具', () => {

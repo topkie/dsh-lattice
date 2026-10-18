@@ -386,6 +386,19 @@ src/
 - 涉及数据库 → 用内存库或临时文件，测完清理，临时文件加入 `.gitignore`
 - 涉及外部模型 → 必须能在模型不可用时降级通过
 
+**每个用例都必须显式给它自己的临时库目录。** 不许留空、不许用 `homedir()` 或
+`DSH_HOME` 拼路径：`dataDir` 为空串时 `resolveDataDir` 会回落到用户的**真实库**
+（`~/.dsh/lattice`），而任何会打开库的用例（`ping`、体检路由、工具的 `execute`）都会
+读写它。两个后果都已经发生过：宿主进程正持有时以 `SQLITE_CANTOPEN` 失败（整套门禁挂在
+与被测行为无关的事情上），以及用例在用户的真实记忆库里留下写入。
+
+约定写法：`mkdtempSync(join(tmpdir(), 'dsh-lattice-<用途>-'))`，`afterEach` 里先
+`closeRuntime()` 复位全局单例再删目录，钩子写在 `describe` **内部**（顶层钩子在 node:test 里
+是全局的，会串到别的文件）。
+
+这条由 `test/isolation.test.mjs` 自动检查：扫全部 `*.test.mjs` 的字面量，出现空串、
+`homedir()` 或 `process.env.DSH_HOME` 直接红。
+
 单元测试**注入向量**而不加载真实模型：判据是阈值，只有注入向量才能构造出"刚好
 0.77"这类边界样本，真实模型反而测不了边界。真实模型的表现交给 `scripts/` 下的
 验证脚本（它们会下载模型、写临时库，因此不进 `test/`，也不进 CI）：
