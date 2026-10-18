@@ -242,13 +242,18 @@ export function lastRecallInfo(): { count: number; top1: number } | null {
  */
 export function resolveFeedbackRef(ref: unknown): FeedbackRef {
   const last = state.lastRecall
-  if (last === null || last.ids.length === 0) {
+  if (last === null) {
     return {
       ok: false,
       reason:
         '还没有可引用的召回结果：先调 lattice_recall，再用返回文本【锚】段里的 1-based 序号。' +
         '（会话级记录只在内存里，进程重启后会清空。）',
     }
+  }
+  // 「召回过但一条没命中」与「还没召回过」是两件事：前者再调一次 recall 也可能还是空的，
+  // 让调用方去改查询或改写法，而不是反复重试同一次调用。
+  if (last.ids.length === 0) {
+    return { ok: false, reason: '上次召回没有命中任何记忆，没有可引用的序号。' }
   }
   if (typeof ref !== 'number' || !Number.isInteger(ref)) {
     return { ok: false, reason: 'ref 必须是整数序号（1 起），收到 ' + describeValue(ref) + '。' }

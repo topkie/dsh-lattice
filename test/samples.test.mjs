@@ -247,6 +247,15 @@ describe('校准样本库与 lattice_feedback（判据 12）', () => {
       assert.equal(sampleRows().length, 0, '被拒的几次都不得写样本')
     })
 
+    it('召回过但零命中：拒因说「没有命中」，而不是让人再 recall 一次', async () => {
+      await tool('lattice_write').execute({ text: '系统代理必须走本地端口。' })
+      await tool('lattice_recall').execute({ query: '完全无关的查询词zzz' })
+      const out = await tool('lattice_feedback').execute({ kind: 'positive', ref: 1 })
+      assert.ok(out.includes('反馈被拒'), '输出: ' + out)
+      assert.ok(out.includes('没有命中'), '输出: ' + out)
+      assert.equal(sampleRows().length, 0)
+    })
+
     it('kind 只接受 positive / negative', async () => {
       await seedAndRecall()
       const bad = await tool('lattice_feedback').execute({ kind: 'maybe', ref: 1 })
@@ -543,6 +552,15 @@ describe('校准样本库与 lattice_feedback（判据 12）', () => {
       assert.deepEqual(j.samples, { total: 2, positive: 1, negative: 1 })
       assert.ok(!JSON.stringify(j.samples).includes('代理'), '条数里不该有原文')
       assert.deepEqual(sampleStats(), { total: 2, positive: 1, negative: 1 })
+    })
+
+    it('先于任何业务工具调用也报得出来（不静默报 0）', async () => {
+      configureSamples(dir, { enabled: true, model: 'm1' })
+      await recordSample({ kind: 'positive', source: 'feedback', top1: 0.5, vec: null, hitIds: [1] })
+      // 模拟「换了一个进程」：内存状态清空，磁盘上的样本库还在。
+      closeSamples()
+      const j = JSON.parse(await tool('lattice_ping').execute({}))
+      assert.deepEqual(j.samples, { total: 1, positive: 1, negative: 0 })
     })
   })
 })

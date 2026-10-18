@@ -36,7 +36,7 @@ import {
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
 import { recall } from './pipeline/search.js'
 import { forgetAtom } from './pipeline/forget.js'
-import { sampleStats } from './samples/index.js'
+import { configureSamples, sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -352,8 +352,17 @@ export function apply(ctx: Context, config: unknown): void {
             busyTimeoutMs: res.busyTimeout,
           },
           // 样本库只报条数：原文（哪怕一条摘录）都不该出现在健康检查里。
-          // 库文件不存在时报 0，不为了报数而建库。
-          samples: sampleStats(),
+          //
+          // 先按与运行时相同的口径登记一次目录：ping 可能先于任何业务工具被调用，
+          // 不登记就会静默报 0 —— 而「库里有样本、健康检查说 0」正是最难查的那类假象。
+          // 这里**不调用 getRuntime**：健康检查不该顺手建记忆库。
+          samples: (() => {
+            configureSamples(resolveDataDir(runtimeCfg.dataDir), {
+              enabled: runtimeCfg.samplesEnabled,
+              model: runtimeCfg.encoderModel,
+            })
+            return sampleStats()
+          })(),
         })
       },
     }),
