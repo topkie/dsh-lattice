@@ -32,31 +32,33 @@ function cfgOf(over) {
   }
 }
 
-beforeEach(() => {
-  closeRuntime()
-  dir = join(
-    tmpdir(),
-    'dsh-lattice-calib-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2),
-  )
-})
-
-afterEach(() => {
-  // 顺序要紧：先关运行时与日志库，再删目录。
-  // 日志单例指向本用例的 dataDir；不关就删目录，后面的用例写日志时会去那个已消失的路径 mkdir。
-  closeRuntime()
-  try {
-    closeLog()
-  } catch {
-    /* 已关或目录已不在 */
-  }
-  try {
-    rmSync(dir, { recursive: true, force: true })
-  } catch {
-    /* 清理失败不影响判定 */
-  }
-})
-
+// 钩子放在 describe **内部**：node:test 的顶层 beforeEach/afterEach 是**全局**的
+// （同一进程里后注册文件的顶层钩子会作用到先注册文件的用例上）。
+// 本文件会关运行时与日志库，放顶层会把别的测试文件的日志配置一起关掉。
 describe('标定状态：快照读入与失效（T44 判据 6）', () => {
+  beforeEach(() => {
+    closeRuntime()
+    dir = join(
+      tmpdir(),
+      'dsh-lattice-calib-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+    )
+  })
+
+  afterEach(() => {
+    // 顺序要紧：先关运行时与日志库，再删目录。
+    // 日志单例指向本用例的 dataDir；不关就删目录，后面的用例写日志时会去那个已消失的路径 mkdir。
+    closeRuntime()
+    try {
+      closeLog()
+    } catch {
+      /* 已关或目录已不在 */
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* 清理失败不影响判定 */
+    }
+  })
   it('没有快照时是未标定；库小于稳定下限时原因是 small_db', () => {
     const rt = getRuntime(cfgOf())
     assert.equal(rt.calibration.state, 'uncalibrated')
