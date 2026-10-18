@@ -29,7 +29,7 @@ import {
   readSnapshotState,
   recalibrateAndWrite,
   type CalibParams,
-} from 'lattice-calib'
+} from './pipeline/calibrate.js'
 import { evaluateGates, pickCalibrationSamples, RECALIBRATE_SAMPLE_LIMIT } from './calibration/trigger.js'
 import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
 import { closeLog, configureLog, log } from './log/index.js'

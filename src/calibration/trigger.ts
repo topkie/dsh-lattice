@@ -6,7 +6,7 @@
 // 四道闸的出处：裁决 #16（写入侧触发、S 漂移或样本集变化、冷却期过）、
 // #17（参数整体替换、不新增监听）、#35（冷却 12h、计数阈值 10、漂移 0.01）。
 
-import { TIER_SCALE_STABLE_ATOMS } from 'lattice-calib'
+import { TIER_SCALE_STABLE_ATOMS } from '../pipeline/calibrate.js'
 
 /** 冷却期：12 小时（裁决 #35）。按「一次写作会话」量级取的，不是标定值。 */
 export const RECALIBRATE_COOLDOWN_MS = 12 * 3600 * 1000
