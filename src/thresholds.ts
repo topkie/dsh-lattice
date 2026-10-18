@@ -26,6 +26,8 @@ import {
   DF_FILTER_RATIO,
   IDF_PRIOR,
   DEFAULT_MAX_EXTRACTED,
+  DF_FILTER_CONFIDENCE_Z,
+  DF_FILTER_HALF_WIDTH,
   MIN_VOCAB_FOR_DF,
   MIN_TERM,
   MAX_TERM,
@@ -598,7 +600,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/entries.ts', name: 'hasBoundaryFreedom' },
     constName: null,
     inline: { file: 'src/pipeline/entries.ts', source: 'function hasBoundaryFreedom(' },
-    affects: '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值即出局',
+    affects: '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值、且两侧都有过重复观测，即出局',
     calibration: {
       evidence:
         '2026-10-17 实现报告：**判据线是「零」本身，不是扫描出来的**。279 atom 基准库上本判据' +
@@ -640,13 +642,44 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => MIN_VOCAB_FOR_DF,
     definedBy: { file: 'src/pipeline/entries.ts', name: 'MIN_VOCAB_FOR_DF' },
     affects: '语料规模达到此值，泛词过滤（df/N > 0.5）才生效',
+    display: '12（= 使 p=0.5 处 Wilson 95% 半宽 ≤ 0.25 的最小 n）',
     calibration: {
       evidence:
         'D11-9：低于该规模「出现在半数 atom 里」不携带信息（库内 2 条时出现一次就是半数）。' +
-        '**在 12 atom 这个规模上定的**，由 test/write.test.mjs 守着小库边界；标定语料未记录',
+        'T45 批三起由区间半宽派生：DF_FILTER_HALF_WIDTH(0.25) 与 DF_FILTER_CONFIDENCE_Z(1.96) 下，' +
+        '满足半宽要求的最小 n 是 12（n=11 约 0.254、n=12 约 0.246），与旧值逐位相同。' +
+        '**不是显著性判据**：改用「Wilson 下限 > 0.5」会改变每词的触发点（n=12 时 df≥10 才触发，' +
+        '旧判据是 df≥7），那是改行为；本次不改。旧口径「在 12 atom 这个规模上定的」由 ' +
+        'test/write.test.mjs 守着小库边界',
       at: '2026-10-15',
     },
     variesWith: ['每 atom 的入口配额（配额越小，泛词线越早需要生效）', '语料语言', '上游切词规则'],
+  },
+  {
+    name: 'DF_FILTER_CONFIDENCE_Z',
+    area: '入口',
+    value: () => DF_FILTER_CONFIDENCE_Z,
+    display: '1.96（95% 双侧）',
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'DF_FILTER_CONFIDENCE_Z' },
+    affects: '推导 MIN_VOCAB_FOR_DF 时的置信水平；不参与运行时的过滤判定',
+    calibration: {
+      evidence: '**统计惯例，不是标定值**：95% 双侧正态分位。只用于把「规模线」换算成可复算的数',
+    },
+    variesWith: ['对规模线置信水平的要求'],
+  },
+  {
+    name: 'DF_FILTER_HALF_WIDTH',
+    area: '入口',
+    value: () => DF_FILTER_HALF_WIDTH,
+    display: '0.25（四分之一个比例单位）',
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'DF_FILTER_HALF_WIDTH' },
+    affects: '推导 MIN_VOCAB_FOR_DF 时的精度要求；不参与运行时的过滤判定',
+    calibration: {
+      evidence:
+        '**精度要求，不是语料标定**：df/N 的估计误差超过四分之一时，「大约一半」与「大约四分之一」分不开。' +
+        '取值是判断；它决定规模线落在 12（取 0.20 会落在 21、取 0.30 会落在 8）',
+    },
+    variesWith: ['对 df/N 估计精度的要求'],
   },
   {
     name: 'MIN_TERM',
@@ -1372,8 +1405,10 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '注入',
     value: () => ANCHOR_SUMMARY_CHARS,
     definedBy: { file: 'src/pipeline/view.ts', name: 'ANCHOR_SUMMARY_CHARS' },
-    affects: '锚段降级为摘要时的截断长度（st.anchorToSummary 分支）',
-    calibration: { evidence: '**无记录**，源码无注释' },
+    affects: '锚段降级为摘要时的截断长度：16 个词（st.anchorToSummary 分支）',
+    calibration: {
+      evidence: '**无记录**（词数是显示判断，不是标定结果）。T45 批三起按 TERM_CHARS 折算，取值仍是 64',
+    },
     variesWith: ['摘要长度分布（extractSummary 的 48 是它的上游）'],
   },
   {

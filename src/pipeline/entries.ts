@@ -69,14 +69,50 @@ export const DEFAULT_MAX_EXTRACTED = 16
  */
 export const ENTRY_RULE_ID = 'bigram-idf-v4'
 
+/** 95% 置信区间的 z 值（双侧）。只用于推导 MIN_VOCAB_FOR_DF 的语料规模线。 */
+export const DF_FILTER_CONFIDENCE_Z = 1.96
+
 /**
- * 泛词过滤（df/N > 0.5）生效所需的最小语料规模。
+ * 泛词线处可接受的 95% 区间半宽：四分之一个比例单位。
+ *
+ * 这是一个**精度要求**，不是从语料标定出来的：df/N 的估计误差超过四分之一时，
+ * 「大约一半」与「大约四分之一」就分不开，df/N > 0.5 这条判据也就无从谈起。
+ */
+export const DF_FILTER_HALF_WIDTH = 0.25
+
+/** p=0.5 处、样本量为 n 的 Wilson 95% 区间半宽。 */
+function wilsonHalfWidthAtHalf(n: number, z: number): number {
+  const z2 = z * z
+  return (z / (1 + z2 / n)) * Math.sqrt(0.25 / n + z2 / (4 * n * n))
+}
+
+/** 满足「半宽不超过目标」的最小语料规模。半宽随 n 单调收窄，线性找第一个即可。 */
+function minCorpusForDfHalfWidth(
+  z: number = DF_FILTER_CONFIDENCE_Z,
+  target: number = DF_FILTER_HALF_WIDTH,
+): number {
+  // 上限只防死循环：任何合理的半宽目标都会在几十以内收敛。
+  for (let n = 2; n <= 1000; n++) if (wilsonHalfWidthAtHalf(n, z) <= target) return n
+  return 1000
+}
+
+/**
+ * 泛词过滤（df/N > 0.5）生效所需的最小语料规模：**由区间半宽派生**。
  *
  * 低于这个规模，「出现在半数 atom 里」不携带任何信息：库里 2 条记忆时出现一次就是
  * 半数，于是两个词都会被当作泛词丢掉。英文语料上这个问题不明显（词表大），
  * 中文 bigram 候选密集，小库上会被放得很大。
+ *
+ * **规模线是算出来的，不是拍出来的**：要求 df/N 在 p=0.5 处的 95% Wilson 区间半宽
+ * 不超过 DF_FILTER_HALF_WIDTH（0.25）。半宽随 N 单调收窄，满足条件的最小 N 就是 12
+ * （N=11 时约 0.254，N=12 时约 0.246）—— 与旧值逐位相同，所以每个词的 df 触发点
+ * 一条也不变。
+ *
+ * **为什么不用「Wilson 下限 > 0.5」当判据**：那会改变触发点（N=12 时要 df≥10 才触发，
+ * 旧判据是 df≥7；N=279 时要 df≥156，旧判据是 df≥140）—— 那是改行为，不是换实现。
+ * 这里只把「规模够不够」的界线换成可复算的精度要求，过滤逻辑本身不动。
  */
-export const MIN_VOCAB_FOR_DF = 12
+export const MIN_VOCAB_FOR_DF = minCorpusForDfHalfWidth()
 
 /**
  * 泛词线：df/N 超过这个比例的词元直接出局（不参与入口竞争）。

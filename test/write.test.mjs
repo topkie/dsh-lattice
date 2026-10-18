@@ -459,6 +459,23 @@ describe('写入管线：入口生成', () => {
     })
   })
 
+  it('泛词线的规模边界：N=12 时过半数才丢，N=11 时一律不丢', () => {
+    const text = '坐标变换的补充说明。'
+    // 跨线的两侧：N=12 时 df=6 恰好是半数（不过线），df=7 才过线。
+    const half = { df: (t) => (t === '坐标' ? 6 : 0), total: () => 11 }
+    assert.ok(
+      extractedEntries(text, half).some((r) => r.term === '坐标'),
+      'N=12、df=6 只是半数，不得丢弃',
+    )
+    const over = { df: (t) => (t === '坐标' ? 7 : 0), total: () => 11 }
+    assert.ok(!extractedEntries(text, over).some((r) => r.term === '坐标'), 'N=12、df=7 过半，必须丢弃')
+    // N=11 时哪怕 df 占九成也不丢：规模线由区间半宽推出（见 MIN_VOCAB_FOR_DF 的注释）。
+    const small = { df: (t) => (t === '坐标' ? 9 : 0), total: () => 10 }
+    assert.ok(
+      extractedEntries(text, small).some((r) => r.term === '坐标'),
+      'N=11 时规模不够，判据不生效',
+    )
+  })
   it('invalidateVocab 后重建索引能看见新写入的入口', async () => {
     const ctx = createWriteCtx(db, {}, { encode: async (t) => hashVec(t) })
     await writeAtom(ctx, { text: '第一次写入带动词表缓存建立。' })
