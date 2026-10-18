@@ -12,7 +12,7 @@
 // 逐字符相同（T26 判据 3）。若归档时重算了什么，这条证据就不成立。
 
 import type { DatabaseSync } from 'node:sqlite'
-import { FLAG_ARCHIVED } from './write.js'
+import { FLAG_ARCHIVED } from '../db/flags.js'
 
 export interface ArchiveInput {
   atomId: number

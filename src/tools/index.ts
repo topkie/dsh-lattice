@@ -270,7 +270,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           lines.push('类型「' + r.kindAdjusted + '」认不出，已按「' + String(r.kind) + '」记。')
         }
         // 位标志摘要（T36 判据 6）：给出**可核对的说法**，不让模型靠读中文猜。
-        // 位定义在 write.ts 的 FLAG_*，与 ARCHITECTURE 一一对应。
+        // 位定义在 db/flags.ts 的 FLAG_*，与 ARCHITECTURE 一一对应。
         if (r.flags !== undefined && r.flags !== 0) {
           const tags: string[] = []
           if ((r.flags & 2) !== 0) tags.push('歧义（两个候选接近）')
@@ -439,7 +439,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const id = typeof args?.atom_id === 'number' ? args.atom_id : NaN
       if (!Number.isFinite(id)) return '缺少 atom_id。'
       const row = rt.db
-        .prepare('SELECT id, kind, text, topic_id, origin, superseded_by FROM atom WHERE id = ?')
+        .prepare('SELECT id, kind, text, topic_id, origin, superseded_by, flags FROM atom WHERE id = ?')
         .get(id) as
         | {
             id: number | bigint
@@ -448,6 +448,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
             topic_id: number | bigint
             origin: string
             superseded_by: number | bigint | null
+            flags: number | bigint
           }
         | undefined
       if (row === undefined) return '没有 id 为 ' + id + ' 的记忆。'
@@ -463,6 +464,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (String(row.origin) === 'user') meta.push('用户说的')
       else if (String(row.origin) === 'import') meta.push('导入的')
       if (row.superseded_by !== null) meta.push('已被 #' + Number(row.superseded_by) + ' 取代')
+      // 归档（T26）：归档条目仍可按 id 展开（显式检索是设计），但读的人要知道它已归档 ——
+      // 否则展开输出与未归档的完全一样。标记只加一句，可见性不变。
+      if ((Number(row.flags) & FLAG_ARCHIVED) !== 0) meta.push('已归档')
       // 声明边（T38）：展开时把这条记忆**说过的**关系列出来，模型才能核对
       // 「我声明的那条关系在不在」。只列 origin = declared 且方向是「这条 → 别条」的：
       // 推断出来的 near 边是派生物（召回【路】段已经在展示），方向反过来的边去查另一端更自然。

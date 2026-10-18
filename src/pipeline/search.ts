@@ -14,7 +14,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
 import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
-import { FLAG_ARCHIVED } from './write.js'
+import { FLAG_ARCHIVED } from '../db/flags.js'
 import { readConfirmedSplits } from './split.js'
 
 /** 召回路的名字，也是融合时的权重键。 */
@@ -237,7 +237,7 @@ function entryPath(db: DatabaseSync, query: string, k: number, scope?: string): 
         ') f JOIN entry e ON e.id = f.rid JOIN atom a ON a.id = e.atom_id ' +
         ' WHERE 1 = 1' +
         scopeSql +
-        notArchived() +
+        NOT_ARCHIVED_SQL +
         ' GROUP BY a.id ORDER BY s LIMIT ?',
     )
     .all(...args) as Array<{ id: number | bigint; s: number }>
@@ -250,13 +250,11 @@ function entryPath(db: DatabaseSync, query: string, k: number, scope?: string): 
  * 写成 SQL 片段而不是在结果上过滤：三路词面/图路本来就是 SQL，加在结果上要多一次
  * 往返，还会让 meta.counts 与实际候选数对不上。向量路没有 SQL 可加，见 vecPath。
  *
- * 为什么是函数而不是模块级字符串常量：模块图里有一条环 write → review → search → write。
- * 模块级拼串会在 write.ts 还没初始化完时读 FLAG_ARCHIVED（TDZ 报错）；函数在调用时读，
- * 那时它早已就绪。拆这条环属于 review/search 的职责边界，不是本任务该动的地方。
+ * 为什么可以是模块级常量：位定义在 `../db/flags.js`（没有内部依赖），本模块不再反向
+ * import write.ts，于是模块图里那条 write → review → search 的环已经断开 —— 拼串时读到
+ * 的必然是已初始化的绑定。
  */
-function notArchived(): string {
-  return ' AND (a.flags & ' + FLAG_ARCHIVED + ') = 0'
-}
+const NOT_ARCHIVED_SQL = ' AND (a.flags & ' + FLAG_ARCHIVED + ') = 0'
 
 /**
  * 正文路：trigram 索引。
@@ -278,7 +276,7 @@ function bodyPath(db: DatabaseSync, query: string, k: number, scope?: string): n
         'JOIN atom a ON a.id = atom_fts.rowid ' +
         ' WHERE atom_fts MATCH ?' +
         scopeSql +
-        notArchived() +
+        NOT_ARCHIVED_SQL +
         ' ORDER BY s LIMIT ?',
     )
     .all(...args) as Array<{ id: number | bigint; s: number }>
@@ -314,7 +312,7 @@ function graphPath(db: DatabaseSync, seeds: number[], k: number, scope?: string)
     ph +
     ')' +
     scopeSql +
-    notArchived() +
+    NOT_ARCHIVED_SQL +
     ' UNION ALL ' +
     'SELECT e.dst_id AS seed, e.src_id AS id, e.confidence AS c FROM edge e ' +
     'JOIN atom a ON a.id = e.src_id WHERE ' +
@@ -323,7 +321,7 @@ function graphPath(db: DatabaseSync, seeds: number[], k: number, scope?: string)
     ph +
     ')' +
     scopeSql +
-    notArchived() +
+    NOT_ARCHIVED_SQL +
     '), ranked AS (' +
     'SELECT id, c, ROW_NUMBER() OVER (PARTITION BY seed ORDER BY c DESC) AS rn FROM nb WHERE id <> seed' +
     ') SELECT id, MAX(c) AS s FROM ranked WHERE rn <= ? GROUP BY id ORDER BY s DESC LIMIT ?'

@@ -9,7 +9,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { atomKindFilterValues } from '../db/schema.js'
-import { FLAG_ARCHIVED } from './write.js'
+import { FLAG_ARCHIVED } from '../db/flags.js'
 
 /** 一页最多给多少条。 */
 export const LIST_MAX_LIMIT = 50
@@ -24,7 +24,7 @@ export interface ListOptions {
   origin?: string
   topicId?: number
   /**
-   * 按位过滤：`flags & 该值` 非 0 即命中（位定义见 write.ts 的 FLAG_*）。
+   * 按位过滤：`flags & 该值` 非 0 即命中（位定义见 `../db/flags.ts` 的 FLAG_*）。
    *
    * **给了位过滤就不过滤归档**：那是显式检索 —— 例如 `flags: FLAG_ARCHIVED`
    * 就是要看归档条目。没给时默认排除（见 listAtoms 里的分支）。

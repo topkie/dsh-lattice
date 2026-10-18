@@ -101,7 +101,9 @@ export interface InferStats {
   encoded: number
   /** 两两比较过的对数。 */
   pairsScanned: number
+  /** 实际写进 edge 的 near 行数。**按表里的行算**：撞声明边唯一键、被 DO NOTHING 跳过的不计。 */
   nearEdges: number
+  /** 实际写进 edge 的 duplicate 行数，口径同 nearEdges。 */
   duplicateEdges: number
   /** 本次重建删掉的旧 inferred 边数。 */
   removedEdges: number
@@ -250,7 +252,6 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
     cos: number
     lexical: number
   }>
-  let duplicateEdges = 0
   for (const p of pairRows) {
     const cos = Number(p.cos)
     const lex = Number(p.lexical)
@@ -259,7 +260,6 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
     const b = Number(p.b_id)
     if ((degOut.get(a) ?? 0) >= cap || (degOut.get(b) ?? 0) >= cap) continue
     edges.push({ s: a, d: b, kind: 'duplicate', conf: cos })
-    duplicateEdges++
   }
   for (const e of edges) {
     bump(degOut, e.s)
@@ -277,6 +277,9 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
       'ON CONFLICT(src_type, src_id, dst_type, dst_id, kind) DO NOTHING',
   )
   let removedEdges = 0
+  // 真正写进去的边。撞唯一键被 DO NOTHING 跳过的那些不在这里 ——
+  // 下面的统计必须按**表里真实存在的行**算，而不是按待插入数组，否则会「报 2 条、表里只有 1 条」。
+  const inserted: typeof edges = []
   db.exec('BEGIN IMMEDIATE')
   try {
     const before = db.prepare('SELECT COUNT(*) AS n FROM edge WHERE origin = ?').get(INFERRED_ORIGIN) as {
@@ -285,7 +288,18 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
     removedEdges = Number(before.n)
     db.prepare('DELETE FROM edge WHERE origin = ?').run(INFERRED_ORIGIN)
     for (const e of edges) {
-      ins.run('atom', e.s, 'atom', e.d, e.kind, Math.round(e.conf * 1e6) / 1e6, INFERRED_ORIGIN, now)
+      const info = ins.run(
+        'atom',
+        e.s,
+        'atom',
+        e.d,
+        e.kind,
+        Math.round(e.conf * 1e6) / 1e6,
+        INFERRED_ORIGIN,
+        now,
+      )
+      // changes = 0 表示撞了唯一键（声明边已在表里），这一行并没有写进去。
+      if (Number(info.changes) > 0) inserted.push(e)
     }
     db.exec('COMMIT')
   } catch (err) {
@@ -301,24 +315,30 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
     }
   }
 
+  // 度数、孤立与两条边数都按 inserted 算（见上面的注释）：被跳过的边在表里不存在，
+  // 把它们算进 MOD 或孤立数，体检报出的就是一份不存在的图。
   let maxOut = 0
   let sumOut = 0
   const touched = new Set<number>()
-  for (const e of edges) {
+  const insertedOut = new Map<number, number>()
+  for (const e of inserted) {
+    insertedOut.set(e.s, (insertedOut.get(e.s) ?? 0) + 1)
     touched.add(e.s)
     touched.add(e.d)
   }
-  for (const [, d] of degOut) {
+  for (const [, d] of insertedOut) {
     if (d > maxOut) maxOut = d
     sumOut += d
   }
+  let nearInserted = 0
+  for (const e of inserted) if (e.kind === 'near') nearInserted++
   // 孤立按图路的无向度算：入度与出度都为 0 才叫孤立。
   const stats: InferStats = {
     atoms: total,
     encoded: n,
     pairsScanned,
-    nearEdges: edges.length - duplicateEdges,
-    duplicateEdges,
+    nearEdges: nearInserted,
+    duplicateEdges: inserted.length - nearInserted,
     removedEdges,
     truncatedByK,
     cappedByHardLimit,

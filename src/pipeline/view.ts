@@ -13,7 +13,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
 import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
-import { FLAG_ARCHIVED, FLAG_SPLIT_PENDING, TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
+import { FLAG_ARCHIVED, FLAG_SPLIT_PENDING } from '../db/flags.js'
+import { TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -83,8 +84,10 @@ export interface ViewOptions {
   /**
    * 本次查询词，作为「使用场景」标在待拆分候选的锚行上（T29）。
    *
-   * 为什么由调用方传：查询词只存在于调用方（`lattice_recall` 的 q、搜索路由的 q），
-   * 注入层不读请求上下文。省略时那句话不出现 —— 它只对待拆分候选有意义。
+   * 为什么由调用方传：查询词只存在于调用方（`lattice_recall` 的 q），注入层不读请求上下文。
+   * 搜索路由（`src/index.ts`）虽然也有 q，但它直接输出 JSON、**不调用本函数** ——
+   * 本函数在 src/ 里只有 tools/index.ts 一个调用点。省略时那句话不出现 ——
+   * 它只对待拆分候选有意义。
    */
   scene?: string
 }

@@ -19,7 +19,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { META_SPLIT_CONFIRMED, getMeta, setMeta } from '../db/meta.js'
 import { log } from '../log/index.js'
-import { FLAG_SPLIT_PENDING } from './write.js'
+import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 
 /**
  * 「用户已确认应拆分」清单的条数上限（FIFO：满了淘汰最早的那条）。

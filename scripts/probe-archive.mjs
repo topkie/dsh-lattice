@@ -45,7 +45,7 @@ console.log(
 )
 const vecBefore = db.prepare('SELECT hex(embedding) AS h FROM atom WHERE id = ?').get(a).h
 console.log(
-  '[判据 2] 归档前向量列 sha 前缀 = ' +
+  '[判据 2] 归档前向量十六进制前 32 字符 = ' +
     vecBefore.slice(0, 32) +
     '…（长度 ' +
     vecBefore.length +

@@ -31,7 +31,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { getMeta, META_RECLUSTER_AT } from '../db/meta.js'
 import { GRAPH_INFER_MAX_ATOMS, INFERRED_ORIGIN } from '../graph/infer.js'
 import { DUP_COS, DUP_LEX } from './search.js'
-import { FLAG_ARCHIVED } from './write.js'
+import { FLAG_ARCHIVED } from '../db/flags.js'
 // 分页上界与页大小**复用目录的两个数**：两者防的是同一件事（一次拉爆上下文），
 // 各写一份只会让「界面一屏能放多少行」出现两个口径。
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT } from './list.js'

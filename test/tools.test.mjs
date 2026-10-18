@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
-import { closeRuntime } from '../dist/state.js'
+import { closeRuntime, getRuntime } from '../dist/state.js'
+import { setArchived } from '../dist/pipeline/archive.js'
 import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC, isWeakMatch, LOW_RELEVANCE_HINT } from '../dist/tools/index.js'
 import { briefMinFor } from '../dist/pipeline/calibrate.js'
 import { resetEncoder } from '../dist/encoder/index.js'
@@ -325,6 +326,25 @@ describe('lattice_expand', () => {
     })
     const out = await tool('lattice_expand').execute({ atom_id: idA, mode: 'related' })
     assert.ok(out.includes('下另有'), '输出: ' + out)
+  })
+
+  it('归档条目仍能按 id 展开，且输出里标「已归档」', async () => {
+    const w = await tool('lattice_write').execute({ text: '归档之后仍然可以按 id 展开的记忆。' })
+    const id = Number(/#(\d+)/.exec(w)[1])
+    // 工具执行时已经建好运行时；这里复用同一个连接改这一位（归档路由走的就是 setArchived）。
+    setArchived(getRuntime({}).db, { atomId: id, archived: true })
+    const out = await tool('lattice_expand').execute({ atom_id: id })
+    assert.ok(out.includes('已归档'), '输出: ' + out)
+    assert.ok(out.includes('归档之后仍然可以按 id 展开'), '正文照常展开: ' + out)
+  })
+
+  it('未归档条目的展开输出里没有「已归档」', async () => {
+    const w = await tool('lattice_write').execute({
+      text: '这条记忆没有归档过，展开输出里不该出现归档标记。',
+    })
+    const id = Number(/#(\d+)/.exec(w)[1])
+    const out = await tool('lattice_expand').execute({ atom_id: id })
+    assert.ok(!out.includes('已归档'), '输出: ' + out)
   })
 
   it('id 不存在时给出可读提示', async () => {

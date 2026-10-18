@@ -13,6 +13,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { FLAG_AMBIGUOUS, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from '../db/flags.js'
 import { type AtomKind, normalizeAtomKind, normalizeOrigin } from '../db/schema.js'
 import {
   cosine,
@@ -46,27 +47,14 @@ import {
 /** 落位动作。rejected（双峰拒绝且写入方未指定主属）由上层处理，见文件末尾说明。 */
 export type WriteAction = 'joined' | 'created'
 
-/** 新建 topic 的原因，供健康指标与调参使用。 */
 /**
- * `atom.flags` 的位定义（M4-T36）。**位值一旦写进库就不能改** —— 改它等于把历史行解释错。
- *
- * bit0 是「待拆分」（`pending_split` 候选，T29）：**写入侧按长度切分时置上**（见
- * `writeReviewed`），召回时在锚行标一句「疑似应拆分」，由人在界面上确认或忽略。
- * 它说的是「切点按长度定的，没有按内容判断过」，**不是**「这条一定该拆」—— 一条只讲
- * 一件事的长文本同样会被标上。确认与忽略都清这一位，见 pipeline/split.ts。
- *
- * bit4 是「已归档」（T26）：默认不召回，仍可显式检索。它与删除**不是**同一件事 ——
- * 归档只改这一位，内容、向量、入口、边都还在库里；取消归档即恢复可见，
- * 读路径上的过滤是唯一开关（见 pipeline/archive.ts 的文件头）。
- *
- * bit3（8）按设计文档留给「已被取代」。**本次不实现、不占位**：被取代关系已经有
- * `superseded_by` 列这个唯一真相源，再补一个位就是两个真相源。
+ * `atom.flags` 的位定义在 `../db/flags.js`（没有内部依赖的底层模块）。
+ * 这里 re-export：既有的引用路径（tools、测试）从 pipeline/write.js 取这些常量，
+ * 不必全部改写；写路径自己从底层模块导入，见文件头导入区。
  */
-export const FLAG_SPLIT_PENDING = 1
-export const FLAG_AMBIGUOUS = 2
-export const FLAG_UNCLASSIFIED = 4
-export const FLAG_ARCHIVED = 16
+export { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from '../db/flags.js'
 
+/** 新建 topic 的原因，供健康指标与调参使用。 */
 export type CreateReason = 'far' | 'ambiguous'
 
 /**

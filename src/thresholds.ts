@@ -81,7 +81,7 @@ import {
   TRIM_PATHS_LIMIT,
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
-import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './pipeline/write.js'
+import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './db/flags.js'
 import { SPLIT_CONFIRMED_MAX } from './pipeline/split.js'
 import {
   BUSY_TIMEOUT_FLOOR_MS,
@@ -2191,7 +2191,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'FLAG_SPLIT_PENDING',
     area: '写入',
     value: () => FLAG_SPLIT_PENDING,
-    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_SPLIT_PENDING' },
+    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_SPLIT_PENDING' },
     affects:
       'atom.flags 的 bit0：待拆分（T29）。写入侧**按长度切分**时置上（每段都置），召回时锚行标「疑似应拆分」，由人在界面上确认或忽略（两者都清这一位）',
     calibration: {
@@ -2233,7 +2233,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'FLAG_AMBIGUOUS',
     area: '写入',
     value: () => FLAG_AMBIGUOUS,
-    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_AMBIGUOUS' },
+    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_AMBIGUOUS' },
     affects: 'atom.flags 的 bit1：落位时两个候选接近、没把握',
     calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
     variesWith: ['（不应变）'],
@@ -2242,7 +2242,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'FLAG_UNCLASSIFIED',
     area: '写入',
     value: () => FLAG_UNCLASSIFIED,
-    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_UNCLASSIFIED' },
+    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_UNCLASSIFIED' },
     affects: 'atom.flags 的 bit2：与任何已有主题都不像（未归类）',
     calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
     variesWith: ['（不应变）'],
@@ -2251,7 +2251,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'FLAG_ARCHIVED',
     area: '写入',
     value: () => FLAG_ARCHIVED,
-    definedBy: { file: 'src/pipeline/write.ts', name: 'FLAG_ARCHIVED' },
+    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_ARCHIVED' },
     affects:
       'atom.flags 的 bit4：已归档（T26）。默认不召回、不进注入三段、列表默认不列；' +
       '显式检索（lattice_list 给 flags、界面勾「显示已归档」）仍可见。不是删除：内容与边都还在',

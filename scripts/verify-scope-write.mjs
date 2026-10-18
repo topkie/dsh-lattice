@@ -236,7 +236,10 @@ const cX = counts(PROJ_X)
 const fmt = (c) => 'vec ' + c.vec + ' / entry ' + c.entry + ' / body ' + c.body + ' / graph ' + c.graph
 check(
   '6 向量路与入口/正文路都受 scope 约束（图路见判据 7）',
-  cGlobal.vec < cAll.vec && cGlobal.entry <= cAll.entry && cGlobal.body <= cAll.body,
+  // 三条路都用**严格小于**：正确状态下 scope 过滤会真的减少候选（本库实测 entry 3→1、body 2→1）；
+  // 若某一路没过滤，该路计数会与不给 scope 时**相等**，这里立刻红。写成「不大于」时
+  // 那种失败恰好满足 1 <= 3，判据 6 自己不会红。
+  cGlobal.vec < cAll.vec && cGlobal.entry < cAll.entry && cGlobal.body < cAll.body,
   '不给 scope: ' + fmt(cAll) + '  |  global: ' + fmt(cGlobal) + '  |  ' + PROJ_X + ': ' + fmt(cX),
 )
 
