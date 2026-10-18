@@ -57,6 +57,10 @@ function looksLikePath(s) {
   if (s.startsWith('-') || s.startsWith('--')) return false
   if (s.includes('*')) return false
   const hasSlash = s.includes('/')
+  // 不带斜杠的 `.db` 一律不算「仓库内路径」：库文件都是运行时生成的，仓库里不会有。
+  // 少了这一条，文档里写一个属性访问（如 `rt.db`）会被当成文件路径而恒报错，
+  // 而它旁边的说明是正确的 —— 检查器不能要求文档绕开正常的写法。
+  if (!hasSlash && /\.db$/.test(s)) return false
   if (!hasSlash && !FILE_EXT.test(s)) return false
   if (hasSlash && !FILE_EXT.test(s) && !s.startsWith('src/')) return false
   return true
