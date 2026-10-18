@@ -133,7 +133,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const writeTool = defineTool({
     name: 'lattice_write',
     description:
-      '记住一件事。仅在值得跨会话复用时调用；对话里临时说过的不要写。太短的碎片会被拒收，过长的会按句拆成多条；与已有内容重复时只提示、不阻止。',
+      '记住一件事。仅在值得跨会话复用时调用；对话里临时说过的不要写。写之前先 recall 查重 ——' +
+      '重复只会提示、不会拦你。太短的碎片会被拒收，过长的会按句拆成多条。',
     // 注意形状：parameters 是「属性名 → 值 schema」的映射，**不是** {type, properties}。
     // 必填写成属性上的 required: true。写错会在 defineTool 时就抛错，整个插件加载失败。
     parameters: {
