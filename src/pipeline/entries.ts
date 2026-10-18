@@ -78,6 +78,22 @@ export const ENTRY_RULE_ID = 'bigram-idf-v4'
  */
 export const MIN_VOCAB_FOR_DF = 12
 
+/**
+ * 泛词线：df/N 超过这个比例的词元直接出局（不参与入口竞争）。
+ *
+ * 它与 MIN_VOCAB_FOR_DF 是一对：那条管「什么时候这条判据才可信」，这条管「可信之后
+ * 划在哪」。0.5 的出处是「过半数即无区分度」这句直觉，不是某次测量 —— 标定缺口见阈值表。
+ */
+export const DF_FILTER_RATIO = 0.5
+
+/**
+ * IDF 平滑项（Robertson-Sparck Jones 形式里的 0.5）。
+ *
+ * 属算法惯例而非实测取值；把它提成具名常量是因为同一个公式里它出现两次
+ * （分子与分母各一次），此前是两处各写一个 0.5。
+ */
+export const IDF_PRIOR = 0.5
+
 /** 入口词元的长度区间（按码点）。 */
 export const MIN_TERM = 2
 export const MAX_TERM = 8
@@ -392,10 +408,10 @@ export function extractedEntries(
     if (!isUsableTerm(term, st)) continue
     const df = vocab.df(term)
     // 泛词直接丢弃：出现在半数以上 atom 里的词元区分度为 0（等同停用词）。
-    if (dfFilterActive && df / N > 0.5) continue
+    if (dfFilterActive && df / N > DF_FILTER_RATIO) continue
     const tf = st?.tf ?? 0
     // IDF（区分度）× log2(1+tf)（证据强度）。tf=1 时后一项恰为 1，退回纯 IDF。
-    let score = Math.log((N - df + 0.5) / (df + 0.5) + 1) * Math.log2(1 + tf)
+    let score = Math.log((N - df + IDF_PRIOR) / (df + IDF_PRIOR) + 1) * Math.log2(1 + tf)
     // 边界自由度缺一侧的候选再降权。两侧都恒定且观测足够的已在候选资格里剔除；
     // 观测不足的那批按「不确定处不做二值判断」留在这里，用降权而不是剔除。
     // 降权而非剔除的理由见 FRAGMENT_PENALTY。

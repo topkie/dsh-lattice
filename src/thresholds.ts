@@ -23,6 +23,8 @@
 
 import {
   ENTRY_WEIGHT,
+  DF_FILTER_RATIO,
+  IDF_PRIOR,
   DEFAULT_MAX_EXTRACTED,
   MIN_VOCAB_FOR_DF,
   MIN_TERM,
@@ -43,28 +45,49 @@ import {
 } from './pipeline/entries.js'
 import { LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT } from './pipeline/list.js'
 import { FORGOTTEN_MIN_BIGRAMS, FORGOTTEN_SCAN_LIMIT } from './pipeline/forget.js'
-import { AFFILIATION, CHANNEL_WEIGHT, DUP_COS, DUP_LEX, MAX_QUERY_TERMS, RRF_K } from './pipeline/search.js'
 import {
+  AFFILIATION,
+  CHANNEL_WEIGHT,
+  DEFAULT_SEED_COUNT,
+  DUP_COS,
+  DUP_LEX,
+  K_GRAPH,
+  K_LEX,
+  K_VEC,
+  MAX_QUERY_TERMS,
+  RECALL_TOP_N,
+  RRF_K,
+} from './pipeline/search.js'
+import {
+  ANCHOR_SUMMARY_CHARS,
   DEFAULT_ANCHOR_MAX,
   DEFAULT_BUDGET,
   DEFAULT_ENTRIES_PER_TOPIC,
   DEFAULT_ENTRY_LINE_MAX,
   DEFAULT_PATH_LINES,
+  DEMOTED_ANCHOR_CHARS,
   MIN_ANCHORS,
+  PATH_SUMMARY_CHARS,
   SEGMENT_RATIO,
   TIER_BRIEF_MIN,
   TIER_FULL_MIN,
   TRIM_ORDER,
+  TRIM_PATHS_LIMIT,
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import {
   DEFAULT_THRESHOLDS,
   DEFAULT_TOP_N,
+  DELTA_PEAK,
   FINGERPRINT_CHARS,
   FINGERPRINT_MEMBERS,
+  NEAR_EDGE_CONFIDENCE,
+  SEARCH_BODY_MAX_CHARS,
+  TOPIC_LABEL_CHARS,
   WORD_ONLY_TOP_N_FACTOR,
 } from './pipeline/write.js'
 import { MAX_ATOM_CHARS, MIN_ATOM_CHARS } from './migrate/split.js'
+import { SUMMARY_CHARS } from './util/text.js'
 import {
   REVIEW_MAX_CHARS,
   REVIEW_MAX_SEGMENTS,
@@ -289,23 +312,21 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     diverges: '**设计文档 §7 没有这个键** —— 代码新增（降级路径），文档未同步',
   },
   {
-    name: 'DELTA_PEAK（内联）',
+    name: 'DELTA_PEAK',
     area: '落位',
-    value: () => 0.06,
-    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    value: () => DELTA_PEAK,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'DELTA_PEAK' },
     affects: 'decidePlacement：sim1 - sim2 小于此差值时判为「双峰」，退回新建（ambiguous）',
-    inline: { file: 'src/pipeline/write.ts', source: 's1 - (sim2 ?? 0) < 0.06' },
     calibration: {
       evidence:
         '《设计报告》落位判定表（sim1 - sim2 < 0.06 且 sim1 >= tauNew 则双峰拒绝）；设计文档 §7 里它有名字' +
-        '（deltaPeak，默认 0.06、范围 0.01-0.20），代码里没有名字。**未记录实测语料**',
+        '（deltaPeak，默认 0.06、范围 0.01-0.20）。**未记录实测语料**',
     },
     variesWith: ['换编码模型（余弦尺度的间距会变）', '同域不同子话题的密度'],
-    constName: null,
     design: { doc: DESIGN_DOC, key: 'deltaPeak', default: 0.06, min: 0.01, max: 0.2 },
     diverges:
-      '**设计文档有名字、代码里是内联字面量** —— 同一件事在文档里是配置项、在代码里是魔法数；' +
-      'zod schema 里没有它，运行时不可配置',
+      '**仍不进 zod schema**：运行时不可配置。T45 批一只把它从内联字面量提成具名常量' +
+      '（取值未变）——「文档有名字、代码里是魔法数」这一半已消除，可配置性是另一件事',
   },
   // ─────────────────────── 落位的候选规模与指纹（write.ts）─────────────────────
   {
@@ -351,18 +372,18 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/write.ts', name: 'DEFAULT_TOP_N' },
     affects: 'loadCandidates 的默认候选上限（写入侧的 topic 候选数）',
     calibration: {
-      evidence: '**无记录**。值与注入层的 topN 同数（24），但两处各自写死，没有一处说明为什么是 24',
+      evidence:
+        '**无记录**。它与召回条数（search.ts 的 RECALL_TOP_N）及配置项 topN 同为 24，但那是' +
+        '「召回交注入层多少条」，这是「落位时取多少个 topic 候选」。T45 批一判定为' +
+        '**恰好同值、不同义**，不合并 —— 合并会让「调注入条数」顺带改掉落位候选数',
     },
     variesWith: ['库内 topic 总数', '落位准确率对候选规模的敏感度'],
-    design: { doc: DESIGN_DOC, key: 'topN', default: 24, min: 5, max: 50 },
-    zod: { file: 'src/index.ts', name: 'topN', default: 24, min: 5, max: 50 },
     otherSites: [
-      'src/index.ts:104 `Number(cfg.topN ?? 24)`',
-      'src/tools/index.ts:201 recall(..., { topN: cfg.topN }) —— 注入层候选数走的是配置',
+      'src/tools/index.ts recall(..., { topN: cfg.topN }) —— 召回条数走的是配置（zod 的 topN），不是这里的 24',
     ],
     diverges:
-      '**同名两处用途**：zod/Config 的 topN 管「召回交注入层的候选数」，这里管「写入侧的 topic 候选数」，' +
-      '并被 write.ts 当作默认值引用。两者数值相同纯属巧合，改配置不会改这里',
+      '**设计文档 §7 的 topN 指召回条数**（对应 search.ts 的 RECALL_TOP_N），不是这里的落位候选数 ——' +
+      '本常量在文档里没有对应键。两件事同为 24 纯属巧合，改配置不会改这里',
   },
   {
     name: 'FINGERPRINT_CHARS',
@@ -387,59 +408,69 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['单个 topic 的成员数分布（大 topic 多时指纹代表性下降）'],
   },
   {
-    name: 'TOPIC_LABEL_CHARS（内联）',
+    name: 'TOPIC_LABEL_CHARS',
     area: '落位',
-    value: () => 16,
-    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
-    affects: '新建 topic 时标签取摘要的前多少字符',
-    inline: { file: 'src/pipeline/write.ts', source: 'row.summary.slice(0, 16)' },
+    value: () => TOPIC_LABEL_CHARS,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'TOPIC_LABEL_CHARS' },
+    affects:
+      '主题标签的宽度：新建 topic 时取摘要的前这么多字符，注入层入口行也按同一宽度裁' +
+      '（write.ts 的 slice 与 view.ts 的 clip 是同一个量）',
     calibration: {
-      evidence: '**无记录**；与注入层入口行的主题标签宽度（view.ts 的 clip(t.label, 16)）同值但两处各自写死',
+      evidence:
+        '**无记录**。两处此前各自写死 16（写入侧 slice(0, 16)、显示侧 clip(t.label, 16)）——' +
+        'T45 批一判定为**同义**并合并为一个常量：存进去的宽度与显示的宽度必须是同一个量，' +
+        '否则改一处就会出现「标签存 16、显示裁 20」这类分叉',
     },
     variesWith: ['主题标签在注入层显示多宽', '摘要长度分布'],
+    otherSites: ['src/pipeline/view.ts 入口行 `clip(t.label, TOPIC_LABEL_CHARS)`（同源，不再是第二份数字）'],
   },
   {
-    name: 'NEAR_EDGE_CONFIDENCE（内联）',
+    name: 'NEAR_EDGE_CONFIDENCE',
     area: '落位',
-    value: () => 0.5,
-    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    value: () => NEAR_EDGE_CONFIDENCE,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'NEAR_EDGE_CONFIDENCE' },
     affects: '写 near 边时的默认 confidence（有真实 sim 时用 sim 顶替）',
-    inline: { file: 'src/pipeline/write.ts', source: 'row.nearConf ?? 0.5' },
     calibration: { evidence: '**无记录**。是「没有证据时给中位」的占位值，不是标定结果' },
     variesWith: ['图路排序对 confidence 的依赖方式'],
   },
   {
-    name: 'SUMMARY_CHARS（内联）',
+    name: 'SUMMARY_CHARS',
     area: '写入',
-    value: () => 48,
-    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    value: () => SUMMARY_CHARS,
+    definedBy: { file: 'src/util/text.ts', name: 'SUMMARY_CHARS' },
     affects: '写入时抽取摘要的字符上限（摘要进 atom.summary，参与注入与去重）',
-    inline: { file: 'src/pipeline/write.ts', source: 'extractSummary(text, 48)' },
     calibration: {
       evidence:
         'text.ts:80-85 注释：取第一句、超长截断、按码点计数以免劈开代理对；48 本身**无实测标定记录**。' +
-        '默认值住在 util/text.ts 的函数签名里（extractSummary(text, max = 48)），调用点又写了一遍 48',
+        '此前默认值住在函数签名里（max = 48），两个调用点（write.ts 与 forget.ts）又各写了一遍 48；' +
+        'T45 批一判定为**同义**并合并成一个常量（三处同源）',
     },
     variesWith: ['一句话讲一件事这条写入约定的实际长度分布', '语言'],
+    otherSites: [
+      'src/pipeline/write.ts `extractSummary(text, SUMMARY_CHARS)`（同源）',
+      'src/pipeline/forget.ts 墓碑摘要 `extractSummary(..., SUMMARY_CHARS)`（同源）',
+    ],
   },
   {
-    name: 'SEARCH_BODY_MAX_CHARS（内联）',
+    name: 'SEARCH_BODY_MAX_CHARS',
     area: '写入',
-    value: () => 1600,
-    definedBy: { file: 'src/pipeline/write.ts', name: '内联（无常量名）' },
+    value: () => SEARCH_BODY_MAX_CHARS,
+    definedBy: { file: 'src/pipeline/write.ts', name: 'SEARCH_BODY_MAX_CHARS' },
     affects: 'buildSearchBody 里进 trigram 索引的正文字符上限（超出即截断）',
-    inline: { file: 'src/pipeline/write.ts', source: 'if (body.length <= 1600) return' },
-    calibration: { evidence: 'write.ts:330-341 注释只说明「摘要重复一次」的理由；1600 **无实测标定记录**' },
+    calibration: {
+      evidence:
+        'write.ts:330-341 注释只说明「摘要重复一次」的理由；1600 **无实测标定记录**。' +
+        '同一个函数里此前写了两遍（判断与切片），T45 批一合并为一个常量',
+    },
     variesWith: ['atom 正文长度分布', '长正文的细节召回是否重要'],
   },
   // ────────────────────────────── 入口（entries.ts）──────────────────────────────
   {
-    name: 'DF_FILTER_RATIO（内联）',
+    name: 'DF_FILTER_RATIO',
     area: '入口',
-    value: () => 0.5,
-    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    value: () => DF_FILTER_RATIO,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'DF_FILTER_RATIO' },
     affects: '泛词过滤：df/N 超过此比例的词元直接丢弃（不参与入口竞争）',
-    inline: { file: 'src/pipeline/entries.ts', source: 'if (dfFilterActive && df / N > 0.5) continue' },
     calibration: {
       evidence:
         'entries.ts:181-196 注释（泛词是相对于语料定义的）与 M2 审核 T11：**在 279 atom 的基准库上' +
@@ -452,14 +483,15 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '治理（改相对判据）属后续执行点，本次只登记不改值',
   },
   {
-    name: 'IDF_PRIOR（内联）',
+    name: 'IDF_PRIOR',
     area: '入口',
-    value: () => 0.5,
-    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
-    affects: '入口打分的 IDF 平滑项：log((N - df + 0.5) / (df + 0.5) + 1)',
-    inline: { file: 'src/pipeline/entries.ts', source: 'Math.log((N - df + 0.5) / (df + 0.5) + 1)' },
+    value: () => IDF_PRIOR,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'IDF_PRIOR' },
+    affects: '入口打分的 IDF 平滑项：log((N - df + IDF_PRIOR) / (df + IDF_PRIOR) + 1)',
     calibration: {
-      evidence: '**无记录**。取 0.5 是 IDF 平滑（Robertson-Sparck Jones 形式）的常规写法，属算法惯例而非实测',
+      evidence:
+        '**无记录**。取 0.5 是 IDF 平滑（Robertson-Sparck Jones 形式）的常规写法，属算法惯例而非实测。' +
+        '同一个公式里它出现两次（分子与分母），此前是两处各写一个 0.5',
     },
     variesWith: ['仅在换用别的 IDF 变体时'],
   },
@@ -482,15 +514,17 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['语料领域（邻居多样性的基线）', '上游切词规则'],
   },
   {
-    name: 'EXTRACT_WEIGHT_CEIL（内联）',
+    name: 'EXTRACT_WEIGHT_CEIL',
     area: '入口',
-    value: () => 0.6,
-    definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
+    value: () => ENTRY_WEIGHT.extracted,
+    definedBy: { file: 'src/pipeline/entries.ts', name: 'ENTRY_WEIGHT' },
+    constName: null,
     affects: '抽取入口的权重归一后上界（declared 恒为 1.0，抽取不得越过它）',
-    inline: { file: 'src/pipeline/entries.ts', source: '归一后落在 [0, 0.6]' },
     calibration: {
       evidence:
-        'entries.ts:315 注释：抽取入口永远不越过 declared 的 1.0；0.6 由 ENTRY_WEIGHT.extracted 决定，非实测',
+        'entries.ts:315 注释：抽取入口永远不越过 declared 的 1.0。**代码里从来没有第二个 0.6**：' +
+        '归一结果直接乘 ENTRY_WEIGHT.extracted（learned 的升档上限同样引用了它）。' +
+        'T45 批一核对后判定为**同源**，登记项改为指向那个字段而不是镜像一个数字',
     },
     variesWith: ['ENTRY_WEIGHT.extracted 改动时'],
   },
@@ -503,7 +537,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '抽取入口的打分：IDF（区分度）乘上词频项（证据强度），决定十六个槽位归谁',
     inline: {
       file: 'src/pipeline/entries.ts',
-      source: 'Math.log((N - df + 0.5) / (df + 0.5) + 1) * Math.log2(1 + tf)',
+      source: 'Math.log((N - df + IDF_PRIOR) / (df + IDF_PRIOR) + 1) * Math.log2(1 + tf)',
     },
     calibration: {
       evidence:
@@ -880,31 +914,71 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '两者不是同一个量，但不熟悉的人容易当成同一个',
   },
   {
-    name: 'DEFAULT_SEED_COUNT（内联）',
+    name: 'DEFAULT_SEED_COUNT',
     area: '召回融合',
-    value: () => 10,
-    definedBy: { file: 'src/pipeline/search.ts', name: '内联（无常量名）' },
-    affects: '图路用向量路的前多少条做种子（A.slice(0, 10)）',
-    inline: { file: 'src/pipeline/search.ts', source: 'graphPath(db, A.slice(0, 10), kGraph)' },
+    value: () => DEFAULT_SEED_COUNT,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'DEFAULT_SEED_COUNT' },
+    affects: '图路用向量路的前多少条做种子（A.slice(0, DEFAULT_SEED_COUNT)）',
     calibration: { evidence: '**无记录**（源码无注释，开发笔记里也没有这个数）' },
     variesWith: ['图路的边密度与精度', '库规模'],
     diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
   },
   {
-    name: 'kVec / kLex / kGraph（内联）',
+    name: 'K_VEC',
     area: '召回融合',
-    value: () => 'kVec 100 / kLex 100 / kGraph 50',
-    display: 'kVec 100 / kLex 100 / kGraph 50',
-    definedBy: { file: 'src/pipeline/search.ts', name: '内联（无常量名）' },
-    affects: '四路各自取多少条进融合（向量路 100、词面两路各 100、图路 50）',
-    inline: { file: 'src/pipeline/search.ts', source: 'const kVec = opts.kVec ?? 100' },
+    value: () => K_VEC,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'K_VEC' },
+    affects: '向量路取多少条进融合（向量粗筛的宽度）',
     calibration: {
       evidence:
         '**无记录**。devnotes M1 待办一已把 `LIMIT 24/48/64` 这类「表面是性能上限、实际约束召回质量」' +
-        '的候选数点名为**归类错误**：它随库规模变化，不与机器相关。这三个数属于同一类',
+        '的候选数点名为**归类错误**：它随库规模变化，不与机器相关。kVec / kLex / kGraph 属于同一类',
     },
     variesWith: ['库规模（库长大时固定取前 N 会让召回质量悄悄退化）'],
-    diverges: '**设计文档 §7 没有这几个键**，zod schema 里也没有 —— 固定上限改预算制是后续执行点',
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有 —— 固定上限改预算制是 T45 批二（与 T40 合并）',
+  },
+  {
+    name: 'K_LEX',
+    area: '召回融合',
+    value: () => K_LEX,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'K_LEX' },
+    affects: '词面两路（Entry 与正文）各取多少条进融合',
+    calibration: {
+      evidence: '**无记录**。与 K_VEC 同一次盘点、同一类（随库规模漂移，不是性能上限）；**无实测**',
+    },
+    variesWith: ['库规模', '中文 bigram 的候选密度'],
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+  },
+  {
+    name: 'K_GRAPH',
+    area: '召回融合',
+    value: () => K_GRAPH,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'K_GRAPH' },
+    affects: '图路一跳扩展取多少条进融合（与 OUT_DEGREE_CAP 分工：那条限每个种子的出度，这条限总量）',
+    calibration: {
+      evidence: '**无记录**。与 K_VEC 同一次盘点、同一类；**无实测**',
+    },
+    variesWith: ['图路的边密度', '库规模'],
+    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+  },
+  {
+    name: 'RECALL_TOP_N',
+    area: '召回融合',
+    value: () => RECALL_TOP_N,
+    definedBy: { file: 'src/pipeline/search.ts', name: 'RECALL_TOP_N' },
+    affects: '召回交给注入层的默认条数（调用方不传 topN 时用它）',
+    calibration: {
+      evidence:
+        '**无记录**。生产路径上实际生效的是配置项 topN（zod 默认 24，见 tools/index.ts），' +
+        '这里的 24 只在调用方不传 topN 时起作用',
+    },
+    variesWith: ['注入字符预算', '一次注入能容纳的摘要条数'],
+    design: { doc: DESIGN_DOC, key: 'topN', default: 24, min: 5, max: 50 },
+    zod: { file: 'src/index.ts', name: 'topN', default: 24, min: 5, max: 50 },
+    otherSites: ['src/index.ts `Number(cfg.topN ?? 24)` —— 同一个默认值的第二处写法（配置层）'],
+    diverges:
+      '**与 DEFAULT_TOP_N 同为 24、不同量**（T45 批一判定为恰好同值，不合并）：那个是落位时取多少' +
+      '个 topic 候选，这个是召回交注入层的条数。设计文档 §7 的 topN 指后者',
   },
   {
     name: 'MAX_QUERY_TERMS',
@@ -1239,53 +1313,55 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '与 DEFAULT_ENTRIES_PER_TOPIC 形成第二份同一个数',
   },
   {
-    name: 'PATH_SUMMARY_CHARS（内联）',
+    name: 'PATH_SUMMARY_CHARS',
     area: '注入',
-    value: () => 80,
-    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    value: () => PATH_SUMMARY_CHARS,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'PATH_SUMMARY_CHARS' },
     affects: '路段每行摘要的截断长度',
-    inline: { file: 'src/pipeline/view.ts', source: 'clip(String(r.summary), 80)' },
-    calibration: { evidence: '**无记录**，源码无注释' },
+    calibration: {
+      evidence:
+        '**无记录**，源码无注释。与 ANCHOR_SUMMARY_CHARS(64) / DEMOTED_ANCHOR_CHARS(60) 是' +
+        '三个**不同角色**的截断（路只提供线索、锚是正文、降级锚是兜底）；值也不同，' +
+        'T45 批一判定为**不同义**，不合并',
+    },
     variesWith: ['路段在注入里的角色（纯线索）'],
   },
   {
-    name: 'ANCHOR_SUMMARY_CHARS（内联）',
+    name: 'ANCHOR_SUMMARY_CHARS',
     area: '注入',
-    value: () => 64,
-    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    value: () => ANCHOR_SUMMARY_CHARS,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'ANCHOR_SUMMARY_CHARS' },
     affects: '锚段降级为摘要时的截断长度（st.anchorToSummary 分支）',
-    inline: { file: 'src/pipeline/view.ts', source: 'st.anchorToSummary ? 64 : anchorMax' },
     calibration: { evidence: '**无记录**，源码无注释' },
     variesWith: ['摘要长度分布（extractSummary 的 48 是它的上游）'],
   },
   {
-    name: 'DEMOTED_ANCHOR_CHARS（内联）',
+    name: 'DEMOTED_ANCHOR_CHARS',
     area: '注入',
-    value: () => 60,
-    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    value: () => DEMOTED_ANCHOR_CHARS,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'DEMOTED_ANCHOR_CHARS' },
     affects: '空间不足时把锚降级为短摘要所截断的长度（与 64 那条是两条不同分支）',
-    inline: { file: 'src/pipeline/view.ts', source: 'clip(h.summary, 60)' },
-    calibration: { evidence: '**无记录**。与同一段的 64 只差 4 个字符，**看不出为什么要有两个数**' },
+    calibration: {
+      evidence:
+        '**无记录**。与同一段的 64 只差 4 个字符，**看不出为什么要有两个数**；' +
+        '两者值不同，合并即改变注入文本，T45 批一不做（属「恰好近似」，不是同源）',
+    },
     variesWith: ['同上；这个值更像历史遗留'],
   },
+  // ENTRY_LABEL_CHARS 已并入 TOPIC_LABEL_CHARS（同一个量：主题标签的宽度），
+  // 见「落位」一节的 TOPIC_LABEL_CHARS 行。
   {
-    name: 'ENTRY_LABEL_CHARS（内联）',
+    name: 'TRIM_PATHS_LIMIT',
     area: '注入',
-    value: () => 16,
-    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
-    affects: '入口行里主题标签的截断宽度',
-    inline: { file: 'src/pipeline/view.ts', source: "clip('[' + clip(t.label, 16) + '] '" },
-    calibration: { evidence: '**无记录**；与写入侧建 topic 时的 slice(0, 16) 同值但两处各自写死' },
-    variesWith: ['入口行的预算占比'],
-  },
-  {
-    name: 'TRIM_PATHS_LIMIT（内联）',
-    area: '注入',
-    value: () => 5,
-    definedBy: { file: 'src/pipeline/view.ts', name: '内联（无常量名）' },
+    value: () => TRIM_PATHS_LIMIT,
+    definedBy: { file: 'src/pipeline/view.ts', name: 'TRIM_PATHS_LIMIT' },
     affects: '裁剪第一步把路段行数上限压到的值（TRIM_ORDER 的 paths->5）',
-    inline: { file: 'src/pipeline/view.ts', source: 'st.pathLimit = Math.min(st.pathLimit, 5)' },
-    calibration: { evidence: '**无记录**。TRIM_ORDER 的名字里带着 5，但 5 从哪来没有出处' },
+    calibration: {
+      evidence:
+        '**无记录**。TRIM_ORDER 的名字里带着 5，但 5 从哪来没有出处。' +
+        '与 DEFAULT_PATH_LINES(15) 不是同一个量（那是初始上限，这是超预算后先降到多少），' +
+        'T45 批一判定为**不同义**，不合并',
+    },
     variesWith: ['TRIM_ORDER 改动时（名字与值必须同步）'],
   },
   // ────────────────────────────── 目录（list.ts）───────────────────────────────

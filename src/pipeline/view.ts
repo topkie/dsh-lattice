@@ -13,6 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { briefMinForDb } from './calibrate.js'
 import { GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
+import { TOPIC_LABEL_CHARS } from './write.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -29,6 +30,15 @@ export const MIN_ANCHORS = 3
 export const TRIM_ORDER = ['paths->5', 'entries->4', 'anchors->summary', 'paths->0', 'anchors->3'] as const
 
 export type TrimStep = (typeof TRIM_ORDER)[number]
+
+/**
+ * 裁剪第一步把路段行数上限压到的值。
+ *
+ * 与 DEFAULT_PATH_LINES（15）不是同一个量：那是初始上限，这是「超预算后先降到多少」。
+ * 步骤名 `paths->5` 里带着这个值（TRIM_ORDER 是行为契约，测试依赖它的顺序与字面量），
+ * 改这里必须同步那个字符串 —— 这也是它此前一直没有名字的代价。
+ */
+export const TRIM_PATHS_LIMIT = 5
 
 export interface ViewOptions {
   /** 总字符预算。 */
@@ -73,6 +83,18 @@ export const DEFAULT_ANCHOR_MAX = 1200
 export const DEFAULT_ENTRIES_PER_TOPIC = 8
 export const DEFAULT_ENTRY_LINE_MAX = 160
 export const DEFAULT_PATH_LINES = 15
+
+/**
+ * 路段每行摘要的截断长度。
+ *
+ * 路只提供线索，所以比锚段更短；它与 ANCHOR_SUMMARY_CHARS(64)、DEMOTED_ANCHOR_CHARS(60)
+ * 是三个**不同角色**的截断，不是同一个数的三份拷贝（值也不相同）。
+ */
+export const PATH_SUMMARY_CHARS = 80
+/** 锚降级为摘要时的截断长度（摘录档整段走这条）。 */
+export const ANCHOR_SUMMARY_CHARS = 64
+/** 空间不足时把单条锚降级为短摘要所截断的长度（与上一条是两条不同分支）。 */
+export const DEMOTED_ANCHOR_CHARS = 60
 
 /**
  * 注入档位：按匹配质量决定这次给多少。
@@ -192,7 +214,9 @@ function pathLinesFor(db: DatabaseSync, anchors: number[], exclude: Set<number>,
     const id = Number(r.oid)
     if (exclude.has(id) || seen.has(id)) continue
     seen.add(id)
-    out.push('[' + r.kind + ' ' + Number(r.conf).toFixed(2) + '] ' + clip(String(r.summary), 80))
+    out.push(
+      '[' + r.kind + ' ' + Number(r.conf).toFixed(2) + '] ' + clip(String(r.summary), PATH_SUMMARY_CHARS),
+    )
   }
   return out
 }
@@ -295,7 +319,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
       if (anchorLines.length >= cap) break
       const full = st.anchorToSummary ? h.summary : (fullTexts.get(h.id) ?? h.summary)
       const isSummary = st.anchorToSummary || full === h.summary
-      const body = clip(full, st.anchorToSummary ? 64 : anchorMax)
+      const body = clip(full, st.anchorToSummary ? ANCHOR_SUMMARY_CHARS : anchorMax)
       // 带 atom id：它是 lattice_expand 的入参；id 自增，也就等于天然的写入顺序。
       const line = '- [' + h.id + stateMark(h) + '] ' + body
       const cost = line.length + 1
@@ -306,7 +330,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
         anchorsUsed += cost
         if (isSummary) demoted++
       } else if (!st.anchorToSummary) {
-        const short = '- [' + h.id + stateMark(h) + '] ' + clip(h.summary, 60)
+        const short = '- [' + h.id + stateMark(h) + '] ' + clip(h.summary, DEMOTED_ANCHOR_CHARS)
         const sc = short.length + 1
         if (anchorsUsed + sc <= anchorQuota) {
           anchorLines.push(short)
@@ -328,7 +352,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
     for (const t of recalled.topics) {
       const terms = topicEntries(db, t.topicId, st.perTopic)
       if (terms.length === 0) continue
-      const line = clip('[' + clip(t.label, 16) + '] ' + terms.join(' '), entryLineMax)
+      const line = clip('[' + clip(t.label, TOPIC_LABEL_CHARS) + '] ' + terms.join(' '), entryLineMax)
       if (entriesUsed + line.length + 1 > entryQuota) break
       entryLines.push(line)
       entriesUsed += line.length + 1
@@ -411,5 +435,5 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
 
 /** 应用一个裁剪步骤。集中在一处，便于对照 TRIM_ORDER 审查。 */
 function applyTrim(st: { pathLimit: number }, step: TrimStep): void {
-  if (step === 'paths->5') st.pathLimit = Math.min(st.pathLimit, 5)
+  if (step === 'paths->5') st.pathLimit = Math.min(st.pathLimit, TRIM_PATHS_LIMIT)
 }

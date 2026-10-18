@@ -15,7 +15,7 @@
 // 物理删除归用户，模型只能提议。那个边界在 `tools/index.ts` 里有注释说明。
 
 import type { DatabaseSync } from 'node:sqlite'
-import { bigramTerms, extractSummary, jaccard } from '../util/text.js'
+import { SUMMARY_CHARS, bigramTerms, extractSummary, jaccard } from '../util/text.js'
 import { VEC_DIM, cosine, decodeVec, encodeVec, isValidVecBlob } from '../util/vec.js'
 
 /**
@@ -511,7 +511,7 @@ export function forgetAtom(db: DatabaseSync, input: ForgetInput): ForgetResult |
           String(atom.scope ?? 'global'),
           atom.project_key ?? null,
           String(atom.origin ?? 'model'),
-          String(atom.summary ?? extractSummary(String(atom.text), 48)),
+          String(atom.summary ?? extractSummary(String(atom.text), SUMMARY_CHARS)),
           now,
         ).lastInsertRowid,
     )

@@ -23,7 +23,7 @@ import {
   normalized,
   zeroVec,
 } from '../util/vec.js'
-import { bigramTerms, extractSummary, jaccard, stripMarkdown } from '../util/text.js'
+import { SUMMARY_CHARS, bigramTerms, extractSummary, jaccard, stripMarkdown } from '../util/text.js'
 import { buildEntries, buildVocabIndex, type EntryRecord, type VocabIndex } from './entries.js'
 import {
   DEFAULT_FORGET_THRESHOLDS,
@@ -206,6 +206,15 @@ export const DEFAULT_THRESHOLDS: WriteThresholds = {
   tauNew: 0.5,
   tauLexOnly: 0.1,
 }
+
+/**
+ * 双峰判定的差值线：sim1 - sim2 小于它且 sim1 ≥ tauNew 时，判「语义上说不清属于哪边」。
+ *
+ * 设计文档里有名字（deltaPeak，默认 0.06、范围 0.01-0.20），代码里此前是内联字面量 ——
+ * 同一件事在文档里是配置项、在代码里是魔法数。本次只把它提成具名常量，取值未变，
+ * 也仍不进 zod（是否可配置是另一件事，改它要动对外形状）。
+ */
+export const DELTA_PEAK = 0.06
 /** 计算词面这一票的候选数上限（词面比余弦贵得多）。 */
 const LEX_CANDIDATES = 8
 /** 无向量时先取多少个 topic 参与词面预筛。 */
@@ -256,6 +265,23 @@ const topicLexCache = new WeakMap<DatabaseSync, Map<number, Set<string>>>()
 export const FINGERPRINT_CHARS = 400
 /** 单个 topic 最多取多少个成员的指纹。 */
 export const FINGERPRINT_MEMBERS = 40
+
+/**
+ * 新建 topic 时，标签从摘要里取多少个字符。
+ *
+ * 与注入层显示侧（pipeline/view.ts 入口行里的 `clip(t.label, ...)`）是**同一个量**：
+ * 标签写进去时截到这么宽，读出来时也按这么宽裁。此前两处各自写 16，改一处就会
+ * 让「存进去的标签」与「显示的标签」宽度分家。
+ */
+export const TOPIC_LABEL_CHARS = 16
+
+/**
+ * 写 near 边时的默认 confidence（有真实相似度时用相似度顶替）。
+ *
+ * 是「没有证据时给中位」的占位值，不是标定结果 —— 它只影响图路排序的相对次序，
+ * 不影响是否建边。
+ */
+export const NEAR_EDGE_CONFIDENCE = 0.5
 
 function topicLexOf(ctx: WriteCtx, topicId: number): Set<string> {
   let per = topicLexCache.get(ctx.db)
@@ -396,12 +422,20 @@ export function decidePlacement(
     return { decision: { kind: 'create', reason: 'far', nearId: null, sim: s1 }, evidence }
   }
   // 只有一个 topic 时不存在「双峰」，第二票缺席不算歧义。
-  if (second !== undefined && s1 - (sim2 ?? 0) < 0.06) {
+  if (second !== undefined && s1 - (sim2 ?? 0) < DELTA_PEAK) {
     return { decision: { kind: 'create', reason: 'ambiguous', nearId: best.c.id, sim: s1 }, evidence }
   }
   // 落位没把握到能并入，但确实比「全新」更像已有主题——记一条 near 边，把候选留给图扩展。
   return { decision: { kind: 'create', reason: 'far', nearId: best.c.id, sim: s1 }, evidence }
 }
+
+/**
+ * 进 trigram 索引的正文最多多少个字符（超出即截断）。
+ *
+ * 截断只影响「很长的记忆里靠后的细节能不能被正文路搜到」，不改变摘要与入口；
+ * 同一个数此前在同一个函数里写了两遍（判断与切片），改一处就会漏另一处。
+ */
+export const SEARCH_BODY_MAX_CHARS = 1600
 
 /**
  * 组装检索正文。
@@ -412,8 +446,8 @@ export function decidePlacement(
 export function buildSearchBody(summary: string, text: string, entries: EntryRecord[]): string {
   const body = stripMarkdown(text)
   const terms = entries.map((e) => e.term).join(' ')
-  if (body.length <= 1600) return `${summary} ${summary} ${body} ${terms}`
-  return `${summary} ${summary} ${body.slice(0, 1600)} ${terms}`
+  if (body.length <= SEARCH_BODY_MAX_CHARS) return `${summary} ${summary} ${body} ${terms}`
+  return `${summary} ${summary} ${body.slice(0, SEARCH_BODY_MAX_CHARS)} ${terms}`
 }
 
 interface CommitRow {
@@ -473,7 +507,7 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
       // 新建 topic 时 sum_vec 直接取该 atom 的向量，n_atoms 直接记 1——本函数
       // 接下来插入的 atom 就是它的第一个成员，走"零向量再累加"会白算一次，
       // 而零 sum_vec 的 topic 在候选侧是不可用的（loadCandidates 要求 n_atoms > 0）。
-      const r = insertTopic.run(row.summary.slice(0, 16) || '未命名', row.embedding, now, now)
+      const r = insertTopic.run(row.summary.slice(0, TOPIC_LABEL_CHARS) || '未命名', row.embedding, now, now)
       topicId = Number(r.lastInsertRowid)
     }
     const atomId = Number(
@@ -496,7 +530,16 @@ function commitWrite(ctx: WriteCtx, row: CommitRow, entries: EntryRecord[]): num
     insertAtomTopic.run(atomId, topicId, 1.0, 'primary')
     for (const e of entries) insertEntry.run(atomId, e.term, e.bigram, e.weight, e.origin, now)
     if (row.nearId !== null) {
-      insertEdge.run('atom', atomId, 'topic', row.nearId, 'near', row.nearConf ?? 0.5, 'untyped', now)
+      insertEdge.run(
+        'atom',
+        atomId,
+        'topic',
+        row.nearId,
+        'near',
+        row.nearConf ?? NEAR_EDGE_CONFIDENCE,
+        'untyped',
+        now,
+      )
     }
     upsertSearch.run(atomId, body)
     if (!row.newTopic) {
@@ -570,7 +613,7 @@ function readTopicOf(db: DatabaseSync, atomId: number): number {
 export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<WriteResult> {
   const text = String(input.text ?? '').trim()
   if (text.length === 0) throw new Error('text 不能为空')
-  const summary = extractSummary(text, 48)
+  const summary = extractSummary(text, SUMMARY_CHARS)
   const kind = String(input.kind ?? '结论')
 
   // ① 编码。事务外、可失败、失败即降级。

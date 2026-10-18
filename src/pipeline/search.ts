@@ -354,6 +354,35 @@ function vecPath(db: DatabaseSync, q: Float32Array | null, k: number, scope?: st
 export const MAX_QUERY_TERMS = 48
 
 /**
+ * 四路各自取多少条进融合：向量路 100、词面两路各 100、图路 50。
+ *
+ * 三个值是三个量，不是「同一个数的三份拷贝」：kVec 决定向量粗筛的宽度，kLex 决定
+ * 词面两路（Entry 与正文）各自的名额，kGraph 决定图路一跳扩展的上限。取值随库规模
+ * 变化，固定上限在库长大时会让召回质量悄悄退化 —— 改预算制属后续执行点（T45 批二），
+ * 本次只把它们从内联字面量提成具名常量，取值未变。
+ */
+export const K_VEC = 100
+export const K_LEX = 100
+export const K_GRAPH = 50
+
+/**
+ * 图路拿向量路的前多少条做种子。
+ *
+ * 图路是「补多跳关联」，不是主召回，所以只从最像的那几条出发；种子多了会把
+ * 一跳扩展的候选池灌满噪声。取值依据与 kGraph 属同一类（无实测记录）。
+ */
+export const DEFAULT_SEED_COUNT = 10
+
+/**
+ * 召回交给注入层的默认条数（调用方不传 topN 时用它）。
+ *
+ * 与写入侧的 DEFAULT_TOP_N 同为 24，但**不是同一个量**：那个是落位时取多少个 topic
+ * 候选，这个是召回返回多少条。两者同值纯属巧合，合并会把「调落位候选数」变成
+ * 「改注入条数」。运行时实际生效的默认值来自配置项 topN（见 tools/index.ts）。
+ */
+export const RECALL_TOP_N = 24
+
+/**
  * RRF 融合。
  *
  * 只累加**出现过的路**：某路缺席（比如短查询时正文路返回空）不该被当成排名靠后，
@@ -522,10 +551,10 @@ export function recall(
   opts: RecallOptions = {},
 ): RecallResult {
   const t0 = Date.now()
-  const kVec = opts.kVec ?? 100
-  const kLex = opts.kLex ?? 100
-  const kGraph = opts.kGraph ?? 50
-  const topN = opts.topN ?? 24
+  const kVec = opts.kVec ?? K_VEC
+  const kLex = opts.kLex ?? K_LEX
+  const kGraph = opts.kGraph ?? K_GRAPH
+  const topN = opts.topN ?? RECALL_TOP_N
   const scope = opts.scope
 
   const q = String(query ?? '').trim()
@@ -539,7 +568,7 @@ export function recall(
   const B = bodyPath(db, q, kLex, scope)
   // 图路的输入是推断边（src/graph/infer.ts）：库里还没有时先建一次。
   const graphStatus = ensureGraphOnce(db)
-  const G = graphPath(db, A.slice(0, 10), kGraph)
+  const G = graphPath(db, A.slice(0, DEFAULT_SEED_COUNT), kGraph)
 
   // 图路只负责**引入别处没有的候选**，不对已有候选重复计票。
   //
