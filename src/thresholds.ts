@@ -603,8 +603,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/entries.ts', name: 'hasBoundaryFreedom' },
     constName: null,
     inline: { file: 'src/pipeline/entries.ts', source: 'function hasBoundaryFreedom(' },
-    affects:
-      '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值、且两侧都有过重复观测，即出局',
+    affects: '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值、且两侧都有过重复观测，即出局',
     calibration: {
       evidence:
         '2026-10-17 实现报告：**判据线是「零」本身，不是扫描出来的**。279 atom 基准库上本判据' +
@@ -1399,8 +1398,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/view.ts', name: 'ANCHOR_SUMMARY_CHARS' },
     affects: '锚段降级为摘要时的截断长度：16 个词（st.anchorToSummary 分支）',
     calibration: {
-      evidence:
-        '**无记录**（词数是显示判断，不是标定结果）。T45 批三起按 TERM_CHARS 折算，取值仍是 64',
+      evidence: '**无记录**（词数是显示判断，不是标定结果）。T45 批三起按 TERM_CHARS 折算，取值仍是 64',
     },
     variesWith: ['摘要长度分布（extractSummary 的 48 是它的上游）'],
   },
