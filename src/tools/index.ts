@@ -190,7 +190,16 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const multi = out.results.length > 1
       out.results.forEach((r, i) => {
         const action = r.action === 'joined' ? '并入已有主题' : '新建主题'
-        const reason = r.created === 'ambiguous' ? '（两个候选接近，已标记待定）' : ''
+        // 「尚未确认归属」而不是「已标记待定」（M4-D1）：后者会被读成「库里有个待办等人处理」，
+        // 而本插件不建待办（§11.1）—— 没有队列、没有需要处理的条目，只是这一次落位没把握。
+        // 次近编号给出来，调用方才能自己核对「它说的是哪个主题」；两个 id 的差别见 WriteResult.nearId。
+        const secondId = r.created === 'ambiguous' ? (r.evidence?.secondId ?? null) : null
+        const reason =
+          r.created === 'ambiguous'
+            ? secondId !== null
+              ? '（尚未确认归属，次近主题 #' + secondId + '）'
+              : '（尚未确认归属）'
+            : ''
         lines.push(
           (multi ? '第 ' + (i + 1) + '/' + out.results.length + ' 条：' : '') +
             '已写入 atom #' +

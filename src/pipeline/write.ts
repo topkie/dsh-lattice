@@ -88,6 +88,14 @@ export interface WriteResult {
   fit: number
   /** action=created 时为新建原因。 */
   created?: CreateReason
+  /**
+   * 新建主题时，near 边指向的**最近**候选 topic id（无候选则不带）。
+   *
+   * 与 `evidence.secondId` 是两个不同的 id，不要混：`nearId` 是「这一条指向谁」，
+   * `secondId` 是「当时还有谁跟它一样近」。回执里那句「尚未确认归属」说的是后者 ——
+   * 两个候选接近才叫没把握，只有一个候选时不叫歧义。
+   */
+  nearId?: number
   /** 写入方指定的主属不存在时给出提示，但不阻塞写入。 */
   hintMiss?: number
   evidence?: PlacementEvidence
@@ -685,6 +693,8 @@ export async function writeAtom(ctx: WriteCtx, input: WriteInput): Promise<Write
     entries,
   }
   if (newTopic) result.created = decision.kind === 'create' ? decision.reason : 'far'
+  // 近邻 id 交出去（M4-D1）：回执里那句「尚未确认归属」需要调用方能核对指的是哪个主题。
+  if (newTopic && nearId !== null) result.nearId = nearId
   if (hintMiss !== undefined) result.hintMiss = hintMiss
   if (evidence !== undefined) result.evidence = evidence
   // 只在「确实比过」时才留痕：scanned=0 表示库里没有墓碑，那是常态、不必写进结果。
