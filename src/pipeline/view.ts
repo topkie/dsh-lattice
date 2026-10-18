@@ -56,6 +56,13 @@ export interface ViewOptions {
   entryLineMaxChars?: number
   /** 路段的整体行数上限。 */
   pathLines?: number
+  /**
+   * 本地标定值（快照里的「精简档下界」）。**给了就用它，不再按库规模插值**。
+   *
+   * 为什么由调用方传：快照的读取发生在运行时（state.ts），而 pipeline 层不认识运行时 ——
+   * 依赖方向是 `tools → pipeline`，反向引用会把「谁读库」这件事弄乱。
+   */
+  briefMin?: number
 }
 
 export interface ViewResult {
@@ -258,10 +265,16 @@ function stateMark(h: { origin?: string; supersededBy?: number | null }): string
  * 纯词面模式（无查询向量）没有余弦可依，**不降档** —— 宁可多给几条，也不要因为
  * 「测不出来」而少给：降档是真的丢信息，多给只是多花一点预算。
  */
-function inferTier(recalled: RecallResult, db: DatabaseSync): { tier: ViewTier; briefMin: number } {
+function inferTier(
+  recalled: RecallResult,
+  db: DatabaseSync,
+  override?: number,
+): { tier: ViewTier; briefMin: number } {
   // 纯词面模式没有余弦可依，档位用不到精简档的线；这里仍把标定值算出来，
   // 是为了让结果里的 briefMin 始终是「本库当前生效的那条线」，不至于两种情形下语义不同。
-  const briefMin = briefMinForDb(db, TIER_BRIEF_MIN)
+  //
+  // override（本地标定值）优先：它是用本库样本重算出来的，比发布方锚点表的插值更贴近本库。
+  const briefMin = override ?? briefMinForDb(db, TIER_BRIEF_MIN)
   if (recalled.meta.vectorMissing) return { tier: 'full', briefMin }
   return { tier: tierOf(recalled.meta.topCosine, briefMin), briefMin }
 }
@@ -277,7 +290,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   //
   // 档位只改**初值**：超预算时仍然按 TRIM_ORDER 依次降级，「锚不为其他段让路」
   // 那条行为契约不因分档而改变，只是起点不同。
-  const inferred = inferTier(recalled, db)
+  const inferred = inferTier(recalled, db, opts.briefMin)
   const tier = opts.tier ?? inferred.tier
   const st = {
     pathLimit,

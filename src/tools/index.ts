@@ -282,7 +282,11 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const recalled = recall(rt.db, q, vq, { topN: cfg.topN })
       // 降级留痕：只入队，不阻塞召回（见 src/log/index.ts 的队列与批量窗口）。
       noteRecallDegradations(recalled.meta)
-      const view = assembleView(rt.db, recalled, { budget: num(args?.budget, cfg.viewBudget) })
+      const view = assembleView(rt.db, recalled, {
+        budget: num(args?.budget, cfg.viewBudget),
+        // 本地标定值（快照）优先于按规模插值；未标定时为 undefined，pipeline 自己会回落。
+        briefMin: rt.calibration.params?.briefMin,
+      })
       const notes: string[] = [libraryLine(rt)]
       if (recalled.meta.vectorMissing) notes.push('（编码器不可用，本次为纯词面召回）')
       if (recalled.meta.lexicalDegraded) notes.push('（词面两路均未命中，仅向量路有结果）')

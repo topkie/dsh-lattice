@@ -13,6 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { ensureMeta, META_BUILDER, META_ENTRY_RULE, META_SCHEMA_VERSION } from './db/meta.js'
 import { openVault } from './db/open.js'
 import { SCHEMA_VERSION } from './db/schema.js'
+import { CALIB_VERSION, TIER_SCALE_STABLE_ATOMS, readSnapshotState, type CalibParams } from 'lattice-calib'
 import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
 import { closeLog, configureLog, logEvent } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
@@ -32,6 +33,27 @@ export interface RuntimeConfig {
   resources: { mmapSize?: number; cacheSize?: number; busyTimeout?: number }
 }
 
+/**
+ * 标定状态的两种取值与四种原因（T44 / 裁决 #28）。
+ *
+ * **为什么不把「未标定」压成一个布尔**：never（从来没标过）、small_db（库太小，标了也不可信）、
+ * model_changed（换过编码模型）、snapshot_invalid（快照坏了或版本不符）四者的补救动作不同 ——
+ * 前两者是「等条件成熟」，后两者是「需要重标或修快照」。压缩之后这些区别就没了。
+ */
+export type CalibrationReason = 'never' | 'no_positive' | 'model_changed' | 'snapshot_invalid' | 'small_db'
+
+export interface CalibrationState {
+  state: 'calibrated' | 'uncalibrated'
+  /** 未标定时说明原因；已标定时不带。 */
+  reason?: CalibrationReason
+  /**
+   * 快照里的参数；未标定时为 **null**（调用方回落到「按库规模插值」的发布方锚点表）。
+   *
+   * 不在这里塞一个默认值：那样调用方就分不清「读到的是本地标定值」还是「插值值」。
+   */
+  params: CalibParams | null
+}
+
 export interface Runtime {
   db: DatabaseSync
   /** 写入上下文：带编码器绑定与阈值。 */
@@ -39,6 +61,8 @@ export interface Runtime {
   cfg: RuntimeConfig
   /** 库文件路径，健康检查与排障要用。 */
   file: string
+  /** 标定状态（T44）：快照可用则给出参数，否则说明为什么不可用。 */
+  calibration: CalibrationState
 }
 
 let current: Runtime | null = null
@@ -76,12 +100,65 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
   const write = createWriteCtx(db, cfg.thresholds, {
     encode: cfg.encoderEnabled === false ? undefined : (text: string) => encode(text, encoderOpts),
   })
-  current = { db, write, cfg, file }
+  // 标定状态在打开库之后立刻算一次：召回路径要用它给出的参数，晚算就等于先跑一会儿默认值。
+  const calibration = readCalibration(db, cfg)
+  noteCalibration(calibration)
+  current = { db, write, cfg, file, calibration }
   return current
 }
 
+/** 上一次报过的标定状态。按**状态变化**记日志 —— 与编码器失败同一条口径。 */
+let lastCalibrationKey: string | null = null
+
 /**
- * 补上库的自描述，**已存在的一律不动**。
+ * 读库里的标定快照，给出「这次运行时到底用哪套参数」（T44）。
+ *
+ * 顺序是有意的：先判快照在不在，再判版本，最后判模型。反过来会把「快照坏了」
+ * 报成「换过模型」—— 那是两个不同的补救动作（修快照 vs 重标）。
+ */
+function readCalibration(db: DatabaseSync, cfg: RuntimeConfig): CalibrationState {
+  const atoms = Number((db.prepare('SELECT COUNT(*) AS n FROM atom').get() as { n: number | bigint }).n)
+  const snap = readSnapshotState(db)
+  if (snap.state === 'missing') {
+    // 库太小的时候「从未标定」不是异常，是条件没到 —— 用户看到的原因应当是这个。
+    return {
+      state: 'uncalibrated',
+      params: null,
+      reason: atoms < TIER_SCALE_STABLE_ATOMS ? 'small_db' : 'never',
+    }
+  }
+  if (snap.state !== 'ok') return { state: 'uncalibrated', params: null, reason: 'snapshot_invalid' }
+  // 版本不符：参数形状可能已经变了，按「丢弃」处理，不猜。
+  if (snap.snapshot.calibVersion !== CALIB_VERSION) {
+    return { state: 'uncalibrated', params: null, reason: 'snapshot_invalid' }
+  }
+  // 换模型：向量空间变了，旧切点不再可比。标「失效」而不是删（样本与快照都留着作对照）。
+  if (snap.snapshot.encoderModel !== cfg.encoderModel) {
+    return { state: 'uncalibrated', params: null, reason: 'model_changed' }
+  }
+  return { state: 'calibrated', params: snap.snapshot.params }
+}
+
+/**
+ * 标定状态变化时留痕（判据 2/4：未标定不许静默）。
+ *
+ * 已标定不记 —— 正常状态不需要进日志，记了只会把真问题挤出去。
+ */
+function noteCalibration(cal: CalibrationState): void {
+  const key = cal.state + ':' + (cal.reason ?? '')
+  if (key === lastCalibrationKey) return
+  lastCalibrationKey = key
+  if (cal.state === 'calibrated') return
+  if (cal.reason === 'snapshot_invalid') {
+    logEvent('warn', 'calib.snapshot_invalid', { field: 'calib_version' })
+    logEvent('warn', 'calib.unlocalized', { reason: 'snapshot_invalid' })
+    return
+  }
+  if (cal.reason === 'never') logEvent('warn', 'calib.snapshot_missing')
+  logEvent('warn', 'calib.unlocalized', { reason: cal.reason ?? 'never' })
+}
+
+/** 补上库的自描述，**已存在的一律不动**。
  *
  * 为什么是 ensure 而不是 set：库若是另一套入口规则生成的，覆盖元数据只会把
  * 「不一致」这个事实抹掉 —— 而它恰恰是需要被看见的东西（由 checkEntryRule 报告）。

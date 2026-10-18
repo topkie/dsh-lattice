@@ -309,10 +309,15 @@ export function apply(ctx: Context, config: unknown): void {
           cacheSize: Number(cfg.cacheSize ?? 0) > 0 ? Number(cfg.cacheSize) : undefined,
           busyTimeout: Number(cfg.busyTimeout ?? 0) > 0 ? Number(cfg.busyTimeout) : undefined,
         })
+        // 健康检查会**初始化运行时**（与其它工具同一条路径）：标定状态在库上，
+        // 不打开库就报不出来。代价是首次 ping 可能触发建库 —— 那与第一次写入是同一件事。
+        const rt = getRuntime(runtimeCfg)
         return JSON.stringify({
           ok: true,
           plugin: name,
           version: VERSION,
+          // 标定状态（T44 判据 1/2/4）：未标定**只进这里与日志**，不进召回返回。
+          calibration: { state: rt.calibration.state, reason: rt.calibration.reason ?? null },
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
           tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list'],
