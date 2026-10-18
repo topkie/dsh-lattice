@@ -71,6 +71,16 @@ const dataDir = pathArg('data')
 const dbArg = pathArg('db')
 const queriesArg = pathArg('queries')
 
+// 负对照用的旋钮（审核 P0-2）：`--k-vec N` 把向量粗筛宽度改掉。
+//
+// 为什么用 kVec 而不是 RRF_K：kVec 决定候选集宽度，对「召回退化」更直接，而且**不需要给
+// recall 加新参数**（opts 里本来就有）。它只用于负对照 —— 不改变默认行为。
+const kVecRaw = String(argOf('k-vec', '')).trim()
+const K_VEC_OVERRIDE = kVecRaw === '' ? null : Number(kVecRaw)
+if (K_VEC_OVERRIDE !== null && (!Number.isFinite(K_VEC_OVERRIDE) || K_VEC_OVERRIDE < 1)) {
+  die(['--k-vec 必须是 >= 1 的整数（这是负对照旋钮，不是调参入口）。'])
+}
+
 if (dataDir !== null && (dbArg !== null || queriesArg !== null)) {
   die([
     '--data 与 --db / --queries 只能二选一。',
@@ -180,7 +190,12 @@ for (const c of queries) {
   const vq = await encode(c.query, { model: MODEL })
   if (vq === null) die(['查询编码失败：' + c.id + '（' + c.query + '）', '编码器状态异常，先修环境再跑。'])
   const t0 = performance.now()
-  const r = recall(db, c.query, vq, { topN: TOP_N })
+  const r = recall(
+    db,
+    c.query,
+    vq,
+    K_VEC_OVERRIDE === null ? { topN: TOP_N } : { topN: TOP_N, kVec: K_VEC_OVERRIDE },
+  )
   const ms = performance.now() - t0
   const rankAt = (k) => {
     if (c.target === null) return -1
@@ -268,6 +283,8 @@ const result = {
   hits12: hitsOf(12),
   nTotal: rows.length,
   topN: TOP_N,
+  // 负对照旋钮：null 表示默认行为。写进结果，两次跑的差异才可解释。
+  kVec: K_VEC_OVERRIDE,
   model: MODEL,
   querySet: {
     sha256: createHash('sha256').update(queryBytes).digest('hex'),
