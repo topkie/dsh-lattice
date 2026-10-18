@@ -301,17 +301,21 @@ export async function maybeRecalibrate(): Promise<string> {
   const pre = evaluateGates({ atoms, positives, negatives, now, lastCheckAt, sBaseline: null, currentS: 0 })
   if (!pre.ok) return pre.reason ?? 'skipped'
 
-  setMeta(rt.db, META_CALIB_LAST_CHECK, String(now))
-
   // 算 S：伪查询抽样，纯读、不改库。库无向量时 calibrate 会抛 —— 那是「算不出」，按不重标处理。
   let currentS = 0
   try {
     currentS = calibrate(rt.db).sBaseline
   } catch (err) {
-    logEvent('warn', 'calib.snapshot_missing', {})
-    void causeCode(err)
+    // **不写 calib_last_check_at**（审核发现 P0-1）：算 S 失败不是「判过 S」。写下去等于让一次失败
+    // 换来 12 小时冷却 —— 用户看到的现象是「明明有样本、库也够大，却一直不重标」，而门禁不会红。
+    // 失败只留原因码；条件恢复后下一次写入立刻能再试。
+    setMeta(rt.db, META_CALIB_LAST_ERROR, causeCode(err))
+    logEvent('warn', 'calib.snapshot_missing')
     return 'no_vectors'
   }
+
+  // 只有算成功才记时间：冷却期是「上次判过 S」的冷却，不是「上次试过」的冷却。
+  setMeta(rt.db, META_CALIB_LAST_CHECK, String(now))
 
   const snap = readSnapshotState(rt.db)
   const sBaseline = snap.state === 'ok' ? snap.snapshot.sBaseline : null

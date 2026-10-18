@@ -53,6 +53,25 @@ function seedAtoms(db, n) {
   db.exec('COMMIT')
 }
 
+/** 插一批**零向量**的 atom：算 S 时它们会被跳过，于是 calibrate 抛 E_NO_VECTORS。 */
+function seedZeroAtoms(db, n) {
+  const ins = db.prepare(
+    'INSERT INTO atom (kind, text, summary, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+  )
+  const zero = new Uint8Array(DIM * 4)
+  const now = Date.now()
+  db.exec('BEGIN')
+  for (let i = 0; i < n; i++) ins.run('知识', '第 ' + i + ' 条', '第 ' + i + ' 条', zero, now, now)
+  db.exec('COMMIT')
+}
+
+/** 把前 n 条 atom 的向量修成有效值（模拟「条件恢复」）。 */
+function repairVectors(db, n) {
+  const ids = db.prepare('SELECT id FROM atom ORDER BY id LIMIT ?').all(n)
+  const up = db.prepare('UPDATE atom SET embedding = ? WHERE id = ?')
+  ids.forEach((r, i) => up.run(encodeVec(vecOf(i + 1)), Number(r.id)))
+}
+
 function cfgOf() {
   return {
     dataDir: dir,
@@ -157,6 +176,28 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     setMeta(rt.db, META_CALIB_LAST_CHECK, String(Date.now()))
     assert.equal(await maybeRecalibrate(), 'cooldown')
     assert.equal(rt.calibration.state, 'uncalibrated')
+  })
+
+  it('P0-1：算 S 失败不记冷却，条件恢复后能立刻重标', async () => {
+    const rt = getRuntime(cfgOf())
+    seedZeroAtoms(rt.db, 192)
+    await addPositives(10)
+    await addNegatives(6)
+
+    const first = await maybeRecalibrate()
+    assert.equal(first, 'no_vectors', '零向量库算不出 S')
+    assert.ok(
+      !getMeta(rt.db, META_CALIB_LAST_CHECK),
+      '算 S 失败**不能**写 calib_last_check_at —— 否则一次失败换来 12 小时冷却',
+    )
+    assert.ok(getMeta(rt.db, META_CALIB_LAST_ERROR), '失败要留原因码')
+
+    // 条件恢复：把向量修好，**立刻**再调一次 —— 不能被冷却挡住。
+    repairVectors(rt.db, 192)
+    const second = await maybeRecalibrate()
+    assert.notEqual(second, 'cooldown', '上一次算 S 失败不该产生冷却')
+    assert.equal(second, 'recalibrated')
+    assert.ok(getMeta(rt.db, META_CALIB_LAST_CHECK), '算成功后才记时间')
   })
 
   it('判据 7：S 漂移超过 0.01 → 重标成功，参数整体替换', async () => {
