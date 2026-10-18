@@ -36,6 +36,7 @@ const cfg = {
 }
 
 const reg = []
+const disposers = []
 // 替身 ctx：只提供本脚本要验的那两件事。
 //
 // `inject` 是 T19 起宿主半用到的 —— 它拿它挂两条只读路由（`ctx.inject(['webServer'], cb)`）。
@@ -47,6 +48,14 @@ apply(
     // 不声明参数：本替身**永远不会**调那个回调（真宿主在服务缺失时也不调），
     // 声明了反而会被 no-unused-vars 判掉 —— `scripts/` 不吃 `src/` 那套 argsIgnorePattern。
     inject: () => {},
+    // `effect` 是日志模块（M4-T44）起用到的清理钩子：真宿主在插件卸载时调用它返回的函数。
+    // 替身照契约办 —— 注册时就执行 fn 拿到清理函数并收起来，脚本结束时统一调一次，
+    // 否则「卸载时 flush 日志队列」这条在替身里等于没验。
+    effect: (fn) => {
+      const dispose = fn()
+      if (typeof dispose === 'function') disposers.push(dispose)
+      return () => {}
+    },
   },
   cfg,
 )
