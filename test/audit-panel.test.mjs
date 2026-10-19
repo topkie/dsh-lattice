@@ -377,9 +377,13 @@ describe('健康面板（只读体检路由的展示端）', () => {
       'lattice_write',
     ])
     assert.ok(!names.includes('lattice_audit'), '体检不得注册成工具')
-    // 面板不新增写路由：体检路径只有一条，且面板源码里没有任何路由注册。
+    // 面板不新增路由：体检路径只有一条，下面两条源码断言钉住面板自己既不碰 webServer、
+    // 也不调 register。
+    //
+    // **这里不断言路由总数**：那是插件契约用例的职责（它维护一份显式的路径清单），
+    // 在这里再数一遍就会在别的任务加路由时误报 —— 合并时实际发生过一次（另一条任务加了
+    // 一条只读详情路由，这条用例报「面板不该新增路由」，而面板并不知情）。
     assert.equal(routes.filter((r) => r.path === '/api/lattice-audit').length, 1)
-    assert.equal(routes.length, 11, '路由数变了：面板不该新增路由')
     const src = between(client, PANEL_START, PANEL_END)
     assert.ok(!src.includes('webServer'), '面板不碰路由注册')
     assert.ok(!src.includes('register('), '面板不注册路由')
