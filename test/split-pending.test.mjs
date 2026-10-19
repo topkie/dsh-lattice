@@ -23,8 +23,8 @@ import { openVault } from '../dist/db/open.js'
 import { createWriteCtx, writeAtom, writeReviewed } from '../dist/pipeline/write.js'
 import { recall } from '../dist/pipeline/search.js'
 import { assembleView } from '../dist/pipeline/view.js'
-import { confirmSplit, readConfirmedSplits } from '../dist/pipeline/split.js'
-import { closeRuntime } from '../dist/state.js'
+import { SPLIT_CONFIRMED_MAX, confirmSplit, readConfirmedSplits } from '../dist/pipeline/split.js'
+import { closeRuntime, getRuntime } from '../dist/state.js'
 import { closeLog, flushLog, logFilePath } from '../dist/log/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 import { VEC_DIM } from '../dist/util/vec.js'
@@ -532,6 +532,11 @@ describe('T29 判据 4 / 5：确认与忽略', () => {
     } finally {
       d.close()
     }
+    flushLog()
+    assert.ok(
+      logEvents(routeDir).includes('split.confirmed'),
+      '确认要留一条日志：meta 清单会 FIFO 淘汰，被挤掉的那条只剩日志能证明它被确认过',
+    )
   })
 
   it('判据 4：忽略走通 —— 清 bit0、只写一条日志、不记状态', async () => {
@@ -605,10 +610,41 @@ describe('T29 判据 4 / 5：确认与忽略', () => {
     flushLog()
     const ignored = logEvents(routeDir).filter((e) => e === 'split.ignored')
     assert.equal(ignored.length, 1, '幂等的第二次忽略不该再写一条日志')
+    const confirms = logEvents(routeDir).filter((e) => e === 'split.confirmed')
+    assert.equal(confirms.length, 1, '幂等的第二次确认不该再写一条日志')
 
     res = fakeRes()
     await confirm(fakeReq({ body: JSON.stringify({ atom_id: 999999 }) }), res)
     assert.equal(res.out.status, 404, '界面要能区分「改了」与「本来就不在」')
+  })
+
+  it('判据 4：确认清单到上限后挤掉最旧的，并留一条只带条数的淘汰日志', () => {
+    // 不走路由：这里验的是「清单满了会怎样」，路由形态已由上面四条用例覆盖。
+    // 但必须起一次 runtime —— 日志目录是它在启动时配置的（state.ts 的 getRuntime），
+    // 不配日志的话 confirmSplit 里的 log.info 一律被丢弃，用例会静默变成空断言。
+    const rt = getRuntime(cfgOf(routeDir))
+    const ids = []
+    for (let i = 0; i < SPLIT_CONFIRMED_MAX + 1; i++) ids.push(seedFlagged(routeDir))
+    for (const id of ids) assert.equal(confirmSplit(rt.db, id)?.changed, true)
+    const left = readConfirmedSplits(rt.db)
+    assert.equal(left.length, SPLIT_CONFIRMED_MAX, '清单不得超过上限')
+    assert.ok(!left.includes(ids[0]), '最早确认的那条被挤出去（淘汰方向选最早）')
+    assert.ok(left.includes(ids[ids.length - 1]), '最新确认的还在')
+    flushLog()
+    const events = logEvents(routeDir)
+    assert.equal(
+      events.filter((e) => e === 'split.confirmed').length,
+      SPLIT_CONFIRMED_MAX + 1,
+      '每条确认各留一条日志 —— 包括后来被挤掉的那条，这正是 meta 状态回答不了的',
+    )
+    assert.equal(events.filter((e) => e === 'split.evicted').length, 1, '挤掉一条就记一条')
+    const logDb = new DatabaseSync(logFilePath(routeDir), { readOnly: true })
+    try {
+      const row = logDb.prepare("SELECT detail FROM log WHERE event = 'split.evicted'").get()
+      assert.deepEqual(Object.keys(JSON.parse(String(row.detail))), ['evicted'], '只带条数，不带 id')
+    } finally {
+      logDb.close()
+    }
   })
 })
 

@@ -4,10 +4,14 @@
 // `atom.flags` 的 bit0。**这个位说的是「切点按长度定的，没有按内容判断过」**，
 // 不是「这条一定该拆」—— 一条 601 字、只讲一件事的文本同样会被标上。
 //
-// 两个动作都清 bit0，差别只有一处：
+// 两个动作都清 bit0、都写一条日志（log.info），差别在有没有状态：
 //   确认 → 另记一条状态（meta 的 split_confirmed），下次召回命中这条时锚行提示
 //          「用户已确认应拆分」，并说明下一步（按内容重写、声明 supersedes）。
-//   忽略 → 只写一条日志（log.info），没有状态、没有待办、不改变任何召回行为。
+//   忽略 → 没有状态、没有待办、不改变任何召回行为。
+//
+// **为什么两个动作都要日志**：日志回答「发生过」，meta 回答「当前状态」。而那张 meta
+// 清单是 FIFO 的 —— 被挤出去的那一条在状态里不留任何痕迹，「它被确认过」这句话就只剩
+// 日志能回答。裁决 #42③ 的「留痕（日志）」说的是这件事，meta 只是顺带有了状态。
 //
 // **两者都不执行拆分**（裁决 #42）：不改正文、不改条数、不迁移入口与边。执行拆分要动
 // 入口 / 边 / topic 归属，设计里没有定义，留给后续任务。
@@ -95,6 +99,9 @@ function clearSplitPending(db: DatabaseSync, atomId: number): ClearResult | null
  * 只记账不清位，界面会一直显示同一条候选。两者都是**没有报错**的失败形态。
  *
  * 幂等：重复确认不重复记账、不重复写库，只把 `changed` 说成 false。
+ *
+ * 日志在**提交之后**写：回滚掉的那一次确认不算「发生过」。淘汰条数也在这里报 ——
+ * 淘汰发生在事务里，但只有提交成功它才真的生效。
  */
 export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now()): SplitDecision | null {
   if (!Number.isInteger(atomId) || atomId <= 0) throw new Error('atom_id 必须是正整数')
@@ -105,14 +112,22 @@ export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now())
   const already = confirmed.includes(atomId)
   let flags = 0
   let changed = false
+  /** 这一条是否**新进了**清单。与 `changed`（位有没有变）是两件事，留痕取两者的并集。 */
+  let recorded = false
+  /** 本次被 FIFO 挤掉的条数。 */
+  let evicted = 0
   db.exec('BEGIN IMMEDIATE')
   try {
     const cleared = clearSplitPending(db, atomId)!
     flags = cleared.flags
     changed = cleared.changed
     if (!already) {
+      recorded = true
       confirmed.push(atomId)
-      while (confirmed.length > SPLIT_CONFIRMED_MAX) confirmed.shift()
+      while (confirmed.length > SPLIT_CONFIRMED_MAX) {
+        confirmed.shift()
+        evicted += 1
+      }
       setMeta(db, META_SPLIT_CONFIRMED, JSON.stringify(confirmed), now)
     }
     db.exec('COMMIT')
@@ -124,6 +139,9 @@ export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now())
     }
     throw err
   }
+  // 位被清掉、或新进了清单，都算「用户确认过一次」；两者都没有（重复点）就不写。
+  if (changed || recorded) log.info('split.confirmed')
+  if (evicted > 0) log.info('split.evicted', { evicted })
   return { atomId, flags, changed: changed || !already, confirmed }
 }
 

@@ -197,8 +197,12 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
    * 2026-10-19 增 `split.ignored`（T29 的待拆分）：用户忽略候选**没有别的留痕处** ——
    * 它不写库、不建待办、不留状态，只清一位。不留这条日志，这个动作就等于从未发生。
    * 它不带任何字段（连 atom id 都不带），所以落盘的只有「发生过一次」。
+   *
+   * 2026-10-20 增 `split.confirmed` 与 `split.evicted`（T29 补齐）：确认原本只记 meta 状态，
+   * 而那份状态是 FIFO 的 —— 被挤出清单的一条在状态里不留痕迹。「它被确认过」只剩日志
+   * 能回答，这也是裁决里「留痕（日志）」的所指。淘汰只记条数，同样不带 id。
    */
-  it('事件白名单覆盖草案里的事件（含 T29 的 split.ignored）', () => {
+  it('事件白名单覆盖草案里的事件（含 T29 的三条 split.*）', () => {
     assert.deepEqual(Object.keys(EVENT_DETAIL_KEYS).sort(), [
       'calib.recalibrate_done',
       'calib.recalibrate_failed',
@@ -212,6 +216,8 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
       'recall.short_term_miss',
       'recall.vector_missing',
       'samples.unavailable',
+      'split.confirmed',
+      'split.evicted',
       'split.ignored',
     ])
     // 等级也白名单化：三档之外的一律拒收（notice / debug 不接受）。
