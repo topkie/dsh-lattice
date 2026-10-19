@@ -4,9 +4,10 @@
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
 //   2. 注册六个工具：ping（健康检查）、write、recall、expand、list、feedback
 //
-// 外加十一条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
+// 外加十二条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
 //   /api/lattice-ping-mini      库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
-//   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径
+//   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径（**不含正文**）
+//   /api/lattice-atom           详情：按 id 取一条的全文（点开才取；只读，与工具无关）
 //   /api/lattice-search         搜索：与 lattice_recall 同一条数据路径，但**不记命中**
 //   /api/lattice-audit          体检：只读结构指标，供面板与维护者（M4-T35；不进模型侧）
 //   /api/lattice-log-export     降级日志导出：只读，返回 CSV 附件（M4-T44）
@@ -17,7 +18,7 @@
 //   /api/lattice-split-confirm  确认某条待拆分：清 bit0 + 记一条状态（T29）。写端点
 //   /api/lattice-split-ignore   忽略某条待拆分：清 bit0 + 写日志（T29）。写端点
 //
-// 五条只读路由的栅栏只留「本机回环」一道；六条写端点三道（回环 + POST +
+// 六条只读路由的栅栏只留「本机回环」一道；六条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
 //
 // `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
@@ -41,6 +42,7 @@ import {
   type RuntimeConfig,
 } from './state.js'
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, listAtoms, listAtomsByIds } from './pipeline/list.js'
+import { atomDetail } from './pipeline/detail.js'
 import { audit, noDataReport } from './pipeline/audit.js'
 import { recall } from './pipeline/search.js'
 import { DEFAULT_BUDGET } from './pipeline/view.js'
@@ -86,6 +88,20 @@ const MINI_ROUTE_PATH = '/api/lattice-ping-mini'
  * 合成一条会让参数表变成两种语义的并集，比两条路由更难读。
  */
 const ATOMS_ROUTE_PATH = '/api/lattice-atoms'
+
+/**
+ * 详情路由：按 id 取一条记忆的**全文**。
+ *
+ * 为什么另开一条路由，而不是给目录路由加一个 text 字段：
+ *   1. 列表不带正文本身是一条判据（目录行按上下文预算设计，界面复用它不等于人对正文
+ *      也有那个预算）。加了字段就没有「列表不带正文」这件事了。
+ *   2. 预取更贵：一页 20 条、库里有几百条时，打开列表就是几百 KB 的正文，而人通常
+ *      只看两条。点开才取是流量与上下文两笔预算的同一个答案。
+ *
+ * 栅栏与其余只读路由一致（guardReadOnly：回环 + GET），**没有任何写能力**：
+ * 参数只有一个 id，没有动作参数、没有请求体。
+ */
+const ATOM_ROUTE_PATH = '/api/lattice-atom'
 
 /** 搜索路由：一条查询进去，若干条命中出来。 */
 const SEARCH_ROUTE_PATH = '/api/lattice-search'
@@ -341,6 +357,13 @@ export function apply(ctx: Context, config: unknown): void {
           kind: 'exact',
           path: ATOMS_ROUTE_PATH,
           handler: (req, res) => atomsRoute(runtimeCfg, req, res),
+        }),
+        // 详情与目录是两条路由而不是一条带开关的：目录要分页、详情要整段正文，
+        // 合成一条会让「带不带正文」变成一个参数，而「列表不带正文」是要能一眼看出的。
+        webServer.register({
+          kind: 'exact',
+          path: ATOM_ROUTE_PATH,
+          handler: (req, res) => atomRoute(runtimeCfg, req, res),
         }),
         webServer.register({
           kind: 'exact',
@@ -605,6 +628,37 @@ function atomsRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerRespons
     })
     // limit / offset 原样回给前端：翻页要按**服务端实际用的**页大小算，不能由前端猜。
     jsonOut(res, 200, { ok: true, total: r.total, offset: r.offset, limit: r.limit, rows: r.rows })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'read-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 详情：按 id 取一条记忆的全文。**只读**，与目录同一套栅栏。
+ *
+ * 三种失败分开报，因为补救动作不同：id 不合法（400，请求写错了）、库里没有这一条
+ * （404，可能刚被删）、读库失败（500，环境问题）。合成一个「失败」会让界面无法解释
+ * 「为什么点开是空的」。
+ *
+ * 为什么没有 limit 参数：详情就是全文。截断是目录的取舍，不是详情的 —— 判据要求
+ * 「界面显示的字数与 `length(text)` 差 0」，任何形式的截断都会在这里破掉它。
+ */
+function atomRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): void {
+  if (!guardReadOnly(req, res)) return
+  const params = queryOf(req)
+  const id = intParam(params, 'id', 0, 0, Number.MAX_SAFE_INTEGER)
+  if (id <= 0) {
+    jsonOut(res, 400, { ok: false, error: 'id', message: '缺少合法的 id' })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const atom = atomDetail(rt.db, id)
+    if (atom === null) {
+      jsonOut(res, 404, { ok: false, error: 'not-found', message: '没有这条记忆' })
+      return
+    }
+    jsonOut(res, 200, { ok: true, atom })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'read-failed', message: reasonOf(e) })
   }

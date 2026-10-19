@@ -41,8 +41,11 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
     )
   })
 
-  it('路由：四条新路径两侧同值', () => {
+  it('路由：新路径两侧同值', () => {
     const pairs = [
+      // 详情：界面点开时取全文的那条路由。路径写错的形态是「点开永远 404」，
+      // 而这在浏览器里只表现为一段「读取失败」，不会有任何编译期信号。
+      ['ATOM_DETAIL_URL', 'ATOM_ROUTE_PATH'],
       ['ARCHIVE_URL', 'ARCHIVE_ROUTE_PATH'],
       ['UNARCHIVE_URL', 'UNARCHIVE_ROUTE_PATH'],
       ['SPLIT_CONFIRM_URL', 'SPLIT_CONFIRM_ROUTE_PATH'],
