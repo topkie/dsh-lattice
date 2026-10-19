@@ -15,7 +15,7 @@ import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
 import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { FLAG_ARCHIVED } from '../db/flags.js'
-import { readConfirmedSplits } from './split.js'
+import { readConfirmedSplits, readPendingSegments } from './split.js'
 
 /** 召回路的名字，也是融合时的权重键。 */
 export type Channel = 'vec' | 'entry' | 'body' | 'graph'
@@ -117,6 +117,14 @@ export interface RecallMeta {
    * 决定在这里做一次，而不是每个渲染分支各做一次）。
    */
   splitConfirmed: number[]
+  /**
+   * 待拆分候选的段数：`[atomId, 切成了几段]`。来自 meta 的 split_pending_segments，
+   * 上限由 SPLIT_SEGMENTS_MAX 夹住（FIFO）。锚行据此把「疑似应拆分」写成「疑似应拆分（3 段）」。
+   *
+   * 为什么不是 Map：这是纯数据接口，要能原样序列化（回执与快照都会序列化它）；
+   * 缺项（老库没有这个键）按空数组处理，锚行退回不带段数的固定串。
+   */
+  splitPendingSegments: Array<[number, number]>
   elapsedMs: number
 }
 
@@ -746,6 +754,7 @@ export function recall(
       secondaryHits,
       // 只读一次 meta（一个键）。它不进任何打分，只决定锚行那句提示的措辞。
       splitConfirmed: readConfirmedSplits(db),
+      splitPendingSegments: [...readPendingSegments(db)],
       elapsedMs: Date.now() - t0,
     },
   }

@@ -329,6 +329,7 @@ function stateMark(
   h: { id: number; origin?: string; supersededBy?: number | null; flags?: number },
   scene: string | undefined,
   confirmed: ReadonlySet<number>,
+  segments: ReadonlyMap<number, number>,
 ): string {
   const parts: string[] = []
   if (h.origin === 'user') parts.push('我')
@@ -339,11 +340,21 @@ function stateMark(
   if (confirmed.has(h.id)) {
     parts.push('用户已确认应拆分（可按内容重写并声明 supersedes）')
   } else if (((h.flags ?? 0) & FLAG_SPLIT_PENDING) !== 0) {
-    parts.push('疑似应拆分（切点按长度，未判内容）')
+    parts.push(splitPendingMark(segments.get(h.id)))
     const used = sceneText(scene)
     if (used !== '') parts.push('用于：' + used)
   }
   return parts.length === 0 ? '' : '·' + parts.join('·')
+}
+
+/**
+ * 候选锚行的那句提示。有段数就写进去 —— 「3 段」与「8 段」是两种工作量，
+ * 而人决定拆不拆时缺的正是这个数。段数未知（老库没有这个键）时退回固定串：
+ * 那句话仍然成立，只是少一个数。
+ */
+function splitPendingMark(segments: number | undefined): string {
+  if (segments === undefined) return '疑似应拆分（切点按长度，未判内容）'
+  return '疑似应拆分（' + segments + ' 段，切点按长度，未判内容）'
 }
 
 /** 使用场景的可见文本；没给或给了空白串时不产生任何字。 */
@@ -399,6 +410,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   )
   // 确认清单只在这里转成 Set 一次：它在三段渲染里每次 build() 都要查，而 hits 最多几十条。
   const splitConfirmed = new Set(recalled.meta.splitConfirmed ?? [])
+  const splitSegments = new Map(recalled.meta.splitPendingSegments ?? [])
   const anchorQuota = Math.floor(budget * SEGMENT_RATIO.anchors)
   const entryQuota = Math.floor(budget * SEGMENT_RATIO.entries)
   const pathQuota = Math.floor(budget * SEGMENT_RATIO.paths)
@@ -429,7 +441,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
       const isSummary = st.anchorToSummary || full === h.summary
       const body = clip(full, st.anchorToSummary ? ANCHOR_SUMMARY_CHARS : anchorMax)
       // 带 atom id：它是 lattice_expand 的入参；id 自增，也就等于天然的写入顺序。
-      const line = '- [' + h.id + stateMark(h, opts.scene, splitConfirmed) + '] ' + body
+      const line = '- [' + h.id + stateMark(h, opts.scene, splitConfirmed, splitSegments) + '] ' + body
       const cost = line.length + 1
       // 前 MIN_ANCHORS 条无论如何都要留下（保底），之后才看配额。
       if (anchorLines.length < MIN_ANCHORS || anchorsUsed + cost <= anchorQuota) {
@@ -441,7 +453,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
         const short =
           '- [' +
           h.id +
-          stateMark(h, opts.scene, splitConfirmed) +
+          stateMark(h, opts.scene, splitConfirmed, splitSegments) +
           '] ' +
           clip(h.summary, DEMOTED_ANCHOR_CHARS)
         const sc = short.length + 1

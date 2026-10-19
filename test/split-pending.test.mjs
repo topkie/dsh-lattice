@@ -23,7 +23,13 @@ import { openVault } from '../dist/db/open.js'
 import { createWriteCtx, writeAtom, writeReviewed } from '../dist/pipeline/write.js'
 import { recall } from '../dist/pipeline/search.js'
 import { assembleView } from '../dist/pipeline/view.js'
-import { SPLIT_CONFIRMED_MAX, confirmSplit, readConfirmedSplits } from '../dist/pipeline/split.js'
+import {
+  SPLIT_CONFIRMED_MAX,
+  confirmSplit,
+  readConfirmedSplits,
+  readPendingSegments,
+} from '../dist/pipeline/split.js'
+import { META_SPLIT_SEGMENTS, setMeta } from '../dist/db/meta.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { closeLog, flushLog, logFilePath } from '../dist/log/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
@@ -266,7 +272,10 @@ describe('T29 判据 2：召回时把候选连同使用场景给出来', () => {
     for (const id of ids) {
       const line = anchorLine(view.text, id)
       assert.notEqual(line, '', '#' + id + ' 应当在锚段里，实际文本：\n' + view.text)
-      assert.ok(line.includes('疑似应拆分（切点按长度，未判内容）'), '#' + id + ' 缺候选标记：' + line)
+      assert.ok(
+        line.includes('疑似应拆分（3 段，切点按长度，未判内容）'),
+        '#' + id + ' 缺候选标记或段数：' + line,
+      )
       assert.ok(line.includes('用于：' + q), '#' + id + ' 缺本次查询词：' + line)
     }
     const controlLine = anchorLine(view.text, control.atomId)
@@ -284,6 +293,33 @@ describe('T29 判据 2：召回时把候选连同使用场景给出来', () => {
     const line = anchorLine(view.text, id)
     assert.ok(line.includes('用户已确认应拆分（可按内容重写并声明 supersedes）'), '确认后应给下一步：' + line)
     assert.equal(line.includes('疑似应拆分'), false, '确认之后不再是候选')
+    assert.equal(readPendingSegments(db).has(id), false, '确认之后这条的段数不该再占着表')
+  })
+
+  it('判据 2：段数读的是库，不是渲染代码里的字面量', async () => {
+    // 上一条用例断言的是「锚行说 3 段」，而把 3 写死在 view.ts 里同样能通过它。
+    // 这条把库里的数改掉再渲染一次：跟着变的才是真读库。
+    const ctx = createWriteCtx(db, {}, { encode: async (t) => hashVec(t) })
+    const out = await writeReviewed(ctx, { text: longText(3) })
+    const ids = out.results.map((r) => r.atomId)
+    const q = '代理端口'
+    for (const id of ids) {
+      const line = anchorLine(assembleView(db, recall(db, q, null, { topN: 24 }), { scene: q }).text, id)
+      assert.ok(line.includes('（3 段，'), '写入侧应当已经记下 3 段：' + line)
+    }
+
+    setMeta(db, META_SPLIT_SEGMENTS, JSON.stringify(ids.map((id) => [id, 2])))
+    for (const id of ids) {
+      const line = anchorLine(assembleView(db, recall(db, q, null, { topN: 24 }), { scene: q }).text, id)
+      assert.ok(line.includes('（2 段，'), '库里改成 2，锚行就得说 2 段：' + line)
+    }
+
+    // 老库没有这个键：位还在，段数没有。那句话仍然成立，只是少一个数。
+    db.prepare('DELETE FROM meta WHERE key = ?').run(META_SPLIT_SEGMENTS)
+    for (const id of ids) {
+      const line = anchorLine(assembleView(db, recall(db, q, null, { topN: 24 }), { scene: q }).text, id)
+      assert.ok(line.includes('疑似应拆分（切点按长度，未判内容）'), '缺段数时退回固定串：' + line)
+    }
   })
 })
 
@@ -313,13 +349,15 @@ describe('T29 判据 3：标记只增文本，不改排序与档位', () => {
     for (const s of ['', '-wal', '-shm']) rmSync(dbFile + s, { force: true })
   })
 
-  it('判据 3：带 bit0 与清掉 bit0 两种状态下，顺序 / final / 档位一致，单锚增量 ≤ 40 字', async () => {
+  it('判据 3：带 bit0 与清掉 bit0 两种状态下，顺序 / final / 档位一致，单锚增量 ≤ 44 字', async () => {
     const ctx = createWriteCtx(db, {}, { encode: async (t) => hashVec(t) })
     await writeAtom(ctx, { text: '代理端口的固定端口是 7890。' })
     await writeAtom(ctx, { text: '代理端口要同时配 Node 的环境变量。' })
     const out = await writeReviewed(ctx, { text: longText(3) })
     assert.ok(out.results.length >= 2)
-    // 查询词故意给长：截断要在这一条判据里生效（16 字），否则单锚增量会超 40。
+    // 查询词故意给长：截断要在这一条判据里生效（16 字），否则单锚增量会超上限。
+    // 上限 44 而非 40：提示里多了「3 段，」这 4 个字符（判据 2 要求的段数）。
+    // 原实现的增量是 38，余量本来只有 2 字；放宽后余量仍是 2 字。
     const scene = '代理端口' + '，还有一些用来测截断的限定词'.repeat(3)
     const q = '代理端口'
     const before = recall(db, q, null, { topN: 24 })
@@ -344,7 +382,7 @@ describe('T29 判据 3：标记只增文本，不改排序与档位', () => {
     assert.equal(viewAfter.tier, viewBefore.tier, '档位不该被标记改变')
     for (const id of idsBefore) {
       const delta = anchorLine(viewBefore.text, id).length - anchorLine(viewAfter.text, id).length
-      assert.ok(delta >= 0 && delta <= 40, '#' + id + ' 的单锚文本增量应在 0~40 字，实际 ' + delta)
+      assert.ok(delta >= 0 && delta <= 44, '#' + id + ' 的单锚文本增量应在 0~44 字，实际 ' + delta)
     }
   })
 })

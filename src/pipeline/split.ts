@@ -21,7 +21,7 @@
 // 不升 user_version（现为 4）。上限与 FIFO 淘汰见 SPLIT_CONFIRMED_MAX。
 
 import type { DatabaseSync } from 'node:sqlite'
-import { META_SPLIT_CONFIRMED, getMeta, setMeta } from '../db/meta.js'
+import { META_SPLIT_CONFIRMED, META_SPLIT_SEGMENTS, getMeta, setMeta } from '../db/meta.js'
 import { log } from '../log/index.js'
 import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 
@@ -33,6 +33,14 @@ import { FLAG_SPLIT_PENDING } from '../db/flags.js'
  * 值无限增长。淘汰方向选「最早确认的」：越靠近现在的决定越可能还在被处理。
  */
 export const SPLIT_CONFIRMED_MAX = 32
+
+/**
+ * 「切分时共几段」这张表的条数上限（FIFO，与 SPLIT_CONFIRMED_MAX 同口径）。
+ *
+ * 一次写入最多切 REVIEW_MAX_SEGMENTS 段（8），所以这个上限容得下四次切分写入；
+ * 超出的部分对任何一次召回都没有影响（一次最多展示二十几条锚），留着只让 meta 值涨。
+ */
+export const SPLIT_SEGMENTS_MAX = 32
 
 /** 一次确认 / 忽略之后的状态。`changed=false` 表示位本来就清了（幂等，不是错误）。 */
 export interface SplitDecision {
@@ -67,6 +75,74 @@ export function readConfirmedSplits(db: DatabaseSync): number[] {
     if (Number.isInteger(id) && id > 0) out.push(id)
   }
   return out
+}
+
+/**
+ * 读「切分时共几段」的映射。
+ *
+ * 值坏了（不是 JSON、不是数组、元素形状不对）时跳过坏项、按空处理，理由同
+ * readConfirmedSplits：它只影响锚行一句提示的措辞，为它抛错会让整次召回失败。
+ * 段数 ≤ 1 的项也丢掉 —— 那表示「没切」，不是一份可展示的信息。
+ */
+export function readPendingSegments(db: DatabaseSync): Map<number, number> {
+  const out = new Map<number, number>()
+  const raw = getMeta(db, META_SPLIT_SEGMENTS)
+  if (raw === undefined) return out
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return out
+  }
+  if (!Array.isArray(parsed)) return out
+  for (const item of parsed) {
+    if (!Array.isArray(item) || item.length !== 2) continue
+    const id = Number(item[0])
+    const n = Number(item[1])
+    if (!Number.isInteger(id) || id <= 0) continue
+    if (!Number.isInteger(n) || n <= 1) continue
+    out.set(id, n)
+  }
+  return out
+}
+
+/**
+ * 记下这次切分的段数：**每一段各记一条，值都是同一个数**。
+ *
+ * 同一个 id 再次被记时先删旧项再追加（等于盖掉旧值、排到最后）：这条记忆后来又被切过
+ * 一次的话，新的段数才是它现在的样子；排在最后也意味着它离淘汰最远。
+ *
+ * 不加事务：几段正文已经各自落库，段数只影响一句提示。丢了这个数，锚行退回不带段数的
+ * 固定串 —— 少一句信息，但召回不失败。
+ */
+export function recordPendingSegments(
+  db: DatabaseSync,
+  atomIds: readonly number[],
+  segments: number,
+  now = Date.now(),
+): void {
+  if (!Number.isInteger(segments) || segments <= 1) return
+  if (atomIds.length === 0) return
+  const entries: Array<[number, number]> = []
+  const fresh = new Set(atomIds)
+  for (const [id, n] of readPendingSegments(db)) {
+    if (!fresh.has(id)) entries.push([id, n])
+  }
+  for (const id of atomIds) entries.push([id, segments])
+  while (entries.length > SPLIT_SEGMENTS_MAX) entries.shift()
+  setMeta(db, META_SPLIT_SEGMENTS, JSON.stringify(entries), now)
+}
+
+/**
+ * 这条已经有了人的结论（确认或忽略），段数提示不会再出现，把它的项删掉。
+ *
+ * 不删也能跑（FIFO 迟早挤掉它），但那是死数据：它占着同一个上限，却没有人会再读它。
+ */
+function dropPendingSegments(db: DatabaseSync, atomId: number, now: number): void {
+  const segments = readPendingSegments(db)
+  if (!segments.has(atomId)) return
+  segments.delete(atomId)
+  setMeta(db, META_SPLIT_SEGMENTS, JSON.stringify([...segments]), now)
 }
 
 interface ClearResult {
@@ -130,6 +206,7 @@ export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now())
       }
       setMeta(db, META_SPLIT_CONFIRMED, JSON.stringify(confirmed), now)
     }
+    dropPendingSegments(db, atomId, now)
     db.exec('COMMIT')
   } catch (err) {
     try {
@@ -157,5 +234,7 @@ export function ignoreSplit(db: DatabaseSync, atomId: number): SplitDecision | n
   const cleared = clearSplitPending(db, atomId)
   if (cleared === null) return null
   if (cleared.changed) log.info('split.ignored')
+  // 不包事务：位已经清了，这一步只是删一条不会再被读到的提示数据。
+  dropPendingSegments(db, atomId, Date.now())
   return { atomId, flags: cleared.flags, changed: cleared.changed }
 }

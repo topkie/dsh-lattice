@@ -28,6 +28,7 @@ import {
 } from '../util/vec.js'
 import { SUMMARY_CHARS, bigramTerms, extractSummary, jaccard, stripMarkdown } from '../util/text.js'
 import { buildEntries, buildVocabIndex, type EntryRecord, type VocabIndex } from './entries.js'
+import { recordPendingSegments } from './split.js'
 import {
   DEFAULT_FORGET_THRESHOLDS,
   checkForgotten,
@@ -1062,5 +1063,13 @@ export async function writeReviewed(ctx: WriteCtx, input: WriteInput): Promise<R
       ),
     )
   }
+  // 段数记在写入侧：它是切分这一次**写入**的产物，召回只是把它读出来展示。
+  // 判据要的是「每一段都记同一个数」，所以传全部 atom id，而不是只传第一段。
+  if (split)
+    recordPendingSegments(
+      ctx.db,
+      results.map((r) => r.atomId),
+      results.length,
+    )
   return { length, results }
 }

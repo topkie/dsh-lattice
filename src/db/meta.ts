@@ -45,6 +45,21 @@ export const META_RECLUSTER_AT = 'recluster_at'
  */
 export const META_SPLIT_CONFIRMED = 'split_confirmed'
 
+/**
+ * 「这条是按长度切出来的、一共切了几段」的映射（JSON 数组 `[[atomId, 段数], ...]`，T29）。
+ *
+ * 为什么要存段数：锚行现在只说「疑似应拆分」，而人决定「拆不拆」时唯一有用的信息是
+ * 「切成几段」—— 3 段和 8 段是两种工作量。这个数在写入侧本来就现成（reviewLength 的
+ * segments），只是此前没落盘。
+ *
+ * 为什么每一段各记一条而不是只记第一段：锚行是按段逐条渲染的，第二段以后的锚行同样带
+ * 待拆分位；只记第一段，后面几段就只能显示不带段数的固定串。
+ *
+ * 用数组而不是对象：FIFO 淘汰要「最早记的那条」，而 JSON 对象的键序不可依赖。
+ * 上限与淘汰在 pipeline/split.ts 的 SPLIT_SEGMENTS_MAX。
+ */
+export const META_SPLIT_SEGMENTS = 'split_pending_segments'
+
 /** 写入一个键（已存在则覆盖）。 */
 export function setMeta(db: DatabaseSync, key: string, value: string, now = Date.now()): void {
   db.prepare(

@@ -82,7 +82,7 @@ import {
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './db/flags.js'
-import { SPLIT_CONFIRMED_MAX } from './pipeline/split.js'
+import { SPLIT_CONFIRMED_MAX, SPLIT_SEGMENTS_MAX } from './pipeline/split.js'
 import {
   BUSY_TIMEOUT_FLOOR_MS,
   BUSY_TIMEOUT_MULTIPLIER,
@@ -2218,12 +2218,26 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度'],
   },
   {
+    name: 'SPLIT_SEGMENTS_MAX',
+    area: '写入',
+    value: () => SPLIT_SEGMENTS_MAX,
+    definedBy: { file: 'src/pipeline/split.ts', name: 'SPLIT_SEGMENTS_MAX' },
+    affects:
+      '「切分时共几段」映射的条数上限（meta 的 split_pending_segments，FIFO）。满了只影响更早的候选还能不能显示段数，段数未知时锚行退回不带段数的固定串',
+    calibration: {
+      evidence:
+        '**未标定，是护栏**：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长',
+      at: '2026-10-20',
+    },
+    variesWith: ['一次写入的切分段数上限（REVIEW_MAX_SEGMENTS）', '锚段条数（topN 与实际预算）'],
+  },
+  {
     name: 'SPLIT_SCENE_CHARS',
     area: '写入',
     value: () => SPLIT_SCENE_CHARS,
     definedBy: { file: 'src/pipeline/view.ts', name: 'SPLIT_SCENE_CHARS' },
     affects:
-      '锚行「用于：<查询词>」里查询词最多给几个字符（只对 flags 的 bit0 命中生效）。保证单条锚的文本增量不超过 40 字',
+      '锚行「用于：<查询词>」里查询词最多给几个字符（只对 flags 的 bit0 命中生效）。保证单条锚的文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）',
     calibration: {
       evidence:
         '**未标定，是预算护栏**：锚段按字符算预算，查询词可以是一整句；不截断会让一条锚多出几十上百字，同一段预算能装下的记忆随之变少',
