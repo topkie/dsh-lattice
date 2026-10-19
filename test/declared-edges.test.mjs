@@ -504,4 +504,74 @@ describe('判据 7：可发现性（工具描述 + 召回末尾提示）', () =>
       }
     })
   })
+
+  /**
+   * 判据「提示不写库」的**排除法**形态。
+   *
+   * 原先的观测对象是「整次工具调用」，而那次调用里有两条**与提示无关**的写入：
+   * 命中计数（recordRecall）与入口反哺（feedLearned）。用整次调用当观测对象，
+   * 就只能靠一个「+1」的例外把它俩糊过去 —— 而例外一多，判据就不再能构造失败。
+   *
+   * 对照法（两份库各召回一次）试过，**不可构造**：声明边会把「只有这条边可达」的
+   * 节点带进命中集合（实测：加一条 requires 边后 graph 路从 0 变 1，hits 多出一条），
+   * 两份库的命中集合本来就不同，它们的写入量因此本来就该不同。
+   *
+   * 剩下的做法就是把那两个已知写入**排除在观测之外**：只跑「召回 → 渲染 → 末尾拼提示」
+   * 这一段（工具层那行 return 表达式的全部内容），它必须零写入。
+   * 用只读连接跑：这条路径一旦尝试写库会当场抛错，而不是悄悄改一个数。
+   */
+  it('判据 7：排除命中计数与入口反哺之后，渲染与拼提示零写入', async () => {
+    await withTools('c7c', async ({ dir, tool }) => {
+      await tool('lattice_write').execute({ text: '系统代理必须走本地端口，否则访问境外源会超时。' })
+      await tool('lattice_write').execute({ text: '系统代理的白名单里放了内网段。' })
+      // 先跑一次：首次召回会建推断边，那是一次真正的写库，不属于「渲染与提示」。
+      await tool('lattice_recall').execute({ query: '系统代理' })
+
+      const ruler = openRuler(join(dir, 'lattice.db'))
+      const ro = new DatabaseSync(join(dir, 'lattice.db'), { readOnly: true })
+      try {
+        const before = ruler.read()
+        const recalled = recall(ro, '系统代理', null, {})
+        const view = assembleView(ro, recalled, { scene: '系统代理', budget: 6000 })
+        const text = view.text + '\n\n（' + DECLARED_EDGE_HINT + '）'
+        const after = ruler.read()
+        assert.ok(text.includes(DECLARED_EDGE_HINT), '提示应当在返回文本里：' + text.slice(-60))
+        assert.equal(after.dataVersion, before.dataVersion, '渲染与拼提示不得产生任何提交')
+        assert.deepEqual(after.rows, before.rows, '渲染与拼提示不得写任何表')
+        assert.equal(after.userVersion, before.userVersion, '也不得改库结构')
+      } finally {
+        ro.close()
+        ruler.close()
+      }
+    })
+  })
+
+  it('判据 7：提示与渲染不改排序 —— 工具层返回的锚序就是命中序的前缀', async () => {
+    await withTools('c7d', async ({ dir, tool }) => {
+      for (const t of [
+        '系统代理必须走本地端口。',
+        '系统代理的白名单里放了内网段。',
+        '系统代理的端口号与 HTTP_PROXY 必须一致。',
+      ]) {
+        await tool('lattice_write').execute({ text: t })
+      }
+      const out = await tool('lattice_recall').execute({ query: '系统代理' })
+      const shown = [...out.matchAll(/^- \[(\d+)/gm)].map((m) => Number(m[1]))
+      assert.ok(shown.length > 1, '本例应当命中多条：' + out)
+
+      const ro = new DatabaseSync(join(dir, 'lattice.db'), { readOnly: true })
+      try {
+        const recalled = recall(ro, '系统代理', null, {})
+        const view = assembleView(ro, recalled, { scene: '系统代理', budget: 6000 })
+        assert.deepEqual(shown, view.anchorIds, '工具层不得重排锚段')
+        assert.deepEqual(
+          view.anchorIds,
+          recalled.hits.slice(0, view.anchorIds.length).map((h) => h.id),
+          '锚序必须是命中序的前缀 —— 提示与渲染不许改变顺序',
+        )
+      } finally {
+        ro.close()
+      }
+    })
+  })
 })
