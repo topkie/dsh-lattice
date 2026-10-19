@@ -16,6 +16,7 @@ import { ORPHAN_DEFINITION, audit, noDataReport } from '../dist/pipeline/audit.j
 import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT } from '../dist/pipeline/list.js'
 import { rebuildAtomPairs } from '../dist/cluster/rebuild.js'
 import { VEC_DIM } from '../dist/util/vec.js'
+import { GRAPH_INFER_MAX_ATOMS } from '../dist/graph/infer.js'
 import { openRuler } from './ro-ruler.mjs'
 
 /** 一行 topic。n_atoms 由调用方按夹具写成与实际成员一致。 */
@@ -284,25 +285,52 @@ describe('体检（audit）：结构指标与两种「空」', () => {
     assert.equal(r.entries.learnedRatio, 2 / 6)
   })
 
-  it('图路状态读 inferred 边，不触发建边', () => {
+  it('图路状态按两类边判，不触发建边', () => {
     seedTopic(db, 1, 2)
     seedAtom(db, 1, { topicId: 1 })
     seedAtom(db, 2, { topicId: 1 })
     const before = audit(db)
     assert.equal(before.graph.status, 'not-built')
     assert.equal(before.graph.inferredEdges, 0)
+    assert.equal(before.graph.declaredEdges, 0)
+    // 只加声明边：图路同样有输入（声明边用的 kind 也在 GRAPH_KINDS 白名单里），
+    // 所以不能报「没建过」。这一条钉的是「有声明边、但建不出推断边」那个形态。
+    db.prepare(
+      "INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) VALUES ('atom', 1, 'atom', 2, 'related', 1, 'declared', 1)",
+    ).run()
+    const declaredOnly = audit(db)
+    assert.equal(declaredOnly.graph.status, 'built')
+    assert.equal(declaredOnly.graph.declaredEdges, 1)
+    assert.equal(declaredOnly.graph.inferredEdges, 0)
+    assert.deepEqual(declaredOnly.graph.byKind, {})
+    // 再加一条推断边：两类各自报数；byKind 只统计推断边（kind 分布是推断边的性质）。
     db.prepare(
       "INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) VALUES ('atom', 1, 'atom', 2, 'near', 0.9, 'inferred', 1)",
-    ).run()
-    db.prepare(
-      "INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) VALUES ('atom', 1, 'topic', 1, 'near', 0.5, 'declared', 1)",
     ).run()
     const after = audit(db)
     assert.equal(after.graph.status, 'built')
     assert.equal(after.graph.inferredEdges, 1)
+    assert.equal(after.graph.declaredEdges, 1)
     assert.deepEqual(after.graph.byKind, { near: 1 })
-    // declared 边不算图路输入：它是真相源，不是 inferred 的派生物。
-    assert.equal(Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin = 'inferred'").get().n), 1)
+  })
+
+  it('规模超过推断上限、但库里有声明边：不许报成「空」', () => {
+    // 为了越过上限只造 atom 行，不建 atom_search —— audit 不读正文。
+    const insert = db.prepare(
+      'INSERT INTO atom(id, kind, text, summary, embedding, topic_id, fit, scope, origin, recall_hits, created_at, updated_at) ' +
+        "VALUES (?, '结论', 'x', 'x', zeroblob(2048), NULL, 1.0, 'global', 'model', 0, ?, ?)",
+    )
+    db.exec('BEGIN')
+    for (let i = 1; i <= GRAPH_INFER_MAX_ATOMS + 1; i += 1) insert.run(i, i, i)
+    db.exec('COMMIT')
+    db.prepare(
+      "INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) VALUES ('atom', 1, 'atom', 2, 'related', 1, 'declared', 1)",
+    ).run()
+    const r = audit(db)
+    assert.equal(r.graph.status, 'built', '有声明边就不是空图路')
+    assert.equal(r.graph.declaredEdges, 1)
+    assert.equal(r.graph.inferredEdges, 0)
+    assert.match(r.graph.detail, /推断边不会重建/)
   })
 
   it('只读：跑前后 data_version、各表行数、recall_hits 总和与文件 mtime 都不变', () => {

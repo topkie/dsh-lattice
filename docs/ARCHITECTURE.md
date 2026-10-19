@@ -213,11 +213,17 @@ SQLite 的 FTS5 `trigram` 分词器按 3 字符滑窗建索引，**对长度 ≤
 | atom / topic 数 | `atom`、`topic.n_atoms > 0` | 库的规模 |
 | 单成员 topic 占比 | `topic.n_atoms = 1` | topic 层退化（每条记忆各自成主题） |
 | atom / topic 比 | atom 数 ÷ 有成员的 topic 数 | 同上；1.0 即完全退化 |
-| 推断边状态 | `edge` 里 `origin = 'inferred'` 的行 | 推断边在不在（不触发建边）。声明边的条数由召回元数据单独报（见第四节） |
+| 图路状态 | `edge` 按 origin 分组（`src/graph/infer.ts` 的 `edgeOriginCounts`） | 图路有没有输入 —— **两类边都算**：推断边（派生物，重建会整批换掉）与声明边（真相源，重建后仍在）。两类分开报数；不触发建边 |
 | 入口噪声 | `entry` 按 origin 分组 | 每 atom 平均入口数、learned 占比 |
 | 高相似未合并对 | `atom_pair`，且两个 atom 分属不同 topic | 几乎逐字重复却占着两个主题 |
 | 孤立 atom | 无边且单成员 topic | 既没有关联也不属于任何主题群 |
 | 从未被召回 | `atom.recall_hits = 0` | 只进过库、从未被取回 |
+
+**图路状态的判据是两类边之和。** 只有声明边、一条推断边都没建出来的库，图路照样有输入，
+所以不能报「没建过」—— 这个形态在 2026-10-19 的审核里被发现两处报得不一样（体检说
+`not-built`、召回说 `built`）。状态词表仍分两套：召回报的是**这次建边的结果**
+（`built` / `fresh` / `failed` / `too-large`），体检报的是**库里现在的状态**
+（`not-built` / `built` / `too-large`）—— 两者回答不同的问题，不共用一套判定。
 
 **「无数据」与「没有发现」分开报**。`atom_pair` 由重聚类建立，空表因此有两种含义：
 没建过（先跑一次重建）与建过但没有（比过了，没有）。体检读 `meta` 里的 `recluster_at`

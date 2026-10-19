@@ -29,7 +29,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { getMeta, META_RECLUSTER_AT } from '../db/meta.js'
-import { GRAPH_INFER_MAX_ATOMS, INFERRED_ORIGIN } from '../graph/infer.js'
+import { GRAPH_INFER_MAX_ATOMS, INFERRED_ORIGIN, edgeOriginCounts } from '../graph/infer.js'
 import { DUP_COS, DUP_LEX } from './search.js'
 import { FLAG_ARCHIVED } from '../db/flags.js'
 // 分页上界与页大小**复用目录的两个数**：两者防的是同一件事（一次拉爆上下文），
@@ -116,12 +116,18 @@ export interface AuditReport {
   graph: {
     state: 'no-data' | 'ready'
     /**
-     * 与 search.ts 的 graphStatus 同一件事，但**不触发建边**：
-     * not-built = 库里没有 inferred 边；built = 有；too-large = 规模超过全量推断上限。
+     * 图路能不能用，判据是**两类边的输入之和**：推断边（派生物，重建会整批换掉）
+     * 与声明边（真相源，重建后仍在；声明进来的 kind 也在 GRAPH_KINDS 白名单里）。
+     *
+     * 与 search.ts 的 graphStatus 报的是同一个事实，但**不触发建边**，所以状态词表
+     * 不同：那边报本次建边的结果（built / fresh / failed / too-large），这里报库里
+     * 现在的状态。两处不共用一套判定 —— 它们回答两个不同的问题。
      */
     status: 'not-built' | 'built' | 'too-large'
     /** inferred 边总数。 */
     inferredEdges: number
+    /** declared 边总数；与推断边分开报的理由见 edgeOriginCounts。 */
+    declaredEdges: number
     /** 按 kind 的 inferred 边数（near / duplicate / ...）。 */
     byKind: Record<string, number>
     detail: string
@@ -223,6 +229,7 @@ export function noDataReport(opts: AuditOptions = {}, detail = ''): AuditReport 
       state: 'no-data',
       status: 'not-built',
       inferredEdges: 0,
+      declaredEdges: 0,
       byKind: {},
       detail: '库里没有任何 atom：图路没有输入。',
     },
@@ -288,18 +295,41 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
   const empty = atoms === 0
 
   // ── 图路 ──────────────────────────────────────────────────────────────
-  const inferredEdges = count(db, 'SELECT COUNT(*) AS n FROM edge WHERE origin = ?', INFERRED_ORIGIN)
+  // 边计数走 graph/infer.ts 的 edgeOriginCounts：那是「边表 origin 分布」的唯一实现处。
+  // 在这里另写一遍 SQL，就多出一份会与它漂移的计算（2026-10-19 的审核发现的正是这一形态）。
+  const graphEdges = edgeOriginCounts(db)
+  const inferredEdges = graphEdges.inferred
+  const declaredEdges = graphEdges.declared
   const byKind: Record<string, number> = {}
   const kindRows = db
     .prepare('SELECT kind, COUNT(*) AS n FROM edge WHERE origin = ? GROUP BY kind ORDER BY kind')
     .all(INFERRED_ORIGIN) as Array<{ kind: string; n: number | bigint }>
   for (const r of kindRows) byKind[String(r.kind)] = Number(r.n)
+  const overInferLimit = atoms > GRAPH_INFER_MAX_ATOMS
   let graphStatus: AuditReport['graph']['status']
   let graphDetail: string
   if (empty) {
     graphStatus = 'not-built'
     graphDetail = '库里没有任何 atom：图路没有输入。'
-  } else if (atoms > GRAPH_INFER_MAX_ATOMS) {
+  } else if (inferredEdges + declaredEdges > 0) {
+    // 两类边都进图路（声明进来的 kind 也在 GRAPH_KINDS 里），所以「有没有输入」按和判。
+    // 规模上限只挡推断边的重建，不挡声明边 —— 它排在这一支之后；排前面就会把
+    // 「有声明边、但推断边建不动」的库报成空的。
+    graphStatus = 'built'
+    graphDetail =
+      '推断边 ' +
+      inferredEdges +
+      ' 条、声明边 ' +
+      declaredEdges +
+      ' 条。' +
+      (overInferLimit
+        ? '（atom 数 ' +
+          atoms +
+          ' 超过全量推断上限 ' +
+          GRAPH_INFER_MAX_ATOMS +
+          '：推断边不会重建，声明边不受影响。）'
+        : '')
+  } else if (overInferLimit) {
     graphStatus = 'too-large'
     graphDetail =
       'atom 数 ' +
@@ -307,12 +337,10 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
       ' 超过全量推断上限 ' +
       GRAPH_INFER_MAX_ATOMS +
       '：ensureGraphEdges 会拒绝重建，图路保持空。'
-  } else if (inferredEdges === 0) {
-    graphStatus = 'not-built'
-    graphDetail = '库里没有 inferred 边：图路没有输入。召回第一次调用会尝试建一次；体检本身不建（只读）。'
   } else {
-    graphStatus = 'built'
-    graphDetail = 'inferred 边 ' + inferredEdges + ' 条。'
+    graphStatus = 'not-built'
+    graphDetail =
+      '库里没有推断边也没有声明边：图路没有输入。召回第一次调用会尝试建一次；体检本身不建（只读）。'
   }
 
   // ── 入口噪声 ──────────────────────────────────────────────────────────
@@ -417,6 +445,7 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
       state: empty ? 'no-data' : 'ready',
       status: graphStatus,
       inferredEdges,
+      declaredEdges,
       byKind,
       detail: graphDetail,
     },
