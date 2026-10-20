@@ -126,6 +126,13 @@ describe('界面一侧（源码级）：按钮带条数、两步确认、四态�
     assert.ok(client.includes("'确认清空 '"), '第二步的按钮要写成「确认清空 N 条」')
     assert.ok(client.includes("'确认整理'"), '整理也要两步确认')
     assert.ok(client.includes('setPending('), '两步确认要有一个待确认状态')
+    // 只有按钮没有说明，人不知道这两个词在动什么 —— 两块各要一行。
+    assert.ok(client.includes('RECLUSTER_HELP'), '整理要有说明')
+    assert.ok(client.includes('LEARNED_HELP'), '清空要有说明')
+    assert.ok(client.includes("'学到的入口 · '"), '清空那一组要有自己的标题与条数')
+    for (const phrase of ['只改归属', '不删数据', '重新长出来']) {
+      assert.ok(client.includes(phrase), '说明里要写清后果：' + phrase)
+    }
   })
 
   /**
