@@ -365,8 +365,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
                 sup +
                 ' 标记为被 #' +
                 target.atomId +
-                (multi ? '（切分后的第一条）' : '本条') +
-                ' 取代（旧条不会删除）。',
+                (multi ? '（切分后的第一条）' : '（本条）') +
+                '取代（旧条不会删除）。',
         )
       }
       return lines.join('\n')

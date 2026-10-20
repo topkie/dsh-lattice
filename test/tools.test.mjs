@@ -152,6 +152,20 @@ describe('lattice_write', () => {
     assert.ok(out.includes('入口'), '输出: ' + out)
   })
 
+  it('取代回执把「本条」括起来：编号与说明之间要有分隔', async () => {
+    const first = await tool('lattice_write').execute({
+      text: '系统代理必须走本地端口，否则访问境外源会超时。',
+    })
+    const oldId = Number(/已写入记忆 #(\d+)/.exec(first)[1])
+    const out = await tool('lattice_write').execute({
+      text: '系统代理改成走本地端口 7890，旧的写法不再适用。',
+      supersedes: oldId,
+    })
+    // 这一行曾经写成「被 #8本条 取代」—— 编号与说明黏在一起，读起来像编号的一部分。
+    // 单条写入时用括号包住「本条」；切分时另有一句「（切分后的第一条）」。
+    assert.ok(out.includes('（本条）取代'), '单条写入的取代回执要带括号：' + out)
+    assert.equal(out.includes('#本条'), false, '编号与说明之间不能黏在一起：' + out)
+  })
   it('空 text 给出可读的失败信息，不抛错', async () => {
     const out = await tool('lattice_write').execute({ text: '   ' })
     assert.ok(out.includes('不能为空'), '输出: ' + out)
