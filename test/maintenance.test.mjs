@@ -127,4 +127,22 @@ describe('界面一侧（源码级）：按钮带条数、两步确认、四态�
     assert.ok(client.includes("'确认整理'"), '整理也要两步确认')
     assert.ok(client.includes('setPending('), '两步确认要有一个待确认状态')
   })
+
+  /**
+   * 整理是异步的（规划后挂一次性延迟），而界面不主动刷新 —— 不轮询的话点了确认之后
+   * 会停在「已规划」不动，直到手动点刷新，而那时它早跑完了。实测过：库里的状态已经正确
+   * 清空，界面却还停着。所以那两个过渡态里必须有轮询，且必须只在它们里面。
+   */
+  it('只在这两个过渡态里轮询，且有次数上限', () => {
+    const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+    const panel = /function MaintenancePanel\(([\s\S]*?)\n    }/.exec(client)
+    assert.ok(panel !== null, '找不到 MaintenancePanel')
+    assert.ok(panel[1].includes("phase !== 'planned'"), '已规划时必须轮询')
+    assert.ok(panel[1].includes("phase !== 'running'"), '正在整理时必须轮询')
+    assert.ok(panel[1].includes('setInterval('), '轮询用 setInterval')
+    assert.ok(panel[1].includes('clearInterval('), '卸载与到达上限时要停')
+    assert.ok(panel[1].includes('RECLUSTER_POLL_LIMIT'), '轮询必须有次数上限')
+    assert.ok(client.includes('const RECLUSTER_POLL_LIMIT = 90'), '上限是 90 次')
+    assert.ok(client.includes('const RECLUSTER_POLL_MS = 1000'), '间隔是 1 秒')
+  })
 })
