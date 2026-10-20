@@ -21,14 +21,16 @@ import { DEFAULT_KNN_K } from './graph.js'
 import {
   rebuildTopicTables,
   recomputeTopicSum,
-  rebuildAtomPairs,
+  computeAtomPairs,
+  persistAtomPairs,
   loadOldTopicCentroids,
   remapSecondaryAttachments,
   countDanglingTopicRefs,
   RECLUSTER_BATCH_ATOMS,
   resolveOldToNewTopics,
 } from './rebuild.js'
-import type { TopicWrite, RebuildStats } from './rebuild.js'
+import type { TopicWrite, RebuildStats, AtomPairsComputed } from './rebuild.js'
+import { META_RECLUSTER_AT, setMeta } from '../db/meta.js'
 
 /** 分步耗时（毫秒）。 */
 export interface StepTiming {
@@ -54,6 +56,14 @@ export interface ReclusterOptions {
   dryRun?: boolean
   /** 进度回调（写库阶段按批调用）。宿主侧可据此让出事件循环。 */
   onProgress?: (stage: string, done: number, total: number) => void
+  /**
+   * 在**同一个事务里**、COMMIT 之前调用一次。
+   *
+   * 给调用方留的钩子：重聚类要写几个 meta 键（重聚类时间、规划时间、开始时间），
+   * 它们与主数据必须一起提交或一起回滚 —— 否则会出现「topic 换了但状态说没跑过」。
+   * 在事务外写这几行，正是那种半套状态的来源。
+   */
+  onCommit?: () => void
 }
 
 /** 重聚类结果。 */
@@ -401,32 +411,68 @@ export async function runRecluster(db: DatabaseSync, opts: ReclusterOptions = {}
     fits,
     input.ids,
   )
-  const rebuild = mark('rebuild', () => rebuildTopicTables(db, writes, { batchAtoms: opts.batchAtoms }))
-  opts.onProgress?.('rebuild', writes.length, writes.length)
-
-  // 次属引用与边都跟着身份对齐走。**映射从库里的实际状态反推**，而不是只用 alignment
-  // 里那份：新分配的 topic id 是 INSERT 出来的自增号，只有写库那一步知道，
-  // 而此刻它已经落在 atom.topic_id 上了 —— 那才是可以依赖的真相源。
-  const oldToNewTopic = mark('oldToNew', () => resolveOldToNewTopics(db, input.ids))
-  mark('secondary', () => remapSecondaryAttachments(db, oldToNewTopic))
-  const recomputed = mark('recomputeSum', () => recomputeTopicSum(db))
-  void recomputed
-
   const vecMap = new Map<number, Float32Array>()
   for (let i = 0; i < input.ids.length; i++) vecMap.set(input.ids[i]!, input.vecs[i]!)
-  const pairs = mark('atomPairs', () =>
-    rebuildAtomPairs(db, vecMap, {
+
+  // ── 重计算（事务外）───────────────────────────────────────────────────────
+  // 两两比较是整次重聚类里唯一的 O(N²)，把它留在事务外：落库要求「一个事务写到底」，
+  // 而一段几十秒的纯 CPU 计算会把那个事务按住，期间谁都写不进去。
+  const computedPairs: AtomPairsComputed = mark('atomPairsCompute', () =>
+    computeAtomPairs(vecMap, {
       cosMin: opts.pairCosMin,
       lexMin: opts.pairLexMin,
       texts: input.texts,
-      batchPairs: opts.batchAtoms,
     }),
   )
-  opts.onProgress?.('atomPairs', pairs.rows, pairs.rows)
+  opts.onProgress?.('atomPairs', computedPairs.pairs.length, computedPairs.pairs.length)
+
+  // ── 落库（一个事务）───────────────────────────────────────────────────────
+  // 四段写 + 调用方的 meta 一起提交，失败则一起回滚。分段提交会留下「topic 已换、
+  // atom_pair 未换」这种半套状态 —— 它不报错，恢复逻辑也就无从判断该从哪一段重来。
+  // BEGIN IMMEDIATE 直接拿写锁：拿不到（别的连接正在写）就抛上去，由调用方决定重试。
+  let rebuild: RebuildStats
+  let pairs: { rows: number; batches: number }
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    rebuild = mark('rebuild', () =>
+      rebuildTopicTables(db, writes, { batchAtoms: opts.batchAtoms, inTransaction: true }),
+    )
+    opts.onProgress?.('rebuild', writes.length, writes.length)
+
+    // 次属引用与边都跟着身份对齐走。**映射从库里的实际状态反推**，而不是只用 alignment
+    // 里那份：新分配的 topic id 是 INSERT 出来的自增号，只有写库那一步知道，
+    // 而此刻它已经落在 atom.topic_id 上了 —— 那才是可以依赖的真相源。
+    const oldToNewTopic = mark('oldToNew', () => resolveOldToNewTopics(db, input.ids))
+    mark('secondary', () => remapSecondaryAttachments(db, oldToNewTopic, { inTransaction: true }))
+    mark('recomputeSum', () => recomputeTopicSum(db, { inTransaction: true }))
+    pairs = mark('atomPairsPersist', () =>
+      persistAtomPairs(db, computedPairs, { batchPairs: opts.batchAtoms, inTransaction: true }),
+    )
+    // 重聚类时间与主数据同一事务：它和 topic / atom_pair 说的是同一件事。
+    setMeta(db, META_RECLUSTER_AT, String(Date.now()))
+    opts.onCommit?.()
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* 回滚失败不覆盖原始错误 */
+    }
+    throw err
+  }
 
   const dangling = countDanglingTopicRefs(db)
   const finalRebuild: RebuildStats = { ...rebuild, danglingRefs: dangling }
-  return { ...base, rebuild: finalRebuild, pairs }
+  return {
+    ...base,
+    rebuild: finalRebuild,
+    pairs: {
+      rows: pairs.rows,
+      scanned: computedPairs.scanned,
+      batches: pairs.batches,
+      cosHistogram: computedPairs.cosHistogram,
+    },
+  }
 }
 
 /** 默认参数（探针与文档引用同一份）。 */
