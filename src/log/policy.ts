@@ -69,6 +69,9 @@ export const EVENT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
   // 确认清单满了，最旧的一条被挤出去（T29）。只记**被挤掉的条数**，不记 id。
   // 正常情况下这个数是 1；大于 1 说明一次确认挤掉了一批，值得知道。
   'split.evicted': ['evicted'],
+  // 用户清空了「学到的入口」（T50）。只记清掉的条数，不记任何词或 id。
+  // 零条也记：与 split.ignored 同一条理由 —— 这件事没有别的留痕处。
+  'entry.cleared': ['cleared'],
 }
 
 /** 允许落库的等级。 */

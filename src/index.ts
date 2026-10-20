@@ -51,6 +51,7 @@ import { openVault } from './db/open.js'
 import { forgetAtom } from './pipeline/forget.js'
 import { setArchived } from './pipeline/archive.js'
 import { confirmSplit, ignoreSplit } from './pipeline/split.js'
+import { clearLearned } from './pipeline/entries.js'
 import {
   cancelRecluster,
   clearPlanTimer,
@@ -175,6 +176,15 @@ const SPLIT_IGNORE_ROUTE_PATH = '/api/lattice-split-ignore'
  */
 const RECLUSTER_PLAN_ROUTE_PATH = '/api/lattice-recluster-plan'
 const RECLUSTER_CANCEL_ROUTE_PATH = '/api/lattice-recluster-cancel'
+
+/**
+ * 清空「学到的入口」（T50）。
+ *
+ * 它删的是**数据**（召回反哺学到的入口词），不可撤销，但可以重新长出来 —— 再走几次召回
+ * 就有了，只是长回来的是新词。所以它比删除记忆轻、比归档重：要给，但要有两道确认，
+ * 而且按钮上要写清将删掉多少条。
+ */
+const LEARNED_CLEAR_ROUTE_PATH = '/api/lattice-learned-clear'
 
 /**
  * 降级日志的导出路由：只读。
@@ -445,6 +455,11 @@ export function apply(ctx: Context, config: unknown): void {
           kind: 'exact',
           path: RECLUSTER_CANCEL_ROUTE_PATH,
           handler: (req, res) => reclusterRoute(runtimeCfg, req, res, 'cancel'),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: LEARNED_CLEAR_ROUTE_PATH,
+          handler: (req, res) => learnedClearRoute(runtimeCfg, req, res),
         }),
       ]
       bootResume(runtimeCfg)
@@ -1136,6 +1151,45 @@ function bootResume(cfg: RuntimeConfig): void {
     })
   } catch {
     /* 打不开就下次启动再说：补跑不是加载插件的前提 */
+  }
+}
+/**
+ * 清空「学到的入口」（T50）。
+ *
+ * 三件事：删的只有 `origin='learned'` 那一类；回执给出实际删掉的条数（0 也是有效结果）；
+ * 内核函数里另写一条日志（回答「发生过」）。
+ *
+ * 为什么要 `confirm: true`：这是删数据、不可撤销的动作。界面用两步确认，这里用同一个
+ * 字段兜住「绕过界面直接打接口」的情形。
+ */
+async function learnedClearRoute(
+  cfg: RuntimeConfig,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  if (raw.confirm !== true) {
+    jsonOut(res, 400, {
+      ok: false,
+      error: 'need-confirm',
+      message: '清空学到的入口不可撤销，请求体里必须带 confirm: true',
+    })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const cleared = clearLearned(rt.db)
+    jsonOut(res, 200, { ok: true, cleared })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'learned-clear-failed', message: reasonOf(e) })
   }
 }
 /** 本地日期 YYYYMMDD，用于导出文件名（不带时间：同一天多次导出靠浏览器去重）。 */

@@ -201,8 +201,11 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
    * 2026-10-20 增 `split.confirmed` 与 `split.evicted`（T29 补齐）：确认原本只记 meta 状态，
    * 而那份状态是 FIFO 的 —— 被挤出清单的一条在状态里不留痕迹。「它被确认过」只剩日志
    * 能回答，这也是裁决里「留痕（日志）」的所指。淘汰只记条数，同样不带 id。
+   *
+   * 2026-10-20 增 `entry.cleared`（T50 的清空学到的入口）：清空删的是数据，
+   * 而它没有别的留痕处 —— 零条也写一条，否则「清空了 0 条」与「没执行」分不开。
    */
-  it('事件白名单覆盖草案里的事件（含 T29 的三条 split.*）', () => {
+  it('事件白名单覆盖草案里的事件（含 T29 的三条 split.* 与 T50 的 entry.cleared）', () => {
     assert.deepEqual(Object.keys(EVENT_DETAIL_KEYS).sort(), [
       'calib.recalibrate_done',
       'calib.recalibrate_failed',
@@ -210,6 +213,7 @@ describe('降级日志：白名单与独立库（判据 9）', () => {
       'calib.snapshot_missing',
       'calib.unlocalized',
       'encoder.unavailable',
+      'entry.cleared',
       'graph.unavailable',
       'log.write_failed',
       'recall.lexical_degraded',

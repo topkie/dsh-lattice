@@ -131,7 +131,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把十四条路由挂上去（六条只读 + 八条写）', () => {
+  it('宿主提供 webServer 时把十五条路由挂上去（六条只读 + 九条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -154,14 +154,16 @@ describe('插件契约', () => {
     // M4-T29 加了拆分候选的确认与忽略（两条写端点；模型侧仍不新增工具）。
     // 条目详情也是一条只读路由（点开才取全文）。
     // 整理入口是两条写路由（规划 / 取消；状态并入体检，不单开只读路由）。
+    // 清空「学到的入口」是一条写路由（T50）。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
-    assert.equal(routes.length, 14, '六条只读路由 + 八条写路由都应挂上')
+    assert.equal(routes.length, 15, '六条只读路由 + 九条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-archive',
       '/api/lattice-atom',
       '/api/lattice-atoms',
       '/api/lattice-audit',
       '/api/lattice-forget',
+      '/api/lattice-learned-clear',
       '/api/lattice-log-clear',
       '/api/lattice-log-export',
       '/api/lattice-ping-mini',

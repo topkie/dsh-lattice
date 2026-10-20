@@ -11,6 +11,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { bigramTerms, toSearchColumn } from '../util/text.js'
+import { log } from '../log/index.js'
 
 /** 入口级别。learned 由召回反哺，不在写入侧产生。 */
 export type EntryOrigin = 'declared' | 'extracted' | 'learned'
@@ -694,7 +695,11 @@ function entryKey(atomId: number, term: string): string {
  */
 export function clearLearned(db: DatabaseSync): number {
   const r = db.prepare("DELETE FROM entry WHERE origin = 'learned'").run()
-  return Number(r.changes)
+  const cleared = Number(r.changes)
+  // 日志回答「发生过」，回执回答「清了几条」。零条也写一条 —— 理由同上：
+  // 分不清「清空了 0 条」与「根本没执行」，等于没有留痕。
+  log.info('entry.cleared', { cleared })
+  return cleared
 }
 
 function sweepLearned(db: DatabaseSync, now: number, out: LearnedFeedback): void {
