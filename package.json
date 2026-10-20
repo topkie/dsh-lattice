@@ -1,6 +1,6 @@
 {
   "name": "dsh-lattice",
-  "version": "0.2.0",
+  "version": "0.3.0-dev",
   "private": true,
   "type": "module",
   "description": "面向 DeepSeek Harness 的本地记忆插件：结构化、可检索、可重建的知识存储。",
