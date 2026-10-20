@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
 ### Added
 
 - **[设计原则](docs/PRINCIPLES.md)**：根本约束——职责边界（模型管内容、插件管形式）、
@@ -85,3 +87,4 @@
   设计约束见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「导入既有记忆」
 
 [Unreleased]: https://github.com/topkie/dsh-lattice/releases
+[0.2.0]: https://github.com/topkie/dsh-lattice/releases/tag/0.2.0
