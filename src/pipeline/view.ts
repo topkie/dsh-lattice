@@ -15,6 +15,7 @@ import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
 import { FLAG_ARCHIVED, FLAG_SPLIT_PENDING } from '../db/flags.js'
 import { TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
+import { DEFAULT_MAX_EXTRACTED } from './entries.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -122,7 +123,8 @@ export interface ViewResult {
 
 export const DEFAULT_BUDGET = 6000
 export const DEFAULT_ANCHOR_MAX = 1200
-export const DEFAULT_ENTRIES_PER_TOPIC = 8
+/** 每主题最多列几条未进锚的条目：取抽取配额的一半（DEFAULT_MAX_EXTRACTED ÷ 2）。 */
+export const DEFAULT_ENTRIES_PER_TOPIC = DEFAULT_MAX_EXTRACTED / 2
 export const DEFAULT_ENTRY_LINE_MAX = 160
 export const DEFAULT_PATH_LINES = 15
 

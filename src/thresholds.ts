@@ -1307,7 +1307,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_ENTRIES_PER_TOPIC' },
     affects: '每个命中主题给几条入口（摘录档由 TIER_ENTRIES 收窄到 4）',
     calibration: {
-      evidence: '**无记录**。它与 DEFAULT_MAX_EXTRACTED=16 是「配额的一半」，但没有任何注释说明这层关系',
+      evidence: 'T53 改成公式：DEFAULT_MAX_EXTRACTED（16）÷ 2。此前是字面量 8，注释里也没说明这层关系',
     },
     variesWith: ['DEFAULT_MAX_EXTRACTED 改动时（同一件事的两个端点）', '主题数'],
   },
@@ -2005,7 +2005,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/log/store.ts', name: 'LOG_TOTAL_MAX_BYTES' },
     affects: '清理：全部日志文件（含当前库）总大小超过此值就删最旧的历史文件（20 MB）',
     calibration: {
-      evidence: '**未标定**：裁决 #35 定 20 MB = 5 x 4 MB，与保留文件数对齐',
+      evidence:
+        '**未标定**：裁决 #35 定 20 MB = 5 x 4 MB，与保留文件数对齐；T53 改成公式 LOG_KEEP_FILES × LOG_FILE_MAX_BYTES',
     },
     variesWith: ['单文件阈值', '保留文件数', '磁盘配额'],
   },
@@ -2298,7 +2299,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_SAMPLE_LIMIT' },
     affects: '一次重标最多取多少条样本（分层取样的上限，不是样本库容量）',
     calibration: {
-      evidence: '**未标定**：取样本库容量上限的五分之一；切点只由靠近阈值的样本决定，多取无信息',
+      evidence:
+        '**未标定**：取样本库容量上限的五分之一；T53 改成公式 SAMPLE_MAX_ROWS ÷ 5。切点只由靠近阈值的样本决定，多取无信息',
     },
     variesWith: ['样本库容量', '阈值附近的样本密度'],
   },

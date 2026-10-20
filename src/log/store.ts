@@ -35,8 +35,8 @@ export const LOG_FILE_MAX_BYTES = 4 * 1024 * 1024
 /** 保留文件数：5 个（含当前库）。5 x 4 MB 与总量上限 20 MB 对齐（裁决 #35）。 */
 export const LOG_KEEP_FILES = 5
 
-/** 全部日志文件的总量上限：20 MB（裁决 #35）。 */
-export const LOG_TOTAL_MAX_BYTES = 20 * 1024 * 1024
+/** 全部日志文件的总量上限：保留文件数 × 单文件上限 = 20 MB（裁决 #35）。 */
+export const LOG_TOTAL_MAX_BYTES = LOG_KEEP_FILES * LOG_FILE_MAX_BYTES
 
 /** 轮换与清理的取值。测试可传更小的值来构造轮换，不必真写 4 MB。 */
 export interface LogLimits {

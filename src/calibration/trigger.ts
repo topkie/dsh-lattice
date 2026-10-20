@@ -7,6 +7,7 @@
 // #17（参数整体替换、不新增监听）、#35（冷却 12h、计数阈值 10、漂移 0.01）。
 
 import { TIER_SCALE_STABLE_ATOMS } from '../pipeline/calibrate.js'
+import { SAMPLE_MAX_ROWS } from '../samples/store.js'
 
 /** 冷却期：12 小时（裁决 #35）。按「一次写作会话」量级取的，不是标定值。 */
 export const RECALIBRATE_COOLDOWN_MS = 12 * 3600 * 1000
@@ -20,8 +21,8 @@ export const RECALIBRATE_MIN_POSITIVE = 10
 /** S 漂移阈值（裁决 #35）：192 维下噪声 sd 约 0.0063，0.01 约 1.6σ。 */
 export const RECALIBRATE_DRIFT = 0.01
 
-/** 一次重标最多取多少条样本（分层取样的上限，不是样本库容量）。 */
-export const RECALIBRATE_SAMPLE_LIMIT = 2000
+/** 一次重标最多取多少条样本：样本库容量上限的五分之一（分层取样的上限，不是容量本身）。 */
+export const RECALIBRATE_SAMPLE_LIMIT = SAMPLE_MAX_ROWS / 5
 
 /** 明显无关样本在一次重标里最多取多少条（不确定带全取，这一档只取最近 N 条）。 */
 export const RECALIBRATE_OBVIOUS_LIMIT = 500
