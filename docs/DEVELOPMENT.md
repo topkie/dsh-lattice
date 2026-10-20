@@ -8,6 +8,18 @@
 | 包管理器 | pnpm ≥ 9 |
 | 操作系统 | 不限定（Windows / macOS / Linux 均可） |
 
+### 本机的 `.npmrc`（不进版本控制）
+
+仓库 `.gitignore` 第 6 行排除了 `.npmrc`，所以它**不提交、只在本机生效**。本机这一份三项：
+
+| 键 | 作用 |
+| --- | --- |
+| `node-linker=hoisted` | 用平铺的 `node_modules`，避免本机工具链在符号链接布局下出错 |
+| `registry=https://registry.npmmirror.com` | 本机网络下可用的镜像源 |
+| `verify-deps-before-run=false` | 关闭 pnpm 运行前的依赖预检 —— 某些环境下这一步会失败，与 `scripts/check-all.mjs` 开头「为什么不用 `pnpm run check`」说的是同一类现象 |
+
+换机器或换网络时按需自己加，仓库不提供默认的 `.npmrc`。
+
 ## 常用命令
 
 ```bash
