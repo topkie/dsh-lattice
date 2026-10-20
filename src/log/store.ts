@@ -8,7 +8,7 @@
 // 为什么 WAL + synchronous=NORMAL：日志的代价必须远小于它记录的那件事。
 // 提交不逐次 fsync，崩溃时最多丢最近一批（一个 flush 窗口）—— 这个代价已由裁决接受。
 //
-// 轮换**不用定时器**（裁决 #17）：写前看一眼当前文件大小、启动时再看一眼，就够覆盖
+// 轮换**不用定时器**：写前看一眼当前文件大小、启动时再看一眼，就够覆盖
 // 「降级事件稀疏但长期存在」这个实际分布。定时器只会在没有日志可写的时候空转。
 //
 // 本文件是唯一知道日志库文件名与目录名的地方（门禁会检查 src/log 之外的源码不出现
@@ -29,13 +29,13 @@ export const LOG_DB_NAME = 'lattice-log.db'
 /** 日志库自带的版本号（PRAGMA user_version）。与主库 SCHEMA_VERSION 无关，不混用。 */
 export const LOG_SCHEMA_VERSION = 1
 
-/** 单文件轮换阈值：4 MB（裁决 #35）。 */
+/** 单文件轮换阈值：4 MB。 */
 export const LOG_FILE_MAX_BYTES = 4 * 1024 * 1024
 
-/** 保留文件数：5 个（含当前库）。5 x 4 MB 与总量上限 20 MB 对齐（裁决 #35）。 */
+/** 保留文件数：5 个（含当前库）。5 x 4 MB 与总量上限 20 MB 对齐。 */
 export const LOG_KEEP_FILES = 5
 
-/** 全部日志文件的总量上限：保留文件数 × 单文件上限 = 20 MB（裁决 #35）。 */
+/** 全部日志文件的总量上限：保留文件数 × 单文件上限 = 20 MB。 */
 export const LOG_TOTAL_MAX_BYTES = LOG_KEEP_FILES * LOG_FILE_MAX_BYTES
 
 /** 轮换与清理的取值。测试可传更小的值来构造轮换，不必真写 4 MB。 */

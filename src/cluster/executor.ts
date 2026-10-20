@@ -113,7 +113,7 @@ export type ExecuteOutcome = {
 /**
  * 取消一次计划。
  *
- * **执行中一律拒绝**（裁决 #12）：取消只对「已规划未开始」有意义。接受它等于「取消失败但
+ * **执行中一律拒绝**：取消只对「已规划未开始」有意义。接受它等于「取消失败但
  * 按钮不说」；而尽力中断要把回滚路径重新验一遍，回滚正是这一波最大的风险点。
  */
 export function cancelRecluster(db: DatabaseSync): CancelResult {

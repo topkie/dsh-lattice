@@ -4,7 +4,7 @@
 //   ① 记样本：显式 feedback（模型判断）与自动收集（负样本，按纯度规则过滤）；
 //   ② 报条数：lattice_ping 只报 total / positive / negative，**不报任何原文**；
 //   ③ 会话级「最近一次召回」：只留在内存里，供 lattice_feedback 把 1-based 序号
-//      解析成 atom id（裁决 #33/#34 ⑥）。
+//      解析成 atom id。
 //
 // 为什么入队而不是当场写：召回是热路径，样本是旁路。一次召回可能同时触发自动收集，
 // 若当场写 SQLite，样本就会给召回加一次 fsync。队列用 setImmediate 合并同一轮事件
@@ -52,7 +52,7 @@ export interface SampleInput {
 }
 
 /**
- * 会话级「最近一次召回」（裁决 #34 ⑥）。
+ * 会话级「最近一次召回」。
  *
  * 只放内存、进程结束即失，**不写库**：feedback 的 `ref` 指的是「刚刚那次召回的序号」，
  * 跨会话毫无意义；写进库反而会让重启后的第一次 feedback 引用到上一次会话的结果。
@@ -248,7 +248,7 @@ export function loadCalibrationSamples(limit: number): CalibrationSampleRow[] {
   }
 }
 
-/** 记下「最近一次召回」。只放内存，不写库（裁决 #34 ⑥）。 */
+/** 记下「最近一次召回」。只放内存，不写库。 */
 export function noteLastRecall(recall: LastRecall): void {
   state.lastRecall = { ids: [...recall.ids], top1: recall.top1, vec: recall.vec }
 }
@@ -260,7 +260,7 @@ export function lastRecallInfo(): { count: number; top1: number } | null {
 }
 
 /**
- * 把 feedback 的 1-based 序号解析成 atom id（裁决 #33）。
+ * 把 feedback 的 1-based 序号解析成 atom id。
  *
  * 为什么由插件解析而不是让模型报 atom id：模型管语义位置（「第几条」），插件管结构
  * （那条是哪个 id）。这样模型不必搬运 id，结构暴露面收窄到「指向历史记忆」的两处
@@ -315,7 +315,7 @@ function describeValue(v: unknown): string {
   return typeof v
 }
 
-/** 负样本的档位（裁决 #34 ④）。 */
+/** 负样本的档位。 */
 export type NegativeBand = 'obvious' | 'uncertain'
 
 /**

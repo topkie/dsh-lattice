@@ -84,7 +84,7 @@ afterEach(() => {
 
 describe('工具注册', () => {
   // 模型侧工具数 = 6（ping + write / recall / expand / list / feedback）。
-  // 2026-10-18 按裁决 #30 增加 `lattice_feedback`：它只写独立样本库（裁决 #31），
+  // 2026-10-18 增加 `lattice_feedback`：它只写独立样本库，
   // 所以「多一个工具」不等于「多一个写主库的入口」—— 见 test/samples.test.mjs。
   it('注册了 ping 与五个业务工具（共六个）', () => {
     const names = tools.map((t) => t.name).sort()

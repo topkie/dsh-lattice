@@ -15,10 +15,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import { logDirOf, logFilesIn } from './store.js'
 
-/** 导出行数上限：10 万行（裁决 #35）。 */
+/** 导出行数上限：10 万行。 */
 export const LOG_EXPORT_MAX_ROWS = 100_000
 
-/** 导出字节上限：10 MB（裁决 #35）。 */
+/** 导出字节上限：10 MB。 */
 export const LOG_EXPORT_MAX_BYTES = 10 * 1024 * 1024
 
 /** CSV 表头。四列的顺序就是设计里定的顺序，导出侧与消费侧都不该自己改。 */

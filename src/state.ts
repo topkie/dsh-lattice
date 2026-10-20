@@ -54,7 +54,7 @@ export interface RuntimeConfig {
 }
 
 /**
- * 标定状态的两种取值与四种原因（T44 / 裁决 #28）。
+ * 标定状态的两种取值与四种原因（T44）。
  *
  * **为什么不把「未标定」压成一个布尔**：never（从来没标过）、small_db（库太小，标了也不可信）、
  * model_changed（换过编码模型）、snapshot_invalid（快照坏了或版本不符）四者的补救动作不同 ——

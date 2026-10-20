@@ -2037,7 +2037,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   // ────────────────────────────── 降级日志（src/log/）──────────────────────────────
   //
-  // 这一组的取值来源是 M4 开工裁决 #35（用户裁决），不是语料标定：日志的容量参数
+  // 这一组的取值由用户决定，不是语料标定：日志的容量参数
   // 取决于「降级事件多久发生一次、一条多长」，而本仓库还没有这份实测。
   // 按本表纪律，这里如实写「未标定」，而不是编一个看起来有依据的场景。
   {
@@ -2045,7 +2045,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '降级日志',
     ...chosen(
       () => LOG_FILE_MAX_BYTES,
-      '没有日志事件速率的实测：4 MB 是裁决 #35 的值，「降级事件稀疏、约能放数万条」是判断；' +
+      '没有日志事件速率的实测：4 MB 是产品决定的值，「降级事件稀疏、约能放数万条」是判断；' +
         '本仓库没有事件速率与单条 detail 长度的实测',
     ),
     definedBy: { file: 'src/log/store.ts', name: 'LOG_FILE_MAX_BYTES' },
@@ -2057,7 +2057,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '降级日志',
     ...chosen(
       () => LOG_KEEP_FILES,
-      '裁决 #35 定 5 个；5 个 × 4 MB 与总量 20 MB 相等，是裁决定的磁盘空间预算，没有测量出处',
+      '取 5 个；5 个 × 4 MB 与总量 20 MB 相等，是产品决定的磁盘空间预算，没有测量出处',
     ),
     definedBy: { file: 'src/log/store.ts', name: 'LOG_KEEP_FILES' },
     affects: '清理：历史文件数 + 当前库不超过这个数，超出删最旧的（5 个，含当前库）',
@@ -2081,7 +2081,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '降级日志',
     ...chosen(
       () => LOG_QUEUE_MAX,
-      '200 条在 50 ms 窗口下的吸收能力是按速率推算，本仓库没有降级事件速率的实测；裁决 #35 定 200 条',
+      '200 条在 50 ms 窗口下的吸收能力是按速率推算，本仓库没有降级事件速率的实测；取 200 条',
     ),
     definedBy: { file: 'src/log/index.ts', name: 'LOG_QUEUE_MAX' },
     affects: '缓冲：内存队列上限 200 条；满了丢最旧并计数，不阻塞、不抛错',
@@ -2092,7 +2092,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '降级日志',
     ...chosen(
       () => LOG_FLUSH_WINDOW_MS,
-      '裁决 #35 给「setImmediate 或 50 ms」，实现取两者中更保守的上界；50 ms 是裁决给的窗口，没有测量出处',
+      '取值「setImmediate 或 50 ms」，实现取两者中更保守的上界；50 ms 是产品决定的窗口，没有测量出处',
     ),
     definedBy: { file: 'src/log/index.ts', name: 'LOG_FLUSH_WINDOW_MS' },
     affects:
@@ -2116,7 +2116,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '降级日志',
     ...chosen(
       () => LOG_EXPORT_MAX_ROWS,
-      '裁决 #35 定 10 万行；按单行约 60~120 字节估算 10 万行约 6~12 MB，与 10 MB 字节上限互为上界，' +
+      '取 10 万行；按单行约 60~120 字节估算 10 万行约 6~12 MB，与 10 MB 字节上限互为上界，' +
         '没有导出规模的实测',
     ),
     definedBy: { file: 'src/log/export.ts', name: 'LOG_EXPORT_MAX_ROWS' },
@@ -2126,14 +2126,14 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   {
     name: 'LOG_EXPORT_MAX_BYTES',
     area: '降级日志',
-    ...chosen(() => LOG_EXPORT_MAX_BYTES, '裁决 #35 定 10 MB；与 10 万行上限谁先到谁截断，两个都是裁决值'),
+    ...chosen(() => LOG_EXPORT_MAX_BYTES, '取 10 MB；与 10 万行上限谁先到谁截断，两个都是产品决定的值'),
     definedBy: { file: 'src/log/export.ts', name: 'LOG_EXPORT_MAX_BYTES' },
     affects: '导出：CSV 最多 10 MB（含表头），超过截断并加 # truncated',
     variesWith: ['单行 detail 的长度', '浏览器/编辑器打开大文件的承受度'],
   },
   // ──────────────────────────── 校准样本（src/samples/）────────────────────────────
   //
-  // 这一组的取值来源是 M4 开工裁决 #34（用户裁决），不是语料标定：样本库的容量与
+  // 这一组的取值由用户决定，不是语料标定：样本库的容量与
   // 负样本分档取决于「一次会话里模型会反馈几次」，本仓库还没有这份实测。
   // 按本表纪律，如实写「未标定」，而不是编一个看起来有依据的场景。
   {
@@ -2141,7 +2141,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => SAMPLE_RETAIN_DAYS,
-      '未标定：裁决 #34 ③ 定 90 天，理由是「跨一个季度的对照仍有意义，再久语料族大概率已经变了」；' +
+      '未标定：取 90 天，理由是「跨一个季度的对照仍有意义，再久语料族大概率已经变了」；' +
         '这是判断而非实测，样本的实际衰减速率没有测过',
     ),
     definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_RETAIN_DAYS' },
@@ -2153,7 +2153,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => SAMPLE_MAX_ROWS,
-      '未标定：裁决 #34 ③ 定 1 万条。10 万条向量约 200 MB 已明确不可行；1 万条是' +
+      '未标定：取 1 万条。10 万条向量约 200 MB 已明确不可行；1 万条是' +
         '「够切点估计、又不超过一个普通库的量级」的判断，不是按样本量需求算出来的',
     ),
     definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_MAX_ROWS' },
@@ -2165,7 +2165,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => SAMPLE_NEG_OBVIOUS_MAX,
-      '未标定：裁决 #34 ④ 定 2000 条，理由是该档「对切点信息量低」，只需要少量代表；' +
+      '未标定：取 2000 条，理由是该档「对切点信息量低」，只需要少量代表；' +
         '具体多少条够，要等 T46 的重标样本量与切点偏移实测',
     ),
     definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_NEG_OBVIOUS_MAX' },
@@ -2179,7 +2179,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => SAMPLE_OBVIOUS_MAX_TOP1,
-      '未标定：裁决 #34 ④ 给出 0.4 / 0.6 两条线，但没有说明依据；可对照的实测（view.ts 注释里的' +
+      '未标定：取 0.4 / 0.6 两条线，但没有说明依据；可对照的实测（view.ts 注释里的' +
         '「无关查询 top1 上界」）量级相近但口径不同，不能当这条线的标定 —— 固定 0.4 在大库上' +
         '会把「有点关系」的召回记成明显无关',
       { guardedBy: ['test/samples.test.mjs'] },
@@ -2193,7 +2193,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => SAMPLE_UNCERTAIN_MAX_TOP1,
-      '未标定：裁决 #34 ④ 的 0.6，与上一条同源 —— 两条线一起定，分开调没有意义；' +
+      '未标定：取 0.6，与上一条同源 —— 两条线一起定，分开调没有意义；' +
         '它们的位置应当由 T46 的切点扫描给出，本表只记录当前取值',
       { guardedBy: ['test/samples.test.mjs'] },
     ),
@@ -2308,7 +2308,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => RECALIBRATE_COOLDOWN_MS,
-      '无测量依据，是产品口味（裁决 #35）：12 小时对应「一次写作会话」量级；没有任何测量' +
+      '无测量依据，是产品口味：12 小时对应「一次写作会话」量级；没有任何测量' +
         '能回答「12 小时比 6 小时更合适」',
     ),
     display: '12 小时',
@@ -2340,7 +2340,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '校准样本',
     ...chosen(
       () => RECALIBRATE_MIN_POSITIVE,
-      '未标定（裁决 #35 的取值）：与写入节奏匹配的经验数，没有测量能给出「少于几条算不够」',
+      '未标定：与写入节奏匹配的经验数，没有测量能给出「少于几条算不够」',
     ),
     definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_POSITIVE' },
     affects: '闸④：正样本少于 10 条不重标（切点会被单条样本牵着走）',

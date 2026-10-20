@@ -8,12 +8,12 @@
 //   lattice_recall    按需取回（返回组装好的三段式文本，不是裸数组）
 //   lattice_expand    展开某条记忆的全文或它的兄弟
 //   lattice_list      列目录（「库里有什么」，只读、分页、可过滤）
-//   lattice_feedback  对上次召回给出「第几条有用 / 无用」（裁决 #30/#33）
+//   lattice_feedback  对上次召回给出「第几条有用 / 无用」
 //
 // **还有第六个动作，但没有第六个工具**：删除。`lattice_forget` 刻意不在下面这个数组里
 // —— 理由见文件尾 `forgetTool` 上方那段注释。
 //
-// `lattice_feedback` 为什么是独立工具而不是挂在 write 上（裁决 #30）：写入是高频路径
+// `lattice_feedback` 为什么是独立工具而不是挂在 write 上：写入是高频路径
 // （现在已经 8 个参数），反馈是低频动作；挂上去等于每次写入都替反馈付一次参数成本。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -406,7 +406,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         // 该拆的记忆连同它被用来解决什么一起给出来」。其他锚行不受影响。
         scene: q,
       })
-      // 会话级「最近一次召回」：只留在内存里（裁决 #34 ⑥），lattice_feedback 的 ref 靠它解析。
+      // 会话级「最近一次召回」：只留在内存里，lattice_feedback 的 ref 靠它解析。
       // 记的是 view.anchorIds（真正展示给模型的那批），不是融合后的全部候选。
       noteLastRecall({ ids: view.anchorIds, top1: recalled.meta.topCosine, vec: vq })
       // 负样本自动收集：分类是纯逻辑，落盘由样本模块延后到下一轮事件循环 ——
@@ -616,9 +616,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   })
 
   /**
-   * 校准样本的**唯一人工入口**（裁决 #30/#33）。
+   * 校准样本的**唯一人工入口**。
    *
-   * 只写独立样本库，**不写 edge、不写主库、不触发重标**（裁决 #31：正样本是
+   * 只写独立样本库，**不写 edge、不写主库、不触发重标**（正样本是
    * 「查询↔记忆」，edge 是「记忆↔记忆」，不是同一条数据）。`ref` 是上次召回的 1-based
    * 序号，由插件映射回 atom id —— 模型管语义位置，插件管结构。
    */

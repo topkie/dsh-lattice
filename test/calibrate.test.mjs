@@ -19,7 +19,7 @@ describe('按库规模重标定精简档下界', () => {
 
   it('每个锚点带 95% 区间，且区间包含该点的实测值', () => {
     // 只守**形态**：区间有序、且把 briefMin 包在里面。数值来源（这个 ci 是不是抄对了）
-    // 由 dsh-lattice-devnotes/probes/calib-routes/E-intervals/run.mjs 复核 —— 它要重抽 400 次，
+    // 由探针脚本复核 —— 它要重抽 400 次，
     // 不适合进 CI；但若有人改了 briefMin 却忘了同步 ci，这条会红。
     for (const a of TIER_SCALE_ANCHORS) {
       const [lo, hi] = a.ci
