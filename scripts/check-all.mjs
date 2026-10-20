@@ -39,6 +39,9 @@ const STEPS = [
   // 排在这里是因为它只读 src/ 与 dist/（build 已产出），不需要模型与网络 —— 与其余静态检查同类。
   // **为什么必须进门禁**：不进门禁的检查，与一句写在文档里的话，区别只是多一个文件（§1.3 防呆第 11 条）。
   ['thresholds', 'scripts/print-thresholds.mjs', []],
+  // 阈值来历的评审批次（T54）：把「现在补不了」的条目记成存量清单（thresholds-review-baseline.json），
+  // 只允许变短 —— 新增的待评审条目不能靠加基线消掉。与 thresholds 同类：只读源码，不需要模型与网络。
+  ['thresholds-review', 'scripts/print-thresholds.mjs', ['--check-review']],
   // 文档一致性：文档里提到的「仓库内路径」与「表名」，能不能在仓库里找到。
   // **为什么要有它**：截至 2026-10-17，「指向不存在的结构」已经出现五处（一份平行的 DDL、
   // 三个不存在的模块、一个从未实现的位掩码、一条没有输入的图路、一个不存在的 config.ts）。

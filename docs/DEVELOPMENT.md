@@ -453,7 +453,7 @@ src/
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 | `scripts/snapshot-baseline.mjs` | 另存对照库快照到 `.probe/snap/<标签>/`（改规则**之前**跑） |
 | `scripts/build-baseline.mjs` | 重建基准库（`--source <cards.json>`），自带三条自检 |
-| `scripts/print-thresholds.mjs` | 阈值登记表：打印名称/值/标定来源/可变条件 + 与设计文档对照 + 覆盖核对（AST，含表达式型常量）+ 标定来源格式校验（不需模型，可随时跑） |
+| `scripts/print-thresholds.mjs` | 阈值登记表：打印名称/值/来历/可变条件 + 与设计文档对照 + 覆盖核对（AST，含表达式型常量）+ 三个来历查询与评审基线检查（不需模型，可随时跑） |
 
 基准库由 `scripts/build-baseline.mjs` 生成、快照由 `scripts/snapshot-baseline.mjs` 另存
 （见上「标准验证库」）。**改入口规则类的验证脚本不再自带默认库路径**：要对比就显式给
@@ -466,11 +466,54 @@ src/
 
 **阈值登记表**（`src/thresholds.ts`）是这条约束的载体：每个经验取值在那里有一行，
 写明定义位置、可变条件、第二个取值点，并引用源码里的真值而不是复制一份数字。
-标定依据只放指针（`无记录` / `calib@<semver>` / `calib@<semver> <报告名>`），
-不记语料规模与来源分布 —— 那些属于 calib 重标报告。`print-thresholds.mjs` 负责打印、
-用 TypeScript 编译器 API 核对覆盖（源码里的模块级数值常量，含表达式型；既没登记
-也没进豁免清单就非零退出）并校验来源格式（不合形状也非零退出）。
+来历写在条目的 `origin` 里（`tool` / `finding` / `why` / `scale`），标定报告只在
+`tool` 或 `finding` 里指名，不复制语料规模与来源分布 —— 那些属于 calib 重标报告。
+`print-thresholds.mjs` 负责打印、用 TypeScript 编译器 API 核对覆盖（源码里的模块级数值常量，
+含表达式型；既没登记也没进豁免清单就非零退出），并跑三个来历查询与评审基线检查。
 新增或改动阈值时，**先跑它**看缺口。
+
+### 阈值登记：来历与评审
+
+每个登记项要么是 `recheckable`，要么是 `chosen`。判法是「测量推不推得出这个值」，
+不是「现在有没有记录」：
+
+- `recheckable`：测过，而且测量与该值之间有可复算的关系 —— 测量结果变了，这个值要跟着改。
+  写成 `...recheckable(() => 常量, { tool, finding })`。
+- `chosen`：没有任何测量能给出它（设计判断、算法惯例、容量取舍、接口约束）。
+  写成 `...chosen(() => 常量, '为什么取这个值')`。**`why` 里不许出现测量数字**：
+  写了数字就说明该判 `recheckable`，那个数字该进 `finding`。
+
+曾有测量、但数值与条件都没留下的，判 `recheckable` 并把缺的字段留空 —— 判 `chosen`
+会让「记录丢失」变成「不需要记录」。
+
+`recheckable` 的字段：
+
+| 字段 | 填什么 |
+|---|---|
+| `tool` | 怎么复算：脚本路径；没有脚本就写「无脚本」并指明依据哪份记录 |
+| `finding` | 测量或复算得出的事实（区间、对照结果、算式依赖） |
+| `encoderModel` / `scale` / `at` | 测量用的编码模型、语料条数、日期；原记录没有就留空，不猜 |
+| `formula: true` | 值由代码里的算式算出：`--needs-review` 跳过它 |
+| `guardedBy` | 按常量名断言默认值的测试文件（`chosen` 也有这个字段） |
+
+T54 迁移完成后，旧的 `evidence`（解释）与 `source`（来源指针）已删除：解释进
+`finding` / `why`，来源指针进 `tool` / `at`，不保留第二份。
+
+**三个查询**（都只读登记表；136 条全部已有 `origin`）：
+
+- `node scripts/print-thresholds.mjs --needs-review`：声明可复算、但缺编码模型与语料规模的条目。
+  条件补不上的，才写进评审基线。
+- `node scripts/print-thresholds.mjs --unguarded`：没有测试按常量名断言默认值的条目。
+- `node scripts/print-thresholds.mjs --undated`：可复算、但没有记录测量时间的条目。只是信息，不要求动作。
+
+**评审基线**（`thresholds-review-baseline.json`）是临时清单，只允许变短：
+
+1. 基线里的名字必须是登记表里真实存在的条目 —— 条目改名或删了，基线要一起改、删；
+2. 每条必须写理由：为什么现在补不了；
+3. 当前查询结果必须都在基线里 —— 新增的待评审条目不能靠把它加进基线消掉；
+4. 基线里已经不在查询结果中的项不报错，删掉即可。
+
+门禁里的 `thresholds-review` 步骤跑这项检查。两个集合都空了，就删掉这个文件。
 
 **档位阈值按库规模重标**（`src/pipeline/calibrate.ts`）。`view.ts` 的 `tierOf(topCosine, briefMin)`
 第二个参数默认仍是旧值，而运行时经 `briefMinFor(db)` 取标定值 —— 它按库的 atom 数从一张**实测锚点表**

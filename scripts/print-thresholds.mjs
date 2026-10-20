@@ -1,21 +1,31 @@
-// 阈值表打印 + 覆盖核对 + 标定来源格式校验。
+// 阈值表打印 + 覆盖核对。
 //
-// 为什么需要它：阈值必须带标定依据存在，而「有没有带」不能靠人记得检查。这条命令一次做三件事：
-//   1. 打印全部已登记阈值（名称 / 当前值 / 标定来源 / 可变条件 / 定义位置），可直接贴进文档；
+// 为什么需要它：阈值必须带标定依据存在，而「有没有带」不能靠人记得检查。这条命令一次做两件事：
+//   1. 打印全部已登记阈值（名称 / 当前值 / 来历 / 可变条件 / 定义位置），可直接贴进文档；
 //   2. 用 TypeScript 编译器 API 遍历 src 下每一个模块级变量声明，初始化式能静态求值成数字的
-//      （字面量、四则运算、括号、位运算），列出既没登记、也不在豁免清单里的（应当为空）；
-//   3. 校验「标定来源」只取三种形状：无记录 / calib@<semver> / calib@<semver> <报告名>。
+//      （字面量、四则运算、括号、位运算），列出既没登记、也不在豁免清单里的（应当为空）。
+//
+// 该表的另一部分是**来历**（T54）：每个条目要么是 recheckable（测过、可复算），
+// 要么是 chosen（没有测量能给出它）。来历的三种查询与评审基线检查在这里：
+//
+//   node scripts/print-thresholds.mjs --needs-review   声明可复算、但缺编码模型与语料规模的条目
+//   node scripts/print-thresholds.mjs --unguarded      没有测试按常量名断言默认值的条目
+//   node scripts/print-thresholds.mjs --undated        可复算、非公式、但没有记录测量时间的条目（只是信息）
+//   node scripts/print-thresholds.mjs --check-review   评审基线检查（门禁调用；失败即非零退出）
+//
+// 三个查询只读登记表，不写库、不改源码；T54 迁移完成后每条都有 origin。
 //
 // 用法：node scripts/print-thresholds.mjs [--md] [--quiet]
 //
-// 退出码：0 = 覆盖核对与来源格式都通过；
-//         1 = 有未登记常量 / 默认值被藏进运行时对象 / 来源格式不合法 / 分叉未解释。
+// 退出码：0 = 覆盖核对与评审基线都通过；
+//         1 = 有未登记常量 / 默认值被藏进运行时对象 / 分叉未解释 /
+//             评审基线不满足（--check-review）。
 //
 // 为什么用 AST 而不是一行正则：正则只认「整行恰好是 const X = 裸数字」，表达式型常量
 // （12 * 3600 * 1000、5 * 1024）完全隐身 —— 2026-10-20 实测过：追加一行表达式常量，脚本
 // 退出码 0、日志里一个字都没有；追加一行裸数字则退出码 1。扫描器对最该防的那类新阈值空转。
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -25,7 +35,11 @@ import {
   constNameOf,
   currentValue,
   definitionSite,
+  needsReviewEntries,
+  reviewBaselineProblems,
   subKeys,
+  undatedEntries,
+  unguardedEntries,
 } from '../dist/thresholds.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -34,6 +48,106 @@ const has = (name) => process.argv.includes('--' + name)
 
 const MD = has('md')
 const QUIET = has('quiet')
+
+// ─────────────────── ⓪ 来历：三个查询与评审基线（T54）───────────────────
+//
+// 三个查询都只读登记表，不写库、不改源码。
+
+/** needs-review 的「缺什么」：判据在 dist/thresholds.js 的 needsReviewEntries。 */
+function missingOf(entry) {
+  const o = entry.calibration.origin
+  const missing = []
+  if (o.encoderModel === undefined) missing.push('编码模型')
+  if (o.scale === undefined) missing.push('语料规模')
+  return '缺 ' + missing.join('、')
+}
+
+const QUERIES = {
+  'needs-review': () =>
+    needsReviewEntries().map((e) => ({ name: e.name, area: e.area, detail: missingOf(e) })),
+  unguarded: () => unguardedEntries().map((e) => ({ name: e.name, area: e.area, detail: '' })),
+  undated: () => undatedEntries().map((e) => ({ name: e.name, area: e.area, detail: '' })),
+}
+
+function renderQuery(mode) {
+  const rows = QUERIES[mode]()
+  console.log('# --' + mode + '：' + rows.length + ' 条')
+  if (rows.length === 0) console.log('（空）')
+  for (const r of rows) {
+    console.log('- ' + r.name + ' ｜ ' + r.area + (r.detail === '' ? '' : ' ｜ ' + r.detail))
+  }
+}
+
+/**
+ * 评审基线：把当前还没条件补的条目记成一份存量清单，只允许变短。
+ *
+ * 四条规则（任何一条不满足都非零退出）：
+ * 1. 每条必须带理由 —— 空字符串不算理由；
+ * 2. 基线里的名字必须是登记表里真实存在的条目 —— 「新增一个名字」与「条目删了、基线还在」
+ *    都会在这里红（后者就是「删除时留转到哪去了」的机器检查面：条目真删了，基线要一起删）；
+ * 3. 当前查询结果 ⊆ 基线 —— 代码里新出现一个待评审条目，不能靠把它塞进基线消掉；
+ * 4. 基线里当前已不在结果中的项不报错，只计数 —— 基线只允许变短。
+ */
+function checkReviewBaseline() {
+  const BASELINE = join(ROOT, 'thresholds-review-baseline.json')
+  if (!existsSync(BASELINE)) {
+    console.error('评审基线不存在：' + 'thresholds-review-baseline.json')
+    console.error('修法：新建该文件，写 { "_note": "…", "needsReview": {}, "unguarded": {} }；')
+    console.error('去哪看：docs/DEVELOPMENT.md「阈值登记」一节。')
+    process.exit(1)
+  }
+  let baseline
+  try {
+    baseline = JSON.parse(readFileSync(BASELINE, 'utf8'))
+  } catch (err) {
+    console.error('评审基线不是合法 JSON：' + err.message)
+    console.error('修法：修好 JSON 语法；去哪看：docs/DEVELOPMENT.md「阈值登记」。')
+    process.exit(1)
+  }
+  const current = { needsReview: QUERIES['needs-review'](), unguarded: QUERIES.unguarded() }
+  const problems = reviewBaselineProblems(baseline)
+  // 「已解决」= 基线里当前不再出现的项：不报错，只提示可以删（基线只允许变短）。
+  let resolved = 0
+  for (const [key, rows] of [
+    ['needsReview', current.needsReview],
+    ['unguarded', current.unguarded],
+  ]) {
+    const list = baseline[key]
+    if (list === null || typeof list !== 'object' || Array.isArray(list)) continue
+    const names = new Set(rows.map((r) => r.name))
+    for (const name of Object.keys(list)) if (!names.has(name)) resolved++
+  }
+  if (problems.length > 0) {
+    console.error('评审基线不通过（' + problems.length + ' 项）：')
+    for (const p of problems) console.error('  - ' + p)
+    console.error('')
+    console.error('修法：能补条件的补条件；确实补不了的才进基线，并写清为什么。')
+    console.error('去哪看：docs/DEVELOPMENT.md「阈值登记」一节。')
+    process.exit(1)
+  }
+  console.log(
+    '评审基线：通过（needsReview ' +
+      current.needsReview.length +
+      ' 条 / unguarded ' +
+      current.unguarded.length +
+      ' 条；基线里已不在结果中的 ' +
+      resolved +
+      ' 条，可删）',
+  )
+  if (current.needsReview.length === 0 && current.unguarded.length === 0) {
+    console.log('两个集合都空了：这份临时清单已经没用，删掉 thresholds-review-baseline.json。')
+  }
+}
+
+const QUERY_MODE = ['needs-review', 'unguarded', 'undated'].find((m) => has(m))
+if (QUERY_MODE !== undefined) {
+  renderQuery(QUERY_MODE)
+  process.exit(0)
+}
+if (has('check-review')) {
+  checkReviewBaseline()
+  process.exit(0)
+}
 
 // ─────────────────────────── ① 源码扫描：AST ───────────────────────────
 
@@ -298,27 +412,15 @@ const scanned = decls.filter((d) => d.value !== null)
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
 
-// ─────────────────────────── ④ 标定来源格式 ───────────────────────────
+// ─────────────────────────── ④ 渲染 ───────────────────────────
 
-/**
- * 只允许三种形状：
- *   无记录
- *   calib@<semver>
- *   calib@<semver> <报告名>
- * semver 按 major.minor.patch（可带 prerelease）；报告名至少一个非空白字符，不含换行。
- * 不检查报告在仓库里能不能解析 —— 标定报告不随仓库分发是常态（它可能含语料信息）。
- */
-const SOURCE_RE = /^(?:无记录|calib@\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?: \S(?:.*\S)?)?)$/
-
-const badSources = []
-for (const entry of THRESHOLDS) {
-  const source = entry.calibration?.source ?? '无记录'
-  if (typeof source !== 'string' || !SOURCE_RE.test(source)) {
-    badSources.push({ name: entry.name, source: String(source) })
-  }
+/** 来历的短标签：表格里一列能看懂「这个值是怎么来的」。 */
+function originLabel(entry) {
+  const o = entry.calibration?.origin
+  if (o === undefined) return '无来历'
+  if (o.kind === 'chosen') return '选择'
+  return o.formula === true ? '可复算（公式）' : '可复算'
 }
-
-// ─────────────────────────── ⑤ 渲染 ───────────────────────────
 
 const missingAnchors = []
 const rows = []
@@ -343,7 +445,7 @@ for (const entry of THRESHOLDS) {
     name: entry.name,
     value: shown,
     area: entry.area,
-    source: entry.calibration?.source ?? '无记录',
+    origin: originLabel(entry),
     varies: entry.variesWith.join('；'),
     where,
     design: entry.design,
@@ -353,8 +455,9 @@ for (const entry of THRESHOLDS) {
   })
 }
 
-const withSource = rows.filter((r) => r.source !== '无记录')
-const withoutSource = rows.length - withSource.length
+const formulaCount = rows.filter((r) => r.origin === '可复算（公式）').length
+const recheckableCount = rows.filter((r) => r.origin === '可复算').length
+const chosenCount = rows.filter((r) => r.origin === '选择').length
 
 const out = []
 const say = (...xs) => out.push(...xs)
@@ -366,20 +469,22 @@ say('## 已登记阈值')
 say(
   '- 共 ' +
     rows.length +
-    ' 行：有标定来源 ' +
-    withSource.length +
-    ' 行，无记录 ' +
-    withoutSource +
-    ' 行（来源形状：无记录 / calib@<semver> / calib@<semver> <报告名>）',
+    ' 行：可复算 ' +
+    recheckableCount +
+    ' 行（其中公式 ' +
+    formulaCount +
+    ' 行）、选择 ' +
+    chosenCount +
+    ' 行',
 )
 say('')
 if (MD) {
-  say('| 名称 | 当前值 | 段 | 标定来源 | 可变条件 | 定义位置 |')
+  say('| 名称 | 当前值 | 段 | 来历 | 可变条件 | 定义位置 |')
   say('|---|---|---|---|---|---|')
   for (const r of rows) {
     say(
       '| ' +
-        [r.name, r.value, r.area, r.source, r.varies, r.where]
+        [r.name, r.value, r.area, r.origin, r.varies, r.where]
           .map((x) => String(x).replace(/\|/g, '\\|'))
           .join(' | ') +
         ' |',
@@ -387,23 +492,17 @@ if (MD) {
   }
 } else {
   // 每行六个字段，行内用 ' | ' 分隔 —— 一行一条，可直接贴进文档。
-  say(['名称', '当前值', '段', '标定来源', '可变条件', '定义位置'].join(' | '))
-  for (const r of rows) say([r.name, r.value, r.area, r.source, r.varies, r.where].join(' | '))
+  say(['名称', '当前值', '段', '来历', '可变条件', '定义位置'].join(' | '))
+  for (const r of rows) say([r.name, r.value, r.area, r.origin, r.varies, r.where].join(' | '))
 }
 
 say('')
-say('## 标定来源')
+say('## 来历')
 say('')
-if (withSource.length === 0) {
-  say('- 有指针 0 行 —— 全部写的是「无记录」')
-} else {
-  say('- 有指针 ' + withSource.length + ' 行：')
-  for (const r of withSource) say('    ' + r.name + ' = ' + r.source + '（' + r.where + '）')
-}
+say('- 可复算 ' + recheckableCount + ' 行、公式 ' + formulaCount + ' 行、选择 ' + chosenCount + ' 行。')
 say(
-  '- 「无记录」' +
-    withoutSource +
-    ' 行。查不到就留空：把缺口暴露出来是本表的产出之一，编一个看起来合理的来源比留空更糟。',
+  '- 缺编码模型或语料规模的见 --needs-review；没有按常量名断言的测试见 --unguarded；' +
+    '没有测量时间的见 --undated。补不上的条件记在 thresholds-review-baseline.json。',
 )
 
 // 设计文档对照
@@ -502,16 +601,6 @@ for (const g of DESIGN_GAPS) {
 }
 
 say('')
-say('## 标定来源格式（非零退出的条件之一）')
-say('')
-if (badSources.length === 0) {
-  say('- 全部合法：来源只取 无记录 / calib@<semver> / calib@<semver> <报告名> 三种形状')
-} else {
-  say('**以下来源不符合形状**（不要求报告在仓库内可解析，但必须是这三种形状之一）：')
-  for (const b of badSources) say('- 格式不合法 ' + b.name + ' = ' + b.source)
-}
-
-say('')
 say('## 覆盖核对（源码模块级数值常量，AST 扫描）')
 say('')
 say('- 扫描范围：src/**/*.ts（' + listSources().length + ' 个文件）')
@@ -596,7 +685,6 @@ if (QUIET) {
     for (const b of bypassed) keep.push('    ' + b.name + '（' + b.file + ':' + b.line + '）：' + b.reason)
   }
   for (const x of unexplainedDiverges) keep.push('- 分叉未解释 ' + x)
-  for (const b of badSources) keep.push('- 格式不合法 ' + b.name + ' = ' + b.source)
   console.log(keep.join('\n'))
 } else {
   console.log(out.join('\n'))
@@ -605,13 +693,6 @@ if (QUIET) {
 if (unregistered.length > 0 || missingAnchors.length > 0 || bypassed.length > 0) {
   console.error('')
   console.error('覆盖核对未通过：有未登记常量、默认值被藏进运行时对象，或定位失败的登记项。')
-  process.exit(1)
-}
-
-if (badSources.length > 0) {
-  console.error('')
-  console.error('标定来源格式不合法：只允许「无记录 / calib@<semver> / calib@<semver> <报告名>」。')
-  for (const b of badSources) console.error('  ' + b.name + ' = ' + b.source)
   process.exit(1)
 }
 

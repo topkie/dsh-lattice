@@ -73,6 +73,9 @@ $env:GIT_BRANCH = (git branch --show-current); node scripts/check-all.mjs
 
 CI 对**所有分支**的 push 都会跑第 1 项。
 
+新增或改动阈值时，登记项要写清来历（`recheckable` / `chosen`）—— 写法、三个查询与评审基线见
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「阈值登记」一节。没有来历的新条目会让门禁红。
+
 ## 提交信息
 
 采用约定式提交（Conventional Commits），首行格式：
