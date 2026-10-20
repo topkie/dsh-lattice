@@ -60,6 +60,20 @@ export const META_SPLIT_CONFIRMED = 'split_confirmed'
  */
 export const META_SPLIT_SEGMENTS = 'split_pending_segments'
 
+/**
+ * 重聚类的「计划时间」与「开始时间」（T47 的整理入口）。
+ *
+ * 为什么是两个键、而不是一个状态字段：三个键各自回答一个问题 ——
+ *   `planned_at` 有值 → 有人点过「开始整理」，且它还没跑完；
+ *   `started_at` 有值 → 那次执行**开始过**（开始过却还留着，说明它没成功）；
+ *   `recluster_at` 有值 → 上一次成功的时间（跑完才写，与主数据同一个事务）。
+ * 合成一个枚举字段会让「失败」与「正在跑」在库里长得一模一样，只能靠进程内状态区分。
+ *
+ * 缺这两个键的旧库按「没规划过」处理。
+ */
+export const META_RECLUSTER_PLANNED_AT = 'recluster_planned_at'
+export const META_RECLUSTER_STARTED_AT = 'recluster_started_at'
+
 /** 写入一个键（已存在则覆盖）。 */
 export function setMeta(db: DatabaseSync, key: string, value: string, now = Date.now()): void {
   db.prepare(
@@ -79,6 +93,11 @@ export function ensureMeta(db: DatabaseSync, key: string, value: string, now = D
   if (row !== undefined) return false
   setMeta(db, key, value, now)
   return true
+}
+
+/** 删掉一个键（不存在时什么也不做）。返回是否真的删掉了一行。 */
+export function deleteMeta(db: DatabaseSync, key: string): boolean {
+  return Number(db.prepare('DELETE FROM meta WHERE key = ?').run(key).changes) > 0
 }
 
 /** 读一个键；不存在返回 undefined。 */

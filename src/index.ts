@@ -51,6 +51,15 @@ import { openVault } from './db/open.js'
 import { forgetAtom } from './pipeline/forget.js'
 import { setArchived } from './pipeline/archive.js'
 import { confirmSplit, ignoreSplit } from './pipeline/split.js'
+import {
+  cancelRecluster,
+  clearPlanTimer,
+  executePlannedRecluster,
+  hasPendingPlan,
+  planRecluster,
+  readReclusterState,
+  resumeIfPending,
+} from './cluster/executor.js'
 import { configureSamples, sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
@@ -153,6 +162,19 @@ const UNARCHIVE_ROUTE_PATH = '/api/lattice-unarchive'
  */
 const SPLIT_CONFIRM_ROUTE_PATH = '/api/lattice-split-confirm'
 const SPLIT_IGNORE_ROUTE_PATH = '/api/lattice-split-ignore'
+
+/**
+ * 整理入口的两条写路由（T47）：规划与取消。
+ *
+ * 为什么是两条而不是一条带动作参数：与归档 / 恢复同一条理由 —— 动作方向写进路径。
+ * 但这里共用同一个 handler 而不是两份：两者的差别只是调哪个函数，而栅栏、读体、回执形状
+ * 完全一样，拆成两份会让「两边行为应当对称」变成要靠比对两份代码来验证的话。
+ *
+ * **状态不在这两条里报**：它并入体检路由（`/api/lattice-audit` 的 `recluster` 字段），
+ * 因为界面在打开面板时本来就要拉一次体检，多一条只读路由只会多一次请求。
+ */
+const RECLUSTER_PLAN_ROUTE_PATH = '/api/lattice-recluster-plan'
+const RECLUSTER_CANCEL_ROUTE_PATH = '/api/lattice-recluster-cancel'
 
 /**
  * 降级日志的导出路由：只读。
@@ -413,8 +435,22 @@ export function apply(ctx: Context, config: unknown): void {
           path: SPLIT_IGNORE_ROUTE_PATH,
           handler: (req, res) => splitRoute(runtimeCfg, req, res, false),
         }),
+        // 整理入口（T47）：规划 / 取消共用同一个 handler，理由见 RECLUSTER_* 常量的注释。
+        webServer.register({
+          kind: 'exact',
+          path: RECLUSTER_PLAN_ROUTE_PATH,
+          handler: (req, res) => reclusterRoute(runtimeCfg, req, res, 'plan'),
+        }),
+        webServer.register({
+          kind: 'exact',
+          path: RECLUSTER_CANCEL_ROUTE_PATH,
+          handler: (req, res) => reclusterRoute(runtimeCfg, req, res, 'cancel'),
+        }),
       ]
+      bootResume(runtimeCfg)
       return () => {
+        // 挂着的延迟必须清掉：它闭包里有 db 句柄，插件卸载后还会到点开火。
+        clearPlanTimer()
         for (const dispose of disposers) dispose()
       }
     }, 'dsh-lattice: web routes')
@@ -691,13 +727,17 @@ function auditRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerRespons
     jsonOut(res, 200, {
       ok: true,
       ...noDataReport(opts, '数据库文件不存在：还没有写入过任何记忆，这是「无数据」，不是「没有发现」。'),
+      // 没有库不等于「整理跑过」：四态里报 idle，与有库但没跑过是同一个说法。
+      recluster: { phase: 'idle', plannedAt: null, startedAt: null, lastAt: null },
     })
     return
   }
   let db: DatabaseSync | null = null
   try {
     db = openVault(file, { readOnly: true }).db
-    jsonOut(res, 200, { ok: true, ...audit(db, opts) })
+    // 整理入口的状态并入体检：界面打开面板时本来就要拉一次体检，多一条只读路由只会
+    // 多一次请求。`recluster` 由执行器判定（四态，见 cluster/executor.ts）。
+    jsonOut(res, 200, { ok: true, ...audit(db, opts), recluster: readReclusterState(db) })
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'read-failed', message: reasonOf(e) })
   } finally {
@@ -1005,6 +1045,99 @@ async function splitRoute(
   }
 }
 
+/**
+ * 整理入口（T47）：规划与取消。
+ *
+ * 三条边界：
+ *   1. 规划要 `confirm: true` —— 一次误触会重排全库主题，而它不可撤销；
+ *   2. 执行中取消返回 **409**，状态一个字不动（裁决 #12）；没有待执行的计划也是 200
+ *      （幂等，不是错误 —— 判据要求「再取消一次不报错」）；
+ *   3. 回执里报的是**规划 / 取消之后的状态**，不是执行结果。执行在几秒后由定时器触发，
+ *      结果落到体检查询的 `recluster` 字段里 —— 请求不等它。
+ */
+async function reclusterRoute(
+  cfg: RuntimeConfig,
+  req: IncomingMessage,
+  res: ServerResponse,
+  action: 'plan' | 'cancel',
+): Promise<void> {
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  try {
+    const rt = getRuntime(cfg)
+    if (action === 'plan') {
+      if (raw.confirm !== true) {
+        jsonOut(res, 400, {
+          ok: false,
+          error: 'need-confirm',
+          message: '整理会重排全库的主题，请求体里必须带 confirm: true',
+        })
+        return
+      }
+      // 规划只写 meta 并挂一个一次性延迟；真正的执行在这里之外发生，不等它。
+      const state = planRecluster(rt.db, () => {
+        void executePlannedRecluster(rt.db)
+      })
+      jsonOut(res, 200, { ok: true, ...state })
+      return
+    }
+    const r = cancelRecluster(rt.db)
+    if (!r.ok && r.reason === 'running') {
+      jsonOut(res, 409, {
+        ok: false,
+        error: 'running',
+        message: '正在整理，不能取消',
+        ...readReclusterState(rt.db),
+      })
+      return
+    }
+    jsonOut(res, 200, { ok: true, cancelled: r.ok, ...(r.ok ? r.state : readReclusterState(rt.db)) })
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'recluster-failed', message: reasonOf(e) })
+  }
+}
+
+/**
+ * 启动补跑：上次规划过却没跑完的整理，这里补一次（T47）。
+ *
+ * 判据是「`planned` 有值」，不看时间 —— 进程崩溃、断电、关窗口留下的是同一个痕迹。
+ * 没有计划时它什么也不做。
+ *
+ * **两个约束**：
+ *   1. 库不存在时不补跑、也不建库。否则「插件加载」会变成「建库」，破坏原来的懒加载
+ *      （体检的「无数据」形态就靠它）；
+ *   2. 用临时连接，不借 `getRuntime`。否则一个长期句柄挂在插件上，库文件被它按住。
+ *      启动时没有别的请求在跑，临时连接不会与谁抢写锁；跑完就关。
+ */
+function bootResume(cfg: RuntimeConfig): void {
+  const file = join(resolveDataDir(cfg.dataDir), 'lattice.db')
+  if (!existsSync(file)) return
+  try {
+    const db = openVault(file).db
+    // 没有待执行的计划就当场关掉：把一个打开的句柄留到微任务之后再关，会让「插件加载」
+    // 期间库文件被按住（测试删临时目录时会 EPERM，那是同一个形态）。
+    if (!hasPendingPlan(db)) {
+      db.close()
+      return
+    }
+    void resumeIfPending(db).finally(() => {
+      try {
+        db.close()
+      } catch {
+        /* 已关闭 */
+      }
+    })
+  } catch {
+    /* 打不开就下次启动再说：补跑不是加载插件的前提 */
+  }
+}
 /** 本地日期 YYYYMMDD，用于导出文件名（不带时间：同一天多次导出靠浏览器去重）。 */
 function dayStamp(now = new Date()): string {
   const pad = (n: number): string => (n < 10 ? '0' + n : String(n))
