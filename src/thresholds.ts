@@ -5,25 +5,46 @@
 // 没有任何地方记着它是在什么语料上标定的。缺的不是某次修正，而是「阈值必须带标定依据」
 // 这条流程约束。本模块是那条约束的载体。
 //
-// **设计的形状（三条约束）**
+// **三层边界：每一层只有一个真相源**
 //
-// 1. **值的真相源留在原处**。这里不写数字，只写 `() => CONST` —— 打印时现取。把值搬进来
-//    会让「为什么是这个值」的长注释与值分家，那正是本次要治的病。用函数而不是直接引用，
-//    是为了让值始终是**活的**：模块默认值改了，表里跟着变，不会留下第二份数字。
-// 2. **漏登记必须能自动检出**。`scripts/print-thresholds.mjs` 解析 src 下每一个模块级数值
-//    常量，凡是不在本表、也不在豁免清单里的，一律以非零码退出。「记得加一行」不是机制。
-// 3. **一个名字在几个地方取值，就登记几个地方**。配置类阈值既有模块默认值（write.ts 的
-//    DEFAULT_THRESHOLDS），又有 zod schema 的默认与范围（index.ts 的 Config）。两处已经分叉
-//    过（tauJoin 与 tauLex 都和设计文档对不上），所以 `design` 与 `zod` 是行的一部分，不是附注。
+// 1. **模块默认值 —— 代码里的常量**。分发时自带的那一套值，定义在被引用的模块里
+//    （write.ts、view.ts …；锚点表在 calib 包里，插件只转发）。本表只登记它在哪、
+//    什么会改变它、还有没有第二个取值点，
+//    不复制数字。`scripts/print-thresholds.mjs` 用 TypeScript 编译器 API 遍历
+//    `src/**/*.ts` 的模块级变量声明：初始化式能静态求值成数字的，必须在表里或在豁免
+//    清单里 —— 表达式型也扫（`12 * 3600 * 1000` 不再隐身）。
+// 2. **运行时覆盖值 —— calib 快照的 params**。重标成功后，`lattice-calib` 把一整套参数写进
+//    库内 meta 快照（params / sBaseline / calibVersion / at / encoderModel）；启动时读入，
+//    版本与编码模型相符才生效。没有可用快照时用第 1 层。生效值只以快照为准，不写回代码
+//    （读入与失效见 `src/state.ts` 的 readCalibration）。
+// 3. **标定依据 —— calib 报告**。一个数为什么取这个值，唯一依据是产生这组值的重标报告
+//    （`lattice-calib` 的发布，或开发笔记里的重标报告）。本表只放指针，不放语料规模与
+//    来源分布 —— 那些属于报告。指针只允许三种形状：`无记录`（默认）/
+//    `calib@<semver>` / `calib@<semver> <报告名>`；指不到真实报告的写「无记录」，
+//    不编版本号。
+//
+// 三层之间不互相抄写：默认值不在本表复制，快照不写回代码，报告内容不抄进登记表。
+// 这条边界与 `docs/ARCHITECTURE.md` 第十节「运行时可变状态」是同一套说法。
+//
+// **本册只记三件**：定义位置、可变条件、第二个取值点。配置类阈值既有模块默认值
+// （write.ts 的 DEFAULT_THRESHOLDS），又有 zod schema 的默认与范围（index.ts 的 Config）；
+// 两处已经分叉过（tauJoin 与 tauLex 都和设计文档对不上），所以 `design` 与 `zod`
+// 是行的一部分，不是附注。
+//
+// **值的真相源留在原处**：这里不写数字，只写 `() => CONST` —— 打印时现取。把值搬进来
+// 会让「为什么是这个值」的注释与值分家，那正是本次要治的病；用函数而不是直接引用，
+// 是为了让值始终是**活的**：模块默认值改了，表里跟着变，不会留下第二份数字。
+//
+// **漏登记必须能自动检出**：扫描器只看模块级声明，能在初始化式里求值的算术都会收进来；
+// 凡是不在本表、也不在豁免清单里的，一律以非零码退出。「记得加一行」不是机制。
+// 注册项若把默认值换成 `params.xxx` 这类运行时对象引用，扫描器仍会扫到它并报错 ——
+// 默认值不能被藏进第 2 层。
 //
 // **本模块不改变任何行为**：只被打印脚本与覆盖检查读取，插件运行时不 import 它。
 //
 // **otherSites 记的是「还有第二个取值点」**：2026-10-19 把配置层的 `?? <字面量>` 兜底
 // 改为引用同一常量（`DEFAULT_THRESHOLDS` / `DEFAULT_BUDGET` / `DEFAULT_TOP_N`），
 // 原先记在 otherSites 里的六条随之删除 —— 删掉的是「重复」这个事实，而那六处确实曾经重复过。
-//
-// 标定场景只能来自代码注释、`dsh-lattice-devnotes/` 的报告或实证记录。**查不到就写「无记录」**
-// —— 把缺口暴露出来正是本模块的产出之一；编一个看起来合理的场景比留空更糟。
 
 import {
   ENTRY_WEIGHT,
@@ -169,22 +190,18 @@ export type ThresholdArea =
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
 
 /**
- * 标定场景：这个值是在什么库、多少条 atom、什么来源分布下定的。
+ * 标定依据：这个值为什么取这个值，指向哪份重标报告。
  *
- * 只填代码或开发笔记里**查得到**的内容。`evidence` 必须指到具体证据，不许写「经验值」。
- * 语料条数未记录时留空，**不要拿运行规模顶替** —— 那正是本任务要消灭的那种混淆。
+ * `source` 只允许三种形状：`无记录` / `calib@<semver>` / `calib@<semver> <报告名>`；
+ * 省略等价于 `无记录`。`<semver>` 是 `lattice-calib` 包的版本；报告名可以指向开发笔记里的
+ * 重标报告 —— **不要求本仓库内可解析**（报告可能含语料信息，不随仓库分发）。
+ * `evidence` 只写「为什么取这个值」，不写语料规模与来源分布 —— 那些属于报告。
  */
 export interface ThresholdCalibration {
-  /** 标定时语料的 atom 数。未记录时省略。 */
-  atoms?: number
-  /** 标定时语料的来源分布。 */
-  origins?: Readonly<Record<string, number>>
-  /** 标定时语料的作用域分布。 */
-  scopes?: Readonly<Record<string, number>>
-  /** 证据出处（文件 + 章节，或脚本名）。 */
+  /** 标定依据指向哪里；省略 = 无记录。 */
+  source?: string
+  /** 为什么取这个值（解释；不记语料规模与来源分布）。 */
   evidence: string
-  /** 标定日期；未记录则省略。 */
-  at?: string
 }
 
 /** 设计文档的对应项。 */
@@ -233,7 +250,7 @@ export interface ThresholdEntry {
   external?: { pkg: string; file: string }
   /** 受该阈值影响的行为。 */
   affects: string
-  /** 标定场景；查不到依据时省略（打印为「无记录」）。 */
+  /** 标定依据；省略等价于「无记录」。 */
   calibration?: ThresholdCalibration
   /** 什么变了它就该重标。 */
   variesWith: readonly string[]
@@ -301,8 +318,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         'write.ts:111-131 注释与 scripts/probe-threshold.mjs（可复跑）：真实模型、8 组 x 3 条同义改写；' +
         '同主题余弦 min 0.811 / p50 0.897 / max 0.956，跨主题 0.375 / 0.509 / 0.633，两类完全分离。' +
-        '取贴近下界的保守线 0.78（误并是静默的知识损坏，漏并只是多一个主题）。**未记录语料条数与来源分布**',
-      at: '2026-10-15',
+        '取贴近下界的保守线 0.78（误并是静默的知识损坏，漏并只是多一个主题）。**未记录标定来源**',
     },
     variesWith: ['换编码模型', '标定语料的领域混合度', '误并与漏并的代价评估'],
     constName: null,
@@ -319,8 +335,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         'write.ts:111-131 注释与 scripts/probe-threshold.mjs：同主题原文 bigram-Jaccard min 0.059 / p50 0.229 /' +
-        ' max 0.471，跨主题 max 0.061；取贴住噪声上界的 0.05。**未记录语料条数与来源分布**',
-      at: '2026-10-15',
+        ' max 0.471，跨主题 max 0.061；取贴住噪声上界的 0.05。**未记录标定来源**',
     },
     variesWith: ['语料语言或书写粒度', '原子化切分的长度', '词面判据换粒度时'],
     constName: null,
@@ -337,8 +352,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         'write.ts:111-131 注释与《设计报告》落位判定表：跨主题余弦 max 0.633，取 0.5 作为「全新」的下界。' +
-        '**未记录语料条数与来源分布**',
-      at: '2026-10-15',
+        '**未记录标定来源**',
     },
     variesWith: ['换编码模型', '标定语料的领域混合度'],
     constName: null,
@@ -354,8 +368,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         'write.ts:130 注释（同主题词面 p50 之上、噪声 max 之上）与 devnotes M1《按「跨机器是否一致」分类》' +
-        'A 类表（0.78 / 0.05 / 0.10 / 0.50，注明「已实测标定」）。**未记录语料条数与来源分布**',
-      at: '2026-10-15',
+        'A 类表（0.78 / 0.05 / 0.10 / 0.50，注明「已实测标定」）。**未记录标定来源**',
     },
     variesWith: ['词面判据本身的变化（tauLex）', '编码器可用率与其降级路径'],
     constName: null,
@@ -371,7 +384,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         '《设计报告》落位判定表（sim1 - sim2 < 0.06 且 sim1 >= tauNew 则双峰拒绝）；设计文档 §7 里它有名字' +
-        '（deltaPeak，默认 0.06、范围 0.01-0.20）。**未记录实测语料**',
+        '（deltaPeak，默认 0.06、范围 0.01-0.20）。**未记录标定来源**',
     },
     variesWith: ['换编码模型（余弦尺度的间距会变）', '同域不同子话题的密度'],
     design: { doc: DESIGN_DOC, key: 'deltaPeak', default: 0.06, min: 0.01, max: 0.2 },
@@ -445,7 +458,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         'devnotes M1《按「跨机器是否一致」分类》B 类表：400，「中文摘要 + 背景段的典型长度」，跨机器一致、' +
-        '跨语料要重标。**未记录是哪个库、多少条 atom**',
+        '跨语料要重标。**未记录标定来源**',
     },
     variesWith: ['语料的段落长度分布', '语言（换成英文/日文语料）'],
   },
@@ -541,13 +554,13 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '泛词过滤：df/N 超过此比例的词元直接丢弃（不参与入口竞争）',
     calibration: {
       evidence:
-        'entries.ts:181-196 注释（泛词是相对于语料定义的）与 M2 审核 T11：**在 279 atom 的基准库上' +
+        'entries.ts:181-196 注释（泛词是相对于语料定义的）与 M2 审核 T11：**在基准库上' +
         'df/N > 0.5 根本够不到，净贡献为 0** —— 即这条判据从未在目标语料上被实测触发过。' +
         '「0.5」的出处是「过半数即无区分度」这句直觉，不是某次测量',
     },
     variesWith: ['库内 atom 数与来源分布', '语言（英文词表大，问题不明显）'],
     diverges:
-      '**本任务要治的原始病例**：判据取自直觉、在运行语料上不触发、且没有任何地方记着它的标定场景。' +
+      '**本任务要治的原始病例**：判据取自直觉、在运行语料上不触发、且没有任何地方记着它的标定来源。' +
       '治理（改相对判据）属后续执行点，本次只登记不改值',
   },
   {
@@ -595,7 +608,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '只改打分时为 70%、两者都不改（v3 字表 + 纯 IDF）为 65%。取 log2(1+tf) 而非 tf 本身，' +
         '是为了让重复次数的边际收益递减——**形式是判断，幅度未做扫描**。' +
         '端到端（真实模型、20 条 gold）另有取舍，见同一份报告',
-      at: '2026-10-17',
     },
     variesWith: ['语料规模（短正文里 tf 的分布）', '每 atom 的入口配额', '上游切词规则'],
   },
@@ -610,7 +622,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '二字组与三字以上整段汉字的候选资格：左右邻汉字都只观测到一种取值、且两侧都有过重复观测，即出局',
     calibration: {
       evidence:
-        '2026-10-17 实现报告：**判据线是「零」本身，不是扫描出来的**。279 atom 基准库上本判据' +
+        '2026-10-17 实现报告：**判据线是「零」本身，不是扫描出来的**。基准库上本判据' +
         '丢弃纯汉字二字型的一部分候选；被它放回来的高频真词（记忆 57 / 实测 50 / 判据 38 / ' +
         '目录 30 / 合并 30 / 验证 22…）正是 v3 单字虚词表的成片误杀。' +
         '**光换这一层不够**：只删字表不改打分，纯 Entry 路 gold 召回 65% -> 50%；' +
@@ -622,7 +634,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '完全失守（候选池变松是一个独立的设计决定，需单独论证）。**待扩库后复测**。' +
         'T45 批三把「证据」从计数改成形态：不再记两侧观测次数再与 2 比较，而是记「有没有第二次' +
         '观测」—— 在本判据生效的路径上两者逐条等价（探针见实现报告）',
-      at: '2026-10-17',
     },
     variesWith: ['语料规模（邻居观测的多少）', '上游切词规则', '语料语言'],
     diverges:
@@ -645,7 +656,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '**不是显著性判据**：改用「Wilson 下限 > 0.5」会改变每词的触发点（n=12 时 df≥10 才触发，' +
         '旧判据是 df≥7），那是改行为；本次不改。旧口径「在 12 atom 这个规模上定的」由 ' +
         'test/write.test.mjs 守着小库边界',
-      at: '2026-10-15',
     },
     variesWith: ['每 atom 的入口配额（配额越小，泛词线越早需要生效）', '语料语言', '上游切词规则'],
   },
@@ -708,7 +718,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         'D11-6：切词把连续汉字整段当词，于是正文任意片段都成候选（「全程没有建分支」「为什么会这样」），' +
         '它们不会被任何查询命中却占着每 atom 只有十几个的槽位。理由是「真词里超过四字的极少」——' +
         '**定性判断，未做词长统计**',
-      at: '2026-10-15',
     },
     variesWith: ['语料语言', '正文的书写粒度（一句话讲一件事的实际长度）'],
   },
@@ -724,7 +733,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         'D11-4 与 entries.ts:111-121 注释：**人工标注的 60 个样本**上，「两侧邻居都多于一种」把真词与' +
         '碎片分开到 96.7%（AUC 0.973）；但判为碎片的那组里仍约三成是真词，故只降权。系数取到' +
         '「让碎片落到有真词可选的槽位之外，又不至于在候选不足时把槽位空出来」——**幅度是判断，不是扫描出来的**',
-      at: '2026-10-15',
     },
     variesWith: ['边界自由度判据本身的变化', '语料里真词与碎片的比例'],
     diverges:
@@ -771,7 +779,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '**结论方向仍成立，但依据要换成实测密度**：原始 bigram/码点 = 0.358、过滤后候选池/码点 = 0.284。' +
         '另一条原理性结论：**入口上限不可能是「覆盖」** —— 要把目标卡正文里出现的查询词全收进入口，' +
         '需要上限 ≥ 27~278（中位 130），16 只够 1/20、64 只够 3/20；它只能是**质量闸门**',
-      at: '2026-10-15，2026-10-17 复核',
     },
     variesWith: ['中文 bigram 的候选密度（切词规则）', '正文长度分布', '语料语言'],
   },
@@ -1087,8 +1094,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         'search.ts:350-360 注释：原设计 0.5，**实测中文短文本上太松** —— 「系统代理必须走本地端口……」' +
         '与「系统代理配置本地端口……」的 bigram-Jaccard 是 0.64，它们讲同一件事但各有信息，不该折叠。' +
         '取 0.72：只有几乎逐字重复才被压制（同一段文本实测 Jaccard 为 1.0）。' +
-        '**标定语料是构造的对照句对，未记录库与条数**',
-      at: '2026-10-15',
+        '**标定语料是构造的对照句对**',
     },
     variesWith: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）'],
   },
@@ -1155,24 +1161,14 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_FULL_MIN' },
     affects: 'tierOf：最高余弦 >= 此值走完整档（三段全给）',
     calibration: {
-      atoms: 279,
-      origins: { import: 279 },
-      scopes: { global: 279 },
       evidence:
-        'D15-2 与 view.ts:73-82 注释：**279 条基准库、20 条 gold 查询 + 4 条无关查询**（全 import、全 global）；' +
-        '相关 top1 min 0.524 / p50 0.683，无关 top1 max 0.398。「两者之间是空的，所以取值本身不敏感；' +
-        '取空隙中间是为了容错，不是为了拟合」',
-      at: '2026-10-16',
+        'D15-2 与 view.ts:73-82 注释：20 条 gold 查询 + 4 条无关查询；相关 top1 min 0.524 / p50 0.683，' +
+        '无关 top1 max 0.398。「两者之间是空的，所以取值本身不敏感；取空隙中间是为了容错，不是为了拟合」',
     },
-    variesWith: [
-      '换编码模型（余弦尺度直接变）',
-      '库规模与来源分布（当前宿主库只有 12 条全 model）',
-      '语料的领域混合度',
-    ],
+    variesWith: ['换编码模型（余弦尺度直接变）', '库规模与来源分布', '语料的领域混合度'],
     diverges:
-      '**标定场景与运行场景不一致**：标定在 279 条全 import 的基准库上，而插件现在跑在 12 条全 model 的' +
-      '宿主库上（M2 审核指出的同一类问题）。打印命令的规模告警会报出这次不一致。' +
-      '**该基准库已于 2026-10-17 扩容**（57 → 442 源文件、279 → 1374 atom、origin 由全 import 变 3 类、scope 由全 global 变 5 类）；本字段的 atoms / origins / scopes 记的是**标定那一刻**的场景，不随库变化改写',
+      '**标定语料与运行库不一致**：标定在基准库上，而插件跑在宿主库上（M2 审核指出的同一类问题）。' +
+      '本表不再记语料规模与来源分布 —— 是否仍适用，看对应重标报告；没有报告时按「无记录」处理，不猜',
   },
   {
     name: 'TIER_BRIEF_MIN',
@@ -1180,33 +1176,29 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => TIER_BRIEF_MIN,
     definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_BRIEF_MIN' },
     affects:
-      '库小于锚点表下端时的**默认**精简档下界；库 >= 12 条时生效值由 calibrate.ts 按规模给出，' +
+      '库小于锚点表下端时的**默认**精简档下界；库 >= 12 条时生效值由 calib 的锚点表按规模给出，' +
       '本常量不再等于生效值。它同时仍是弱相关提示线 LOW_RELEVANCE_HINT 的取值来源',
     calibration: {
-      atoms: 279,
-      origins: { import: 279 },
-      scopes: { global: 279 },
+      source: 'calib@0.1.0 阈值重标定（2026-10-17）',
       evidence:
-        '两段来历，必须分开读。**① 原标定**（D15-2，279 条基准库、20 gold + 4 无关）：0.45 压在无关上界' +
+        '两段来历，必须分开读。**① 原标定**（D15-2，20 gold + 4 无关）：0.45 压在无关上界' +
         ' 0.398 与 gold 下界 0.524 之间，test/tools.test.mjs:210-211 以断言守住这两个界。' +
-        '**② M3-T23-b 重标定（2026-10-17）**：本次在 1374 条基准库上复算，无关 top1 上界已升到 0.515、' +
+        '**② 重标定（2026-10-17）**：在扩容后的基准库上复算，无关 top1 上界已升到 0.515、' +
         '相关下界 0.525，0.45 落进无关分布内部（提示线静默失效）—— 故它降级为**默认值**，' +
-        '生效值改由 src/pipeline/calibrate.ts 的锚点表按库规模给出。复算口径：8 个规模点各 30 次降采样、' +
+        '生效值改由 calib 的锚点表按库规模给出。复算口径：8 个规模点各 30 次降采样、' +
         '20 gold + 20 无关、池化后扫「相关通过率 − 无关通过率」最大的切点，读数 0.466 / 0.470 / 0.492 /' +
-        ' 0.514 / 0.514 / 0.514 / 0.514 / 0.525（对应 12 / 24 / 48 / 96 / 192 / 384 / 768 / 1374 条）。' +
+        ' 0.514 / 0.514 / 0.514 / 0.514 / 0.525。' +
         '**2026-10-18 复核**：这条线若被说成「无关误报 ≤ 5%」，**样本量与可认证上限必须一起报** ——' +
         ' 24 条无关查询、观察到 1 次误通过时，conformal risk control 的可认证上限是' +
         ' (f+1)/(n+1) = 2/25 = **8.0%**，不是 5%；要认证 5% 需 n >= 39，或把线抬到 0.5369 以上' +
-        '（代价是相关侧 19/20）。Clopper-Pearson 95% 区间为 [0.11%, 21.12%]。' +
-        '详见开发笔记 probes/calib-routes/一期结论.md §二',
-      at: '2026-10-16（原标定）/ 2026-10-17（重标定）',
+        '（代价是相关侧 19/20）。Clopper-Pearson 95% 区间为 [0.11%, 21.12%]。详见一期结论 §二',
     },
     variesWith: ['换编码模型', '库规模（生效值随规模变，本常量不再等于生效值）', '语料的领域混合度'],
     diverges:
-      '**标定场景与运行场景不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。' +
+      '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。' +
       '重标定已把生效值改成规模的函数（本次），但**弱相关提示线 LOW_RELEVANCE_HINT 仍是这个常数**' +
       '（src/tools/index.ts:59 直接引用它）—— 工具层不在本次改动边界内，两处暂时分叉，见实现报告的未确定项。' +
-      '**该基准库已于 2026-10-17 扩容**（57 → 442 源文件、279 → 1374 atom、origin 由全 import 变 3 类、scope 由全 global 变 5 类）；本字段的 atoms / origins / scopes 记的是**标定那一刻**的场景，不随库变化改写',
+      '本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理',
   },
   {
     name: 'TIER_SCALE_MIN_ATOMS',
@@ -1215,10 +1207,10 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
     affects: 'briefMinFor：库小于此规模时不做按规模标定，退回 TIER_BRIEF_MIN（= 0.45）',
     calibration: {
+      source: 'calib@0.1.0 阈值重标定（2026-10-17）',
       evidence:
         '锚点表最下端就是 12 条 —— 它是本次降采样实验的**最小规模点**，不是标定出来的最优规模。' +
         '比它更小的库没有任何测量，按项目约定「查不到就留空」退回旧值，不编一段外推',
-      at: '2026-10-17',
     },
     variesWith: ['锚点表下端的规模点变化时'],
   },
@@ -1229,13 +1221,11 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
     affects: '只用于可观测：低于此规模时，按规模插值出的阈值不可信（调用方据此区分标定值与插值值）',
     calibration: {
-      // 这个数不是「标定语料的 atom 数」，而是「阈值稳定所需的最小规模」；
-      // 占 atoms 字段会把它读成前者，故只写在 evidence 里。
+      source: 'calib@0.1.0 阈值重标定（2026-10-17）',
       evidence:
-        'devnotes M3《T23-b-降采样实验》结论 2：「档位与提示阈值稳定所需的最小 atom 数」= **192**。' +
+        '降采样实验结论 2：「档位与提示阈值稳定所需的最小 atom 数」= **192**。' +
         '判据是相关查询 p10 与无关查询 p95 的距离 >= 0.05，且在按 replicate 聚类的 1000 次重抽样里' +
         '至少 80% 满足。**这是本次那个查询集上的结论，不是语料无关的常数**',
-      at: '2026-10-17',
     },
     variesWith: ['查询集（20 相关 + 20 无关是人工挑的）', '语料构成'],
   },
@@ -1246,21 +1236,17 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
     affects: 'briefMinFor：按库规模给出精简档下界；点与点在 log2(atom 数) 尺度上线性插值，两端夹紧（不外推）',
     calibration: {
-      atoms: 1374,
-      origins: { import: 279, model: 1026, user: 69 },
-      scopes: { design: 192, discuss: 69, global: 309, m3: 556, process: 248 },
+      source: 'calib@0.1.0 阈值重标定（2026-10-17）',
       evidence:
-        'M3-T23-b 重标定（2026-10-17）：基准库 1374 条 atom（扩容后，origin/scope 如本字段）。查询集是' +
-        ' 20 条 gold（各带目标记忆）+ 20 条人工无关查询。每个规模点 30 次独立降采样，把 30 次的相关样本' +
+        '重标定（2026-10-17）：查询集是 20 条 gold（各带目标记忆）+ 20 条人工无关查询。' +
+        '每个规模点 30 次独立降采样，把 30 次的相关样本' +
         '与无关样本各自合成一个池，在池上扫出使「相关通过率 − 无关通过率」最大的切点。' +
         '**表里的每个数都是该点实测到的那个切点，不是拟合值**；点之间的插值是「规模是连续量」的近似。' +
-        '复算脚本 dsh-lattice-devnotes/probes/t23b-recal-scan.mjs（留档 probes/t23b/recal/scan-*.json）。' +
         '**2026-10-18 复核（标定路线一期验证）**：30 次重复的 95% 区间宽在 12 / 24 / 48 / 96 分别是' +
-        ' 0.070 / 0.061 / 0.043 / 0.023 —— **与它们到 1374 的漂移同量级甚至更大**（比值 0.52–1.13），' +
-        'k >= 192 才到 2.2–4.5 倍；1374 的零宽区间是伪精度（满库无降采样、100 seed 全同）。' +
+        ' 0.070 / 0.061 / 0.043 / 0.023 —— **与它们到最大规模点的漂移同量级甚至更大**（比值 0.52–1.13），' +
+        'k >= 192 才到 2.2–4.5 倍；最大规模点的零宽区间是伪精度（满库无降采样、100 seed 全同）。' +
         '**表内 7 个点在噪声内彼此不可区分**，它实际承载的信息约等于两级台阶（小库 ≈0.47–0.51 /' +
-        ' 大库 ≈0.525）。逐点区间见 src/pipeline/calibrate.ts 的 `ci` 字段与一期结论 §十一',
-      at: '2026-10-17',
+        ' 大库 ≈0.525）。逐点区间见 calib 锚点表的 `ci` 字段与一期结论 §十一',
     },
     variesWith: ['查询集（人工挑的 20 + 20）', '换编码模型', '语料的领域混合度'],
     diverges:
@@ -1278,15 +1264,11 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/tools/index.ts', name: 'LOW_RELEVANCE_HINT' },
     affects: 'isWeakMatch：低于此值在召回结果前标一句「可能不相关」（只提示不拦截）',
     calibration: {
-      atoms: 279,
-      origins: { import: 279 },
-      scopes: { global: 279 },
       evidence:
         'D15-4 / D15-5 与 tools/index.ts:39-48 注释：**原值 0.68 实测永不触发**（gold 集 top1 中位数就有' +
         ' 0.683）——「一个永不触发的提示与没有提示是一回事，却看起来还在工作」。改为与摘录档下界同源' +
         '（= TIER_BRIEF_MIN = 0.45），理由是两者回答同一个问题：「这次的匹配算不算相关」。' +
         '标定约束由 test/tools.test.mjs 守住：必须落在 0.398 与 0.524 之间',
-      at: '2026-10-16',
     },
     variesWith: ['TIER_BRIEF_MIN 改动时（它是别名，不是独立取值）', '换编码模型'],
     otherSites: ['src/tools/index.ts:48 `= TIER_BRIEF_MIN` —— 不是自己的数，与摘录档同源'],
@@ -1358,7 +1340,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         'D15-3：full 不限（预算机制已经管住总量）/ brief 8 / excerpt = MIN_ANCHORS(3)。' +
         '**brief=8 与 DEFAULT_ENTRIES_PER_TOPIC 同值但没有说明是巧合还是有意**；无实测记录',
-      at: '2026-10-16',
     },
     variesWith: ['各档的字符预算', 'MIN_ANCHORS 改动时（摘录档上限跟着走）'],
   },
@@ -1371,7 +1352,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     group: ['full', 'brief', 'excerpt'],
     calibration: {
       evidence: 'D15-3：「低相关时入口段是主角，但也要收窄」——**是判断，无实测记录**',
-      at: '2026-10-16',
     },
     variesWith: ['入口段在各档里的实际贡献'],
     diverges:
@@ -1445,7 +1425,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         'D13-1：「上限不是默认值而是硬边界，防止调用方一次拉空整个库」。' +
         '**50 本身无实测记录** —— 它约束的是注意力稀释，不是某个分布',
-      at: '2026-10-16',
     },
     variesWith: ['一次注入能容纳的摘要条数', '库规模'],
     diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有（工具侧有测试守着钳制行为）',
@@ -1458,7 +1437,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '默认页大小',
     calibration: {
       evidence: 'list.ts:15 注释「取值偏小：列目录是为了定位，不是为了读完」——**理由，非标定**',
-      at: '2026-10-16',
     },
     variesWith: ['同上'],
     diverges: '**设计文档 §7 没有这个键**',
@@ -1502,7 +1480,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '「在基准库上只抓空壳」+「一句合法中文结论的下界约 15 字」，**不是运行语料上的标定**。' +
         '刻意**不复用 MIN_ATOM_CHARS（80）**：那是迁移切卡片小节的界，搬到写入侧会拦掉合法的短参数记忆' +
         '（「本机代理端口是 7890。」只有十几个字）—— 那正是本表开头要治的「阈值取自一个场景、用在另一个场景」',
-      at: '2026-10-17',
     },
     variesWith: ['「一句话讲一件事」这条写入约定的实际长度分布', '语言', '正文里是否允许单句参数'],
     diverges: '**设计文档 §7 没有这个键**；`lattice_write` 的入参契约里也没有这条下限',
@@ -1579,7 +1556,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**实测**：2026-10-18 在 1374 条 atom 的库副本上，8 次单段写入 111–148 ms（每段含一次编码与' +
         '一次全量词表重建，后者约 113 ms）。取 125 ms。换机器/库规模会变，届时上限自动跟着变',
-      at: '2026-10-18',
     },
     variesWith: ['编码器速度', '词表重建耗时（库规模）'],
   },
@@ -1606,7 +1582,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**实测**：2026-10-18 在基准库最大主题（37 个成员）上 findDuplicate 单次 1.663 ms，均摊 0.045 ms/条；' +
         '纯比对循环（bigram-Jaccard + 512 维余弦）0.038 ms/条。取 0.05（向上取整，宁可少扫）',
-      at: '2026-10-18',
     },
     variesWith: ['成员正文长度', '向量维度'],
   },
@@ -1802,7 +1777,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '标定来自 T16 探针在基准库（1 374 条真实向量、512 维）上的对照：与参照实现' +
         '（clusternova，mpts=2）比，k=2 得 82 簇 / 噪声占 68.9%、参照 75 簇 / 73.4%，' +
         '双向成员重合度 0.77 / 0.85；k>=6 时本实现塌缩到个位数簇。' +
-        '**只有一个规模档的实测**，基准库的 atom 来源分布与作用域分布未记录',
+        '**只有一个规模档的实测**',
     },
     variesWith: ['库规模（k 越大越小簇越易被抹平）', '语料密度分布', '换编码模型（余弦尺度会变）'],
   },
@@ -1884,15 +1859,11 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       'inferEdges：每个 atom 保留多少个向量近邻作为 near 边。它同时是图路的宽度与 ' +
       '§36 第 8 项 MOD 的旋钮 —— 实测 MOD 几乎等于 K',
     calibration: {
-      atoms: 1374,
-      origins: { import: 279, model: 1026, user: 69 },
-      scopes: { design: 192, discuss: 69, global: 309, m3: 556, process: 248 },
       evidence:
         'T18 探针 03（可复跑）在基准库上的参数网格：K = 2/3/4/6/8 × cosMin = 0.70/0.75/0.80。' +
         '实测 96%（1293/1374）的 atom 过线邻居多于 K，所以 MOD 由 K 直接决定：' +
         'K=4 → 3.86，K=6（cosMin 0.75）→ 4.64。§36 给 MOD 的目标区间 2~5，取区间中点 4。' +
         '**只有一个规模档的实测**',
-      at: '2026-10-17',
     },
     variesWith: ['库规模（atom 越多近邻越密）', '换编码模型（余弦尺度会变）', '§36 的 MOD 目标区间'],
   },
@@ -1903,16 +1874,12 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/graph/infer.ts', name: 'NEAR_COS_MIN' },
     affects: 'inferEdges：余弦低于此值的 atom 对不建边。它决定边质量的下限，也决定孤立率',
     calibration: {
-      atoms: 1374,
-      origins: { import: 279, model: 1026, user: 69 },
-      scopes: { design: 192, discuss: 69, global: 309, m3: 556, process: 248 },
       evidence:
         'T18 探针 01（余弦分布）与探针 03（参数网格）实测：top-16 邻居的 cos 中位数 0.748、' +
         'p10 0.685 —— 0.70 与 0.86 之间没有自然断点，抬线砍不掉一批「明显更差」的边，' +
         '只会制造孤点：0.70 → 孤立 1.6%，0.75 → 8.1%（越过 §36 的 <8% 目标），' +
         '0.80 → 34%（越过 20% 报警线）。0.70 是三个候选里唯一同时满足 MOD 与孤立率两条区间的。' +
         '**它不是「相似」的语义线**，只是「别把可用的 atom 变成孤点」的底线',
-      at: '2026-10-17',
     },
     variesWith: ['换编码模型（余弦尺度会变）', '§36 的孤立率目标', '语料的领域混合度'],
   },
@@ -1949,7 +1916,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '512 维）实测 460~510 ms；O(N²) 外推到 4 000 条约 4 s、到 8 000 条约 16 s。' +
         '取 4 000 对应「首次召回最多多等约 4 秒」这个判断，不是实测出来的上限。' +
         '要真正解掉这条外推，得把全量成对换成桶内候选或 SimHash 预筛',
-      at: '2026-10-17',
     },
     variesWith: ['机器算力', '单次召回可接受的阻塞时长', '是否改成近邻候选而非全量成对'],
   },
@@ -2002,7 +1968,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**（没有日志事件速率的实测）：裁决 #35 定 4 MB，理由「降级事件稀疏，' +
         '4 MB 约能放数万条」；与「保留 5 个」正好拼成 20 MB 的总量上限',
-      at: '2026-10-18',
     },
     variesWith: ['降级事件产生速率', '单条 detail 的长度', '愿意给日志的磁盘空间'],
   },
@@ -2014,7 +1979,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '清理：历史文件数 + 当前库不超过这个数，超出删最旧的（5 个，含当前库）',
     calibration: {
       evidence: '**未标定**：裁决 #35 定 5 个；5 x 4 MB 与总量 20 MB 对齐',
-      at: '2026-10-18',
     },
     variesWith: ['单文件阈值', '总量上限', '需要回溯多久的降级历史'],
   },
@@ -2026,7 +1990,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '清理：全部日志文件（含当前库）总大小超过此值就删最旧的历史文件（20 MB）',
     calibration: {
       evidence: '**未标定**：裁决 #35 定 20 MB = 5 x 4 MB，与保留文件数对齐',
-      at: '2026-10-18',
     },
     variesWith: ['单文件阈值', '保留文件数', '磁盘配额'],
   },
@@ -2040,7 +2003,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**（按速率推算，非实测）：裁决 #35 定 200 条 —— 200 条在 50ms 窗口下约' +
         ' 4000 条/秒的吸收能力，远超降级事件实际速率；同时把单个进程的日志内存钉在几十 KB',
-      at: '2026-10-18',
     },
     variesWith: ['降级事件爆发速率', '批量窗口', '单条日志的内存占用'],
   },
@@ -2054,7 +2016,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '只有事件循环被占住、队首已等满 50ms 时才当场 flush（不新增定时器）',
     calibration: {
       evidence: '**未标定**：裁决 #35 给「setImmediate 或 50ms」，实现取两者中更保守的上界',
-      at: '2026-10-18',
     },
     variesWith: ['事件产生速率', '崩溃时允许丢失的时间窗', '宿主的事件循环忙碌程度'],
   },
@@ -2066,7 +2027,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '写失败降级：log.write_failed 的限频间隔（1 次/分钟）',
     calibration: {
       evidence: '**未标定**：设计草案第三节给「限频，1 次/分钟」，取 60 000 ms',
-      at: '2026-10-18',
     },
     variesWith: ['故障持续时间', '日志库的可用性', '用户对日志噪声的容忍度'],
   },
@@ -2080,7 +2040,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**：裁决 #35 定 10 万行。按单行约 60~120 字节估算，10 万行约 6~12 MB，' +
         '与 10 MB 的字节上限互为兜底',
-      at: '2026-10-18',
     },
     variesWith: ['单行 detail 的长度', '导出可接受的内存与等待时间'],
   },
@@ -2092,7 +2051,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '导出：CSV 最多 10 MB（含表头），超过截断并加 # truncated',
     calibration: {
       evidence: '**未标定**：裁决 #35 定 10 MB；与 10 万行上限谁先到谁截断',
-      at: '2026-10-18',
     },
     variesWith: ['单行 detail 的长度', '浏览器/编辑器打开大文件的承受度'],
   },
@@ -2111,7 +2069,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**：裁决 #34 ③ 定 90 天。理由是「跨一个季度的对照仍有意义，再久语料族' +
         '大概率已经变了」—— 这是判断而非实测，样本的实际衰减速率没有测过',
-      at: '2026-10-18',
     },
     variesWith: ['语料族的更新周期', '重标频率'],
   },
@@ -2125,7 +2082,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**：裁决 #34 ③ 定 1 万条。10 万条向量约 200 MB，已明确不可行；' +
         '1 万条是「够切点估计、又不超过一个普通库的量级」的判断，不是按样本量需求算出来的',
-      at: '2026-10-18',
     },
     variesWith: ['切点估计所需的样本量', '愿意给的磁盘空间'],
   },
@@ -2141,7 +2097,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**：裁决 #34 ④ 定 2000 条。理由是该档「对切点信息量低」，只需要少量' +
         '代表；具体多少条够，要等 T46 的重标样本量与切点偏移实测',
-      at: '2026-10-18',
     },
     variesWith: ['切点扫描对负样本数量的敏感度', '总条数上限'],
   },
@@ -2157,7 +2112,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '可对照的实测只有一处，量级相近但口径不同：view.ts 注释里「无关查询 top1 上界 ' +
         '0.398」（279 条库、24 条查询）、「0.515」（1374 条库）—— 说明这条线随库规模上移，' +
         '固定 0.4 在大库上会把「有点关系」的召回记成明显无关',
-      at: '2026-10-18',
     },
     variesWith: ['库规模（无关 top1 随库长大上移）', '语料族', '编码模型'],
   },
@@ -2171,7 +2125,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**：裁决 #34 ④ 的 0.6。与上一条同源 —— 两条线一起定，分开调没有意义；' +
         '它们的位置应当由 T46 的切点扫描给出，本表只记录当前取值',
-      at: '2026-10-18',
     },
     variesWith: ['库规模', '语料族', '编码模型', '切点的目标位置'],
   },
@@ -2185,7 +2138,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       evidence:
         '**未标定**：按「一次召回最多入队一条」推算。64 条足以吸收事件循环被占住的' +
         '一整轮（对照 LOG_QUEUE_MAX 的 200 条：日志一次召回可能同时产生三条事件）',
-      at: '2026-10-18',
     },
     variesWith: ['事件循环被占住的时长', '单条样本的内存占用'],
   },
@@ -2199,7 +2151,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         '位定义来自设计报告对 flags 的命名（待拆分 / 歧义 / 未归类）。**位值一旦落库就不能改**。置位判据是长度（review.ts 的 maxChars），不是自洽度评分 —— 候选按长度给出、不判断内容',
-      at: '2026-10-19',
     },
     variesWith: ['（不应变：改它等于把历史行解释错）'],
   },
@@ -2213,7 +2164,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         '**未标定，是护栏**：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长',
-      at: '2026-10-19',
     },
     variesWith: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度'],
   },
@@ -2227,7 +2177,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         '**未标定，是护栏**：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长',
-      at: '2026-10-20',
     },
     variesWith: ['一次写入的切分段数上限（REVIEW_MAX_SEGMENTS）', '锚段条数（topN 与实际预算）'],
   },
@@ -2241,7 +2190,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         '**未标定，是预算护栏**：锚段按字符算预算，查询词可以是一整句；不截断会让一条锚多出几十上百字，同一段预算能装下的记忆随之变少',
-      at: '2026-10-19',
     },
     variesWith: ['查询词长度分布', '锚段预算', '「单锚增量 ≤ 40 字」这条判据'],
   },
@@ -2251,7 +2199,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => FLAG_AMBIGUOUS,
     definedBy: { file: 'src/db/flags.ts', name: 'FLAG_AMBIGUOUS' },
     affects: 'atom.flags 的 bit1：落位时两个候选接近、没把握',
-    calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
+    calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变' },
     variesWith: ['（不应变）'],
   },
   {
@@ -2260,7 +2208,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     value: () => FLAG_UNCLASSIFIED,
     definedBy: { file: 'src/db/flags.ts', name: 'FLAG_UNCLASSIFIED' },
     affects: 'atom.flags 的 bit2：与任何已有主题都不像（未归类）',
-    calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变', at: '2026-10-18' },
+    calibration: { evidence: '同 FLAG_SPLIT_PENDING：位值不可变' },
     variesWith: ['（不应变）'],
   },
   {
@@ -2273,7 +2221,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '显式检索（lattice_list 给 flags、界面勾「显示已归档」）仍可见。不是删除：内容与边都还在',
     calibration: {
       evidence: '位值由设计文档对 flags 的命名确定（技术文档 §5），**不可改**；改它会把历史行解释错',
-      at: '2026-10-19',
     },
     variesWith: ['（不应变）'],
   },
@@ -2288,7 +2235,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         '**无测量依据，是产品口味**（裁决 #35）：12 小时对应「一次写作会话」量级。没有任何测量能回答「12 小时比 6 小时更合适」',
-      at: '2026-10-18',
     },
     variesWith: ['用户的写作节奏', '库的变化速率'],
   },
@@ -2300,8 +2246,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_ATOMS' },
     affects: '闸①：库小于 192 条不重标（S 的抽样波动在这个规模下与漂移同量级）',
     calibration: {
-      evidence: 'T23-b 降采样实验结论（阈值稳定所需的最小 atom 数 = 192），与锚点表的稳定下限同一个数',
-      at: '2026-10-18',
+      source: 'calib@0.1.0 阈值重标定（2026-10-17）',
+      evidence: '降采样实验结论（阈值稳定所需的最小 atom 数 = 192），与锚点表的稳定下限同一个数',
     },
     variesWith: ['查询集', '语料构成'],
   },
@@ -2313,7 +2259,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '闸④：正样本少于 10 条不重标（切点会被单条样本牵着走）',
     calibration: {
       evidence: '**未标定**（裁决 #35 的取值）：与写入节奏匹配的经验数，没有测量能给出「少于几条算不够」',
-      at: '2026-10-18',
     },
     variesWith: ['用户/模型的标注频率'],
   },
@@ -2327,7 +2272,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     calibration: {
       evidence:
         'U9 噪声实测：192 维下 S 的 sd 约 0.0063，0.01 约 1.6σ —— 小于它的漂移分不清是库变了还是抽样噪声',
-      at: '2026-10-18',
     },
     variesWith: ['采样伪查询条数 m', '库规模'],
   },
@@ -2339,7 +2283,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '一次重标最多取多少条样本（分层取样的上限，不是样本库容量）',
     calibration: {
       evidence: '**未标定**：取样本库容量上限的五分之一；切点只由靠近阈值的样本决定，多取无信息',
-      at: '2026-10-18',
     },
     variesWith: ['样本库容量', '阈值附近的样本密度'],
   },
@@ -2351,7 +2294,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '「明显无关」那一档在一次重标里最多取多少条（不确定带全取）',
     calibration: {
       evidence: '**未标定**：该档的信息量在「它们离得很远」，多取只是重复同一件事',
-      at: '2026-10-18',
     },
     variesWith: ['库规模', '负样本的 top1 分布'],
   },

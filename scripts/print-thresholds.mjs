@@ -1,20 +1,24 @@
-// 阈值表打印 + 覆盖核对 + 规模告警。
+// 阈值表打印 + 覆盖核对 + 标定来源格式校验。
 //
 // 为什么需要它：阈值必须带标定依据存在，而「有没有带」不能靠人记得检查。这条命令一次做三件事：
-//   1. 打印全部已登记阈值（名称 / 当前值 / 标定场景 / 可变条件 / 定义位置），可直接贴进文档；
-//   2. 解析 src 下每一个模块级数值常量，列出既没登记、也不在豁免清单里的（应当为空）；
-//   3. 把当前库的规模与来源分布和每行阈值的标定场景对照，越出的显式报出来。
+//   1. 打印全部已登记阈值（名称 / 当前值 / 标定来源 / 可变条件 / 定义位置），可直接贴进文档；
+//   2. 用 TypeScript 编译器 API 遍历 src 下每一个模块级变量声明，初始化式能静态求值成数字的
+//      （字面量、四则运算、括号、位运算），列出既没登记、也不在豁免清单里的（应当为空）；
+//   3. 校验「标定来源」只取三种形状：无记录 / calib@<semver> / calib@<semver> <报告名>。
 //
-// 用法：node scripts/print-thresholds.mjs [--db <库>] [--md] [--quiet]
-//   默认库路径与其余脚本一致（.probe/baseline/lattice.db，见 docs/DEVELOPMENT.md）。
+// 用法：node scripts/print-thresholds.mjs [--md] [--quiet]
 //
-// 退出码：0 = 覆盖核对通过（规模告警不影响退出码，它是观察不是门禁）；
-//         1 = 有未登记常量；2 = 用法或环境错误。
+// 退出码：0 = 覆盖核对与来源格式都通过；
+//         1 = 有未登记常量 / 默认值被藏进运行时对象 / 来源格式不合法 / 分叉未解释。
+//
+// 为什么用 AST 而不是一行正则：正则只认「整行恰好是 const X = 裸数字」，表达式型常量
+// （12 * 3600 * 1000、5 * 1024）完全隐身 —— 2026-10-20 实测过：追加一行表达式常量，脚本
+// 退出码 0、日志里一个字都没有；追加一行裸数字则退出码 1。扫描器对最该防的那类新阈值空转。
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DatabaseSync } from 'node:sqlite'
+import ts from 'typescript'
 import {
   DESIGN_GAPS,
   THRESHOLDS,
@@ -26,21 +30,12 @@ import {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
-function arg(name, fallback) {
-  const i = process.argv.indexOf('--' + name)
-  return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : fallback
-}
 const has = (name) => process.argv.includes('--' + name)
 
 const MD = has('md')
 const QUIET = has('quiet')
-const DB = arg('db', join('.probe', 'baseline', 'lattice.db'))
 
-// ─────────────────────────── ① 源码扫描：行号与常量清单 ───────────────────────────
-
-/** 模块级数值常量的声明（只认顶层，缩进为 0 或 2）。 */
-const NUMERIC_CONST =
-  /^(?:export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=\s*(-?\d[\d_]*(?:\.\d+)?)\s*$/
+// ─────────────────────────── ① 源码扫描：AST ───────────────────────────
 
 /** 递归列出 src 下的 .ts 文件（相对仓库根，正斜杠）。 */
 function listSources(dir = 'src') {
@@ -70,10 +65,6 @@ function locate(entry) {
   return null
 }
 
-/**
- * 豁免清单：结构性或协议性常量 —— 改它不改变「同一输入得出什么」的判断，或它根本不是阈值。
- * **逐条给理由**，没有理由的一律不豁免（理由不足时应当补登记，而不是补豁免）。
- */
 /** 在 src 里任意位置找这个名字（用于核对非数值豁免清单是否过期）。 */
 function findAnywhere(name) {
   const re = new RegExp('(?:const|let)\\s+' + name + '\\b')
@@ -85,7 +76,8 @@ function findAnywhere(name) {
 }
 
 /**
- * 数值扫描命中、但判为不作为阈值登记的常量（原因逐条给）。
+ * 豁免清单：结构性或协议性常量 —— 改它不改变「同一输入得出什么」的判断，或它根本不是阈值。
+ * 逐条给理由，没有理由的一律不豁免（理由不足时应当补登记，而不是补豁免）。
  */
 const EXEMPT = {
   SCHEMA_VERSION: '协议性：库的 schema 版本，改动要走迁移（MIGRATIONS），不是调参',
@@ -102,15 +94,15 @@ const EXEMPT = {
 }
 
 /**
- * 数值扫描**捕不到**的例外：它们不是数字，所以不在 src 数值常量清单里。
+ * 数值扫描捕不到的例外：它们不是数字，所以不在 src 数值常量清单里。
  *
- * 单列出来的理由：**「不是数字」不等于「不是阈值」** —— 判据表也是阈值（v3 的单字虚词表
+ * 单列出来的理由：「不是数字」不等于「不是阈值」 —— 判据表也是阈值（v3 的单字虚词表
  * 就是这样一张表，v4 已换成几何判据，见 src/pipeline/entries.ts 的 hasBoundaryFreedom）。
  * 这里只收「结构性或协议性」的那些；真正的非数字判据已经登记进阈值表。
  * 每一条都要给理由，理由不足的应当补登记，而不是补豁免。
  */
 const EXEMPT_NON_NUMERIC = {
-  VEC_BYTES: '由 VEC_DIM 派生（VEC_DIM x 4）；数值扫描本就不收它，改它等于改 VEC_DIM',
+  VEC_BYTES: '由 VEC_DIM 派生（VEC_DIM x 4）；AST 扫描不解析同名引用，改它等于改 VEC_DIM',
   DDL: 'SQL 文本',
   DDL_V1: 'SQL 文本',
   DDL_V2: 'SQL 文本',
@@ -135,112 +127,201 @@ const EXEMPT_NON_NUMERIC = {
   Config: 'zod schema 定义体，不是数值常量（其默认值在阈值表里逐项登记）',
 }
 
-function scanConstants() {
-  const found = new Map()
+/**
+ * 静态求值：只解析字面量与算术/位运算，不解析同名引用（那是符号解析，不是本检查的范围）。
+ * 返回 null 表示「不是可静态求值的数字」。
+ */
+function numericValue(node) {
+  if (ts.isNumericLiteral(node)) return Number(node.text.replace(/_/g, ''))
+  if (ts.isParenthesizedExpression(node)) return numericValue(node.expression)
+  if (ts.isPrefixUnaryExpression(node)) {
+    const v = numericValue(node.operand)
+    if (v === null) return null
+    if (node.operator === ts.SyntaxKind.MinusToken) return -v
+    if (node.operator === ts.SyntaxKind.PlusToken) return v
+    if (node.operator === ts.SyntaxKind.TildeToken) return ~v
+    return null
+  }
+  if (ts.isBinaryExpression(node)) {
+    const l = numericValue(node.left)
+    const r = numericValue(node.right)
+    if (l === null || r === null) return null
+    switch (node.operatorToken.kind) {
+      case ts.SyntaxKind.PlusToken:
+        return l + r
+      case ts.SyntaxKind.MinusToken:
+        return l - r
+      case ts.SyntaxKind.AsteriskToken:
+        return l * r
+      case ts.SyntaxKind.SlashToken:
+        return l / r
+      case ts.SyntaxKind.PercentToken:
+        return l % r
+      case ts.SyntaxKind.AsteriskAsteriskToken:
+        return l ** r
+      case ts.SyntaxKind.LessThanLessThanToken:
+        return l << r
+      case ts.SyntaxKind.GreaterThanGreaterThanToken:
+        return l >> r
+      case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken:
+        return l >>> r
+      case ts.SyntaxKind.AmpersandToken:
+        return l & r
+      case ts.SyntaxKind.BarToken:
+        return l | r
+      case ts.SyntaxKind.CaretToken:
+        return l ^ r
+      default:
+        return null
+    }
+  }
+  return null
+}
+
+/**
+ * 已登记的默认值若被换成运行时对象引用（例如 params.briefMin），数值扫描会看不到它。
+ * 这里把「非字面量、但可以解释为派生」的形态放行：引用另一个已声明的常量、字段访问
+ * （根是已声明/已登记的常量）、函数调用；其余形态一律视为「默认值可能被藏起来了」。
+ */
+function isDerived(node, known) {
+  if (node === undefined) return false
+  if (ts.isNumericLiteral(node)) return true
+  if (ts.isParenthesizedExpression(node)) return isDerived(node.expression, known)
+  if (ts.isPrefixUnaryExpression(node)) return isDerived(node.operand, known)
+  if (ts.isIdentifier(node)) return known.has(node.text)
+  if (ts.isPropertyAccessExpression(node)) return isDerived(node.expression, known)
+  if (ts.isBinaryExpression(node)) return isDerived(node.left, known) && isDerived(node.right, known)
+  if (ts.isCallExpression(node)) return true
+  return false
+}
+
+/**
+ * 模块级变量声明（只认 sourceFile.statements，不进函数与块）。
+ * 每个名字记下：位置、是否可静态求值成数字、初始化式节点。
+ */
+function scanDeclarations() {
+  // **不按名字去重**：同名常量可以在两个模块里各写一份（DEFAULT_TOP_N 就是），
+  // 去重会让「扫到几个」少算，也会漏掉第二处可能被改坏的值。
+  const list = []
+  const byName = new Map()
   for (const rel of listSources()) {
-    const lines = linesOf(rel)
-    for (let i = 0; i < lines.length; i++) {
-      const m = NUMERIC_CONST.exec(lines[i])
-      if (m !== null) found.set(m[1], { file: rel, line: i + 1, value: Number(m[2]) })
+    const text = readFileSync(join(ROOT, rel), 'utf8')
+    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    for (const st of sf.statements) {
+      if (!ts.isVariableStatement(st)) continue
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name)) continue
+        const value = d.initializer === undefined ? null : numericValue(d.initializer)
+        const rec = {
+          name: d.name.text,
+          file: rel,
+          line: sf.getLineAndCharacterOfPosition(d.getStart(sf)).line + 1,
+          value,
+          form:
+            d.initializer !== undefined && ts.isNumericLiteral(d.initializer)
+              ? 'literal'
+              : value !== null
+                ? 'expression'
+                : 'other',
+          initializer: d.initializer,
+        }
+        list.push(rec)
+        if (!byName.has(rec.name)) byName.set(rec.name, rec)
+      }
     }
   }
-  return found
+  return { list, byName }
 }
 
-// ─────────────────────────── ② 库规模 ───────────────────────────
+// ─────────────────────────── ② 登记表索引 ───────────────────────────
 
-function distribution(db, col) {
-  return Object.fromEntries(
-    db
-      .prepare('SELECT ' + col + ' AS k, COUNT(*) AS c FROM atom GROUP BY ' + col)
-      .all()
-      .map((r) => [String(r.k), Number(r.c)]),
-  )
-}
-
-function readScale(file) {
-  if (!existsSync(file)) return { missing: file }
-  let db
-  try {
-    db = new DatabaseSync(file, { readOnly: true })
-  } catch (e) {
-    return { error: e.message + '（' + file + '）' }
-  }
-  try {
-    return {
-      file,
-      atoms: Number(db.prepare('SELECT COUNT(*) AS n FROM atom').get().n),
-      topics: Number(db.prepare('SELECT COUNT(*) AS n FROM topic').get().n),
-      origins: distribution(db, 'origin'),
-      scopes: distribution(db, 'scope'),
-    }
-  } finally {
-    db.close()
-  }
-}
-
-// ─────────────────────────── ③ 规模告警 ───────────────────────────
-
-const fmtDist = (d) =>
-  Object.entries(d)
-    .map(([k, v]) => k + '=' + v)
-    .join(' ') || '（空）'
-
-/**
- * 分布是否"不同"：比的是**类别集合**，不是每类的条数。
- * 条数差异已经由规模那一条覆盖；这里再比一次只会把「同一类别的库大小不同」重复报两遍。
- */
-const sameCategories = (a, b) =>
-  JSON.stringify(Object.keys(a).sort()) === JSON.stringify(Object.keys(b).sort())
-
-/**
- * 一行阈值的标定场景 vs 当前库。返回告警数组（空即「在标定场景内」或「无法比较」）。
- *
- * 判据（可复核）：
- *   1. 标定记录的来源分布与当前库不同 → 分布不一致；
- *   2. 标定记录的 scope 分布与当前库不同 → 分布不一致；
- *   3. 当前 atom 数是标定规模的 2 倍以上、或不足一半 → 规模越出。
- * 未记录标定场景的**不报**（不能拿未知当已知）—— 它们由「无标定依据」一节单独列出。
- */
-function scaleAlerts(entry, scale) {
-  const cal = entry.calibration
-  if (cal === undefined || scale === null || scale.error !== undefined || scale.missing !== undefined) {
-    return []
-  }
-  if (cal.atoms === undefined && cal.origins === undefined && cal.scopes === undefined) return []
-  const out = []
-  if (cal.origins !== undefined && !sameCategories(cal.origins, scale.origins)) {
-    out.push('来源类别不一致：标定 ' + fmtDist(cal.origins) + ' ｜ 当前 ' + fmtDist(scale.origins))
-  }
-  if (cal.scopes !== undefined && !sameCategories(cal.scopes, scale.scopes)) {
-    out.push('作用域类别不一致：标定 ' + fmtDist(cal.scopes) + ' ｜ 当前 ' + fmtDist(scale.scopes))
-  }
-  if (cal.atoms !== undefined && cal.atoms > 0) {
-    const ratio = scale.atoms / cal.atoms
-    if (ratio >= 2) {
-      out.push(
-        '规模越出：标定 ' + cal.atoms + ' atom，当前 ' + scale.atoms + '（' + ratio.toFixed(1) + ' 倍）',
-      )
-    } else if (ratio <= 0.5) {
-      out.push(
-        '规模越出：标定 ' + cal.atoms + ' atom，当前 ' + scale.atoms + '（' + ratio.toFixed(2) + ' 倍）',
-      )
-    }
-  }
-  return out
-}
-// ─────────────────────────── ④ 渲染 ───────────────────────────
-
-const scale = readScale(DB)
 const registered = new Map()
+const registeredNumeric = new Map()
 for (const e of THRESHOLDS) {
   const cn = constNameOf(e)
-  if (cn !== null) registered.set(cn, e)
+  if (cn === null) continue
+  registered.set(cn, e)
+  if (typeof currentValue(e) === 'number') registeredNumeric.set(cn, e)
 }
+
+const { list: decls, byName: declByName } = scanDeclarations()
+const knownNames = new Set([...declByName.keys(), ...registered.keys()])
+for (const e of THRESHOLDS) if (e.external !== undefined) knownNames.add(e.name)
+for (const k of Object.keys(EXEMPT)) knownNames.add(k)
+for (const k of Object.keys(EXEMPT_NON_NUMERIC)) knownNames.add(k)
+
+// ─────────────────────────── ③ 覆盖核对 ───────────────────────────
+
+const unregistered = []
+const exempted = []
+const bypassed = []
+for (const info of decls) {
+  if (info.value === null) {
+    if (registeredNumeric.has(info.name) && !isDerived(info.initializer, knownNames)) {
+      bypassed.push({
+        name: info.name,
+        file: info.file,
+        line: info.line,
+        reason: '已登记的默认值不是静态数字，也不是可解释的派生 —— 可能被藏进了运行时对象',
+      })
+    }
+    continue
+  }
+  if (registered.has(info.name)) continue
+  if (Object.prototype.hasOwnProperty.call(EXEMPT, info.name)) {
+    exempted.push({
+      name: info.name,
+      file: info.file,
+      line: info.line,
+      value: info.value,
+      reason: EXEMPT[info.name],
+    })
+    continue
+  }
+  unregistered.push({ name: info.name, file: info.file, line: info.line, value: info.value })
+}
+
+// 「登记了但不在数值扫描结果里」：只有源码里根本找不到这个名字才算问题。
+// 非数值常量（判据表这类）与对象型阈值组本来就捕不到，它们由 findAnywhere 确认存在。
+const nonNumericRegistered = []
+const staleRegistrations = []
+for (const [name, entry] of registered) {
+  const d = declByName.get(name)
+  if (d !== undefined && d.value !== null) continue
+  if (entry.external !== undefined) continue
+  const hit = findAnywhere(name)
+  if (hit === null) staleRegistrations.push(name + '（' + constNameOf(entry) + '）')
+  else nonNumericRegistered.push(name + '（' + hit.file + ':' + hit.line + '，非数值或派生）')
+}
+
+const scanned = decls.filter((d) => d.value !== null)
+const bareCount = scanned.filter((d) => d.form === 'literal').length
+const exprCount = scanned.filter((d) => d.form === 'expression').length
+
+// ─────────────────────────── ④ 标定来源格式 ───────────────────────────
+
+/**
+ * 只允许三种形状：
+ *   无记录
+ *   calib@<semver>
+ *   calib@<semver> <报告名>
+ * semver 按 major.minor.patch（可带 prerelease）；报告名至少一个非空白字符，不含换行。
+ * 不检查报告在仓库里能不能解析 —— 标定报告不随仓库分发是常态（它可能含语料信息）。
+ */
+const SOURCE_RE = /^(?:无记录|calib@\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?: \S(?:.*\S)?)?)$/
+
+const badSources = []
+for (const entry of THRESHOLDS) {
+  const source = entry.calibration?.source ?? '无记录'
+  if (typeof source !== 'string' || !SOURCE_RE.test(source)) {
+    badSources.push({ name: entry.name, source: String(source) })
+  }
+}
+
+// ─────────────────────────── ⑤ 渲染 ───────────────────────────
 
 const missingAnchors = []
 const rows = []
-const alerts = []
 
 for (const entry of THRESHOLDS) {
   const line = locate(entry)
@@ -258,69 +339,22 @@ for (const entry of THRESHOLDS) {
       : keys.length > 0
         ? keys.map((k) => k + '=' + (val[k] ?? '?')).join(' / ')
         : String(val)
-  const cal = entry.calibration
-  // 缺什么就写什么缺 —— 「无记录」这三个字同时覆盖语料规模、来源分布与作用域，
-  // 分开写才能看出是「没记规模」还是「根本没记」.
-  const calText =
-    cal === undefined
-      ? '无记录'
-      : [
-          cal.atoms === undefined ? '语料规模未记录' : cal.atoms + ' atom',
-          cal.origins === undefined ? '来源分布未记录' : '来源 ' + fmtDist(cal.origins),
-          cal.scopes === undefined ? '作用域分布未记录' : '作用域 ' + fmtDist(cal.scopes),
-          cal.at === undefined ? '日期未记录' : cal.at,
-        ].join('；')
-  const row = {
+  rows.push({
     name: entry.name,
     value: shown,
     area: entry.area,
-    cal: calText,
-    evidence: cal === undefined ? '无记录' : cal.evidence,
+    source: entry.calibration?.source ?? '无记录',
     varies: entry.variesWith.join('；'),
     where,
     design: entry.design,
     zod: entry.zod,
     otherSites: entry.otherSites ?? [],
     diverges: entry.diverges,
-    /** 有没有标定记录（calibration 对象本身）。 */
-    hasCal: cal !== undefined,
-    /** 有记录、但记录里缺语料规模或分布 —— 比「完全无记录」轻的一种缺口。 */
-    calIncomplete:
-      cal !== undefined && (cal.atoms === undefined || cal.origins === undefined || cal.scopes === undefined),
-  }
-  rows.push(row)
-  const a = scaleAlerts(entry, scale)
-  if (a.length > 0) alerts.push({ name: entry.name, where, msgs: a })
+  })
 }
 
-const noCal = rows.filter((r) => !r.hasCal)
-const partialCal = rows.filter((r) => r.hasCal && r.calIncomplete)
-
-// 覆盖核对
-const found = scanConstants()
-const unregistered = []
-const exempted = []
-for (const [name, info] of found) {
-  if (registered.has(name)) continue
-  if (Object.prototype.hasOwnProperty.call(EXEMPT, name)) {
-    exempted.push({ name, ...info, reason: EXEMPT[name] })
-    continue
-  }
-  unregistered.push({ name, ...info })
-}
-// 「登记了但不在数值扫描结果里」：只有**源码里根本找不到这个名字**才算问题。
-// 非数值常量（判据表这类）与对象型阈值组本来就捕不到，它们由 findAnywhere 确认存在。
-const nonNumericRegistered = []
-const staleRegistrations = []
-for (const [name, entry] of registered) {
-  if (found.has(name)) continue
-  if (entry.external !== undefined) continue
-  const hit = findAnywhere(name)
-  if (hit === null) staleRegistrations.push(name + '（' + constNameOf(entry) + '）')
-  else nonNumericRegistered.push(name + '（' + hit.file + ':' + hit.line + '，非数值或对象型）')
-}
-
-// ─────────────────────────── ⑤ 输出 ───────────────────────────
+const withSource = rows.filter((r) => r.source !== '无记录')
+const withoutSource = rows.length - withSource.length
 
 const out = []
 const say = (...xs) => out.push(...xs)
@@ -328,44 +362,52 @@ const say = (...xs) => out.push(...xs)
 say('# dsh-lattice 阈值登记表')
 
 say('')
-say('## 当前库')
-if (scale.error !== undefined) say('- 读取失败：' + scale.error)
-else if (scale.missing !== undefined) say('- 不存在：' + scale.missing)
-else {
-  say('- 路径：' + scale.file)
-  say('- atom ' + scale.atoms + ' / topic ' + scale.topics)
-  say('- 来源分布：' + fmtDist(scale.origins))
-  say('- 作用域分布：' + fmtDist(scale.scopes))
-}
-say(
-  '- 登记项 ' +
-    rows.length +
-    ' 行：标定记录完整 ' +
-    (rows.length - noCal.length - partialCal.length) +
-    ' 行，记录不完整 ' +
-    partialCal.length +
-    ' 行，无记录 ' +
-    noCal.length +
-    ' 行',
-)
-
-const esc = (s) => String(s).replace(/\|/g, '\\|')
-say('')
 say('## 已登记阈值')
+say(
+  '- 共 ' +
+    rows.length +
+    ' 行：有标定来源 ' +
+    withSource.length +
+    ' 行，无记录 ' +
+    withoutSource +
+    ' 行（来源形状：无记录 / calib@<semver> / calib@<semver> <报告名>）',
+)
 say('')
 if (MD) {
-  say('| 名称 | 当前值 | 段 | 标定场景 | 可变条件 | 定义位置 |')
+  say('| 名称 | 当前值 | 段 | 标定来源 | 可变条件 | 定义位置 |')
   say('|---|---|---|---|---|---|')
   for (const r of rows) {
-    say('| ' + [r.name, r.value, r.area, r.cal, r.varies, r.where].map(esc).join(' | ') + ' |')
+    say(
+      '| ' +
+        [r.name, r.value, r.area, r.source, r.varies, r.where]
+          .map((x) => String(x).replace(/\|/g, '\\|'))
+          .join(' | ') +
+        ' |',
+    )
   }
 } else {
-  // 每行五个字段，行内用 ' | ' 分隔 —— 一行一条，可直接贴进文档。
-  say(['名称', '当前值', '段', '标定场景', '可变条件', '定义位置'].join(' | '))
-  for (const r of rows) say([r.name, r.value, r.area, r.cal, r.varies, r.where].join(' | '))
+  // 每行六个字段，行内用 ' | ' 分隔 —— 一行一条，可直接贴进文档。
+  say(['名称', '当前值', '段', '标定来源', '可变条件', '定义位置'].join(' | '))
+  for (const r of rows) say([r.name, r.value, r.area, r.source, r.varies, r.where].join(' | '))
 }
 
+say('')
+say('## 标定来源')
+say('')
+if (withSource.length === 0) {
+  say('- 有指针 0 行 —— 全部写的是「无记录」')
+} else {
+  say('- 有指针 ' + withSource.length + ' 行：')
+  for (const r of withSource) say('    ' + r.name + ' = ' + r.source + '（' + r.where + '）')
+}
+say(
+  '- 「无记录」' +
+    withoutSource +
+    ' 行。查不到就留空：把缺口暴露出来是本表的产出之一，编一个看起来合理的来源比留空更糟。',
+)
+
 // 设计文档对照
+say('')
 say('## 与设计文档 §7 的对照（只列有对应项的行）')
 say('')
 say('设计文档 = 开发笔记《设计/技术文档/7.配置项清单.md》（设计正文不进本仓库）。')
@@ -385,9 +427,7 @@ for (const entry of THRESHOLDS) {
   const scaleK = d.scale ?? 1
   const designInCodeUnits = d.default / scaleK
   // 「代码默认」取的是模块默认值：zod 有就用 zod 的（它是配置入口的默认值），
-  // 对象型阈值组取**与设计同名的那个子键**（docs 叫 wVec，代码叫 vec）。
-  // 对象型阈值组：设计文档把一组键写成一行，用 codeKeys 映射到代码里的子键名，
-  // 取第一个子键的值作为「这一行的代码默认」；其余子键的值另见主表。
+  // 对象型阈值组取与设计同名的那个子键（docs 叫 wVec，代码叫 vec）。
   const raw = currentValue(entry)
   const primary = d.codeKeys?.[0]
   const codeDefault =
@@ -462,58 +502,49 @@ for (const g of DESIGN_GAPS) {
 }
 
 say('')
-say('## 规模告警（标定场景 vs 当前库）')
+say('## 标定来源格式（非零退出的条件之一）')
 say('')
-if (scale.missing !== undefined || scale.error !== undefined) {
-  say('- 无法比较：读不到库（' + DB + '）')
-} else if (alerts.length === 0) {
-  say('- 无：所有记录了标定场景的阈值都落在当前库的标定场景内')
+if (badSources.length === 0) {
+  say('- 全部合法：来源只取 无记录 / calib@<semver> / calib@<semver> <报告名> 三种形状')
 } else {
-  for (const a of alerts) {
-    say('- **超出标定场景** ' + a.name + '（' + a.where + '）')
-    for (const m of a.msgs) say('    ' + m)
-  }
+  say('**以下来源不符合形状**（不要求报告在仓库内可解析，但必须是这三种形状之一）：')
+  for (const b of badSources) say('- 格式不合法 ' + b.name + ' = ' + b.source)
 }
-say('')
-say('说明：**未记录标定场景的阈值不参与比较** —— 拿未知当已知只会制造假告警。它们列在下一节。')
 
 say('')
-say('## 有证据、但标定场景不完整的阈值（缺口，不是错误）')
-say('')
-say(
-  '共 ' +
-    partialCal.length +
-    ' 行。它们**有证据出处**（代码注释或开发笔记），但记录里没有' +
-    '「在哪个库、多少条 atom、什么来源分布」—— 于是无法判断它现在还适不适用。',
-)
-say('')
-say('这正是 M2 审核点出的那个坑：**阈值取自某个库的分布，却用在另一个库上，而代码里没有任何')
-say('地方记着它是在什么语料上标定的。** 本次把缺口逐行列出来，标定属后续执行点。')
-say('')
-for (const r of partialCal) {
-  say('- ' + r.name + ' = ' + r.value + '（' + r.where + '）：' + r.cal)
-}
-say('')
-say('## 完全无标定记录的阈值')
-say('')
-say('共 ' + noCal.length + ' 行：连证据出处都没有（源码无注释，开发笔记里也查不到）。')
-say('')
-for (const r of noCal) say('- ' + r.name + ' = ' + r.value + '（' + r.where + '）')
-
-say('')
-say('## 覆盖核对（源码数值常量）')
+say('## 覆盖核对（源码模块级数值常量，AST 扫描）')
 say('')
 say('- 扫描范围：src/**/*.ts（' + listSources().length + ' 个文件）')
-say('- 扫到的模块级数值常量：' + found.size + ' 个')
-say('- 已登记或已豁免覆盖：' + (found.size - unregistered.length) + ' 个（豁免 ' + exempted.length + ' 个）')
+say(
+  '- 扫到的模块级数值常量：' +
+    scanned.length +
+    ' 个（裸字面量 ' +
+    bareCount +
+    ' / 表达式 ' +
+    exprCount +
+    '）',
+)
+say(
+  '- 已登记或已豁免覆盖：' +
+    (scanned.length - unregistered.length) +
+    ' 个（豁免 ' +
+    exempted.length +
+    ' 个）',
+)
 if (unregistered.length === 0) {
   say('- **属于阈值但未登记：0 个**（空）')
 } else {
   say('- **属于阈值但未登记：' + unregistered.length + ' 个**：')
   for (const u of unregistered) say('    ' + u.name + ' = ' + u.value + '（' + u.file + ':' + u.line + '）')
 }
+if (bypassed.length === 0) {
+  say('- **默认值被运行时对象引用：0 个**')
+} else {
+  say('- **默认值被运行时对象引用：' + bypassed.length + ' 个**：')
+  for (const b of bypassed) say('    ' + b.name + '（' + b.file + ':' + b.line + '）：' + b.reason)
+}
 say(
-  '- 数值扫描捕不到、但源码里确认存在（非数值或对象型）：' +
+  '- 数值扫描捕不到、但源码里确认存在（非数值或派生）：' +
     (nonNumericRegistered.length === 0 ? '（空）' : nonNumericRegistered.join('、')),
 )
 if (staleRegistrations.length > 0) {
@@ -547,27 +578,40 @@ for (const [name, reason] of Object.entries(EXEMPT_NON_NUMERIC)) {
       reason,
   )
 }
+
 if (QUIET) {
-  // --quiet：只留结论，供脚本消费。
-  //
-  // 「无法比较：读不到库」必须留在白名单里，哪怕它不是告警：--quiet 的用途就是给脚本消费，
-  // 而那一行是该模式下唯一能区分「全部落在标定场景内」与「这一次根本没比成」的东西。
-  // 少了它，读不到库的机器会得到一份看起来一切正常的输出 —— 静默失效的经典形态。
-  const keep = out.filter(
-    (l) =>
-      l.startsWith('- **属于阈值但未登记') ||
-      l.startsWith('- **超出标定场景') ||
-      l.startsWith('- 分叉未解释') ||
-      l.startsWith('- 无法比较：'),
-  )
+  // --quiet：只留结论与失败项，供脚本消费。
+  const keep = []
+  if (unregistered.length === 0) {
+    keep.push('- **属于阈值但未登记：0 个**（空）')
+  } else {
+    keep.push('- **属于阈值但未登记：' + unregistered.length + ' 个**：')
+    for (const u of unregistered)
+      keep.push('    ' + u.name + ' = ' + u.value + '（' + u.file + ':' + u.line + '）')
+  }
+  if (bypassed.length === 0) {
+    keep.push('- **默认值被运行时对象引用：0 个**')
+  } else {
+    keep.push('- **默认值被运行时对象引用：' + bypassed.length + ' 个**：')
+    for (const b of bypassed) keep.push('    ' + b.name + '（' + b.file + ':' + b.line + '）：' + b.reason)
+  }
+  for (const x of unexplainedDiverges) keep.push('- 分叉未解释 ' + x)
+  for (const b of badSources) keep.push('- 格式不合法 ' + b.name + ' = ' + b.source)
   console.log(keep.join('\n'))
 } else {
   console.log(out.join('\n'))
 }
 
-if (unregistered.length > 0 || missingAnchors.length > 0) {
+if (unregistered.length > 0 || missingAnchors.length > 0 || bypassed.length > 0) {
   console.error('')
-  console.error('覆盖核对未通过：有未登记常量或定位失败的登记项。')
+  console.error('覆盖核对未通过：有未登记常量、默认值被藏进运行时对象，或定位失败的登记项。')
+  process.exit(1)
+}
+
+if (badSources.length > 0) {
+  console.error('')
+  console.error('标定来源格式不合法：只允许「无记录 / calib@<semver> / calib@<semver> <报告名>」。')
+  for (const b of badSources) console.error('  ' + b.name + ' = ' + b.source)
   process.exit(1)
 }
 

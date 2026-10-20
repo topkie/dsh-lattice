@@ -157,9 +157,9 @@ export const DEMOTED_ANCHOR_CHARS = 15 * TERM_CHARS
  */
 export type ViewTier = 'full' | 'brief' | 'excerpt'
 
-/** 完整档的下界。不参与按库规模重标，理由见 calibrate.ts 末节。 */
+/** 完整档的下界。不参与按库规模重标，理由见 calib 的说明与重标报告。 */
 export const TIER_FULL_MIN = 0.55
-/** 精简档下界的**默认值**（库小于锚点表下端时用它）；生效值见 calibrate.ts。 */
+/** 精简档下界的**默认值**（库小于锚点表下端时用它）；生效值见 calib 的锚点表。 */
 export const TIER_BRIEF_MIN = 0.45
 
 /**

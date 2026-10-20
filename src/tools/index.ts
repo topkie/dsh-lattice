@@ -69,8 +69,8 @@ function textOutput() {
 /**
  * 「库小到没法标定」时的**兜底**提示线 —— 按库规模重标后的那条线不在这里。
  *
- * 实际生效的线由 `pipeline/calibrate.ts` 的锚点表给出（`briefMinForDb()` 现取），
- * 并随 `assembleView()` 的结果一起返回；调用方要传的是那个值。
+ * 实际生效的线由 calib 的锚点表给出（`briefMinForDb()` 现取，经 `pipeline/calibrate.ts`
+ * 转发），并随 `assembleView()` 的结果一起返回；调用方要传的是那个值。
  *
  * 原值是 0.68，实测**永不触发**：gold 集的 top1 中位数就有 0.683。一个永不触发的
  * 提示与没有提示是一回事，却看起来还在工作 —— 那比没有更糟。

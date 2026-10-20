@@ -83,7 +83,7 @@ export function stripMarkdown(text: string): string {
  * 为什么是一个具名常量而不是两处字面量：默认值住在这里的函数签名里，而写入路径
  * （pipeline/write.ts 与 pipeline/forget.ts）各自又写了一遍 48。同一个数写三遍的
  * 后果是改一处不改另两处 —— 那正是 T45 批一要治的写法问题，不是阈值本身的问题。
- * 值的来源与标定场景见阈值登记表（SUMMARY_CHARS）。
+ * 值的来源与标定依据见阈值登记表（SUMMARY_CHARS）。
  */
 export const SUMMARY_CHARS = 48
 

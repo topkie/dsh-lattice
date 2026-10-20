@@ -427,7 +427,7 @@ src/
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 | `scripts/snapshot-baseline.mjs` | 另存对照库快照到 `.probe/snap/<标签>/`（改规则**之前**跑） |
 | `scripts/build-baseline.mjs` | 重建基准库（`--source <cards.json>`），自带三条自检 |
-| `scripts/print-thresholds.mjs` | 阈值登记表：打印名称/值/标定场景/可变条件 + 与设计文档对照 + 库规模告警 + 覆盖核对（不需模型，可随时跑） |
+| `scripts/print-thresholds.mjs` | 阈值登记表：打印名称/值/标定来源/可变条件 + 与设计文档对照 + 覆盖核对（AST，含表达式型常量）+ 标定来源格式校验（不需模型，可随时跑） |
 
 基准库由 `scripts/build-baseline.mjs` 生成、快照由 `scripts/snapshot-baseline.mjs` 另存
 （见上「标准验证库」）。**改入口规则类的验证脚本不再自带默认库路径**：要对比就显式给
@@ -439,9 +439,11 @@ src/
 无从判断它是怎么来的、能不能动。
 
 **阈值登记表**（`src/thresholds.ts`）是这条约束的载体：每个经验取值在那里有一行，
-写明标定场景（哪个库、多少条、什么来源分布）与可变条件，并引用源码里的真值而不是
-复制一份数字。`print-thresholds.mjs` 负责打印、核对覆盖（源码里的数值常量若既没登记
-也没进豁免清单，命令以非零码退出）与规模告警（当前库越出某行的标定场景时显式报出）。
+写明定义位置、可变条件、第二个取值点，并引用源码里的真值而不是复制一份数字。
+标定依据只放指针（`无记录` / `calib@<semver>` / `calib@<semver> <报告名>`），
+不记语料规模与来源分布 —— 那些属于 calib 重标报告。`print-thresholds.mjs` 负责打印、
+用 TypeScript 编译器 API 核对覆盖（源码里的模块级数值常量，含表达式型；既没登记
+也没进豁免清单就非零退出）并校验来源格式（不合形状也非零退出）。
 新增或改动阈值时，**先跑它**看缺口。
 
 **档位阈值按库规模重标**（`src/pipeline/calibrate.ts`）。`view.ts` 的 `tierOf(topCosine, briefMin)`
