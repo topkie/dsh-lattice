@@ -35,6 +35,8 @@ import {
   constNameOf,
   currentValue,
   definitionSite,
+  displayProblems,
+  divergenceProblems,
   needsReviewEntries,
   reviewBaselineProblems,
   subKeys,
@@ -412,6 +414,31 @@ const scanned = decls.filter((d) => d.value !== null)
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
 
+// ─────────────────────── ③′ 断言：登记里的关系必须成立（T55）───────────────────────
+//
+// 三种关系原先靠手写的文字维持，现在由这里核对：
+//   1. display 里不写字面等式 —— 等式随常量变，写成字符串就跟不上；
+//   2. 声明了 divergence.docValue 的，分叉必须真的存在（相等 = 这条该删）；
+//   3. refs 指向的文件存在、符号在文件里出现 —— 行号会漂，符号不会。
+const assertionProblems = [...displayProblems(), ...divergenceProblems()]
+const refSites = [
+  ...THRESHOLDS.map((e) => [e.name, e.refs ?? []]),
+  ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
+]
+for (const [where, refs] of refSites) {
+  for (const ref of refs) {
+    const path = join(ROOT, ref.file)
+    if (!existsSync(path)) {
+      assertionProblems.push(where + '：refs 指向的文件不存在 ' + ref.file)
+      continue
+    }
+    const symbol = ref.symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (!new RegExp('\\b' + symbol + '\\b').test(readFileSync(path, 'utf8'))) {
+      assertionProblems.push(where + '：refs 里的符号 ' + ref.symbol + ' 在 ' + ref.file + ' 里找不到')
+    }
+  }
+}
+
 // ─────────────────────────── ④ 渲染 ───────────────────────────
 
 /** 来历的短标签：表格里一列能看懂「这个值是怎么来的」。 */
@@ -437,7 +464,9 @@ for (const entry of THRESHOLDS) {
   const val = currentValue(entry)
   const shown =
     entry.display !== undefined
-      ? entry.display
+      ? typeof entry.display === 'function'
+        ? entry.display()
+        : entry.display
       : keys.length > 0
         ? keys.map((k) => k + '=' + (val[k] ?? '?')).join(' / ')
         : String(val)
@@ -516,7 +545,7 @@ if (MD) {
   say('|---|---|---|---|---|---|---|')
 }
 const designRows = []
-// D3：分叉必须有解释。zod 默认值与设计文档不同时，登记项里必须有 diverges 说明原因 ——
+// D3：分叉必须有解释。zod 默认值与设计文档不同时，登记项里必须有 diverges 或 divergence 说明原因 ——
 // 「存在分叉」本身不是问题（文档可能没同步），「分叉没人解释」才是：读表的人会在这里停下来，
 // 然后自己去猜。判据不是「不一致就红」，那会永久红。
 const unexplainedDiverges = []
@@ -558,7 +587,8 @@ for (const entry of THRESHOLDS) {
   if (
     entry.zod !== undefined &&
     Math.abs(entry.zod.default - designInCodeUnits) > 1e-9 &&
-    entry.diverges === undefined
+    entry.diverges === undefined &&
+    entry.divergence === undefined
   ) {
     unexplainedDiverges.push(
       entry.name + '（设计 ' + designInCodeUnits + ' ｜ zod ' + entry.zod.default + '）',
@@ -583,14 +613,32 @@ if (!MD) {
   say('不一致 ' + inconsistent.length + ' 行：' + inconsistent.map((r) => r.name).join('、'))
 }
 
+// 「设计文档没有这个键」不再手写（T55 第 3 项）：句子由字段倒推，缺 design 也缺 external
+// 的条目自动出现在这里。手写的同一句话会与字段脱钩 —— 补上 design 之后它还在，而字段已经变了。
+const notInDesignDoc = THRESHOLDS.filter((e) => e.design === undefined && e.external === undefined)
+say('')
+say('## 设计文档 §7 没有对应键的条目（自动生成）')
+say('')
+say('这一节不是手写的：条目缺 design 也缺 external 时，打印脚本补一句；给某条补上 design，它就从这里消失。')
+for (const e of notInDesignDoc) say('- ' + e.name + '（' + e.area + '）：设计文档 §7 没有这个键')
+
 say('')
 say('## 分叉未解释（非零退出的条件之一）')
 say('')
 if (unexplainedDiverges.length === 0) {
-  say('- 无：所有与设计文档不同的 zod 默认值都写了 diverges')
+  say('- 无：所有与设计文档不同的 zod 默认值都写了 diverges 或 divergence')
 } else {
   say('**以下阈值的 zod 默认值与设计文档不同，而登记项没有 diverges** —— 读表的人会停在这里：')
   for (const x of unexplainedDiverges) say('- 分叉未解释 ' + x)
+}
+say('')
+say('## 断言（关系必须成立）')
+say('')
+if (assertionProblems.length === 0) {
+  say('- 无：display 里没有字面等式、divergence 都成立、refs 都指得到')
+} else {
+  say('**以下关系不成立** —— 登记里的说法与代码对不上：')
+  for (const p of assertionProblems) say('- ' + p)
 }
 say('')
 say('## 设计文档有、代码里没有的配置')
@@ -598,6 +646,7 @@ say('')
 for (const g of DESIGN_GAPS) {
   say('- ' + g.key + '（文档默认 ' + g.designDefault + '）：' + g.note)
   for (const s of g.codeSites ?? []) say('    代码位置：' + s)
+  for (const r of g.refs ?? []) say('    代码位置：' + r.file + ' 的 ' + r.symbol)
 }
 
 say('')
@@ -685,6 +734,7 @@ if (QUIET) {
     for (const b of bypassed) keep.push('    ' + b.name + '（' + b.file + ':' + b.line + '）：' + b.reason)
   }
   for (const x of unexplainedDiverges) keep.push('- 分叉未解释 ' + x)
+  for (const p of assertionProblems) keep.push('- 断言不成立 ' + p)
   console.log(keep.join('\n'))
 } else {
   console.log(out.join('\n'))
@@ -696,10 +746,20 @@ if (unregistered.length > 0 || missingAnchors.length > 0 || bypassed.length > 0)
   process.exit(1)
 }
 
+if (assertionProblems.length > 0) {
+  console.error('')
+  console.error('断言不成立：登记里的 display 等式、divergence 或 refs 与代码对不上。')
+  console.error('修法：display 改成函数；分叉消失就删掉 divergence；refs 里的符号改名了要同步。')
+  for (const p of assertionProblems) console.error('  ' + p)
+  process.exit(1)
+}
+
 if (unexplainedDiverges.length > 0) {
   console.error('')
   console.error('分叉未解释：以下阈值的 zod 默认值与设计文档不同，但登记项里没有 diverges。')
-  console.error("写法：在该项的登记里加 diverges: '…为什么不同…'（读者要的是原因，不是差值）。")
+  console.error(
+    "写法：值不同写 divergence: { docValue, note }，别的分叉写 diverges: '…'（读者要的是原因，不是差值）。",
+  )
   for (const x of unexplainedDiverges) console.error('  ' + x)
   process.exit(1)
 }

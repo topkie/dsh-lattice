@@ -190,6 +190,14 @@ export type ThresholdArea =
 /** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
 export type ThresholdValue = number | string | Readonly<Record<string, number>>
 
+/** 一处源码引用：文件 + 符号名。行号会漂（引的那一段可能已经换成了别的函数），符号不会。 */
+export interface ThresholdRef {
+  /** 相对仓库根的正斜杠路径，例如 `src/pipeline/write.ts`。 */
+  file: string
+  /** 文件里必须出现的符号名；打印脚本按整词搜它。 */
+  symbol: string
+}
+
 /**
  * 来历：这个值是怎么来的。只有两态（见 T52 的判据）。
  *
@@ -302,12 +310,32 @@ export interface ThresholdEntry {
   zod?: ZodSite
   /** 该名字在别处还有取值点（例如 index.ts 的 `??` 兜底），改动时必须同步。 */
   otherSites?: readonly string[]
-  /** 已知的与设计文档的分叉，写明现状以便审核。 */
+  /** 登记里引用的源码位置；打印脚本核对文件存在、符号在文件里出现。 */
+  refs?: readonly ThresholdRef[]
+  /**
+   * 分叉：设计文档给了数字，代码取的是另一个数字。
+   *
+   * 只用于「文档有值、代码不同」。文档没有这个键、或分叉讲的是别的事（缺 zod、实现位置或单位
+   * 不同、文档未同步），仍写在 `diverges` 里。声明了就必须与 `value()` 不同 —— 相等说明分叉
+   * 已经不存在，这句话该删；这条断言由 `divergenceProblems` 检查，打印时非零退出。
+   */
+  divergence?: { docValue: number; note: string }
+  /**
+   * 已知的与设计文档的分叉，写明现状以便审核。
+   *
+   * 值分叉（文档一个数、代码另一个数）用 `divergence`，让「分叉还在不在」可断言；这里写
+   * 没法用一个数字表达的那些：文档缺这个键、实现位置或单位不同、文档未同步。
+   */
   diverges?: string
   /** 覆盖检查用的常量名：默认取 definedBy.name；内联量与设计类条目写 null。 */
   constName?: string | null
-  /** 打印时展示的值；值不是数字（例如 Set、复合推导值）时用它替代。 */
-  display?: string
+  /**
+   * 打印时展示的值；值不是数字（例如 Set、复合推导值）时用它替代。
+   *
+   * 写成函数时打印才求值：等式里的数字从常量插值，常量改了它跟着变。字面量里出现 `=`
+   * 会被打印脚本判红 —— 那种写法迟早与常量脱钩，而它本来就是为了让人看见「这个数是怎么算出来的」。
+   */
+  display?: string | (() => string)
   /** 设计文档有、代码里已实现但键名不同的项：实现位置。 */
   codeSites?: readonly string[]
 }
@@ -328,6 +356,8 @@ export interface DesignGap {
   note: string
   /** 代码里其实实现了、只是键名不同时的实现位置。 */
   codeSites?: readonly string[]
+  /** codeSites 的结构化版本：文件 + 符号名，由打印脚本核对符号确实在文件里。 */
+  refs?: readonly ThresholdRef[]
 }
 
 /**
@@ -400,7 +430,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     constName: null,
     design: { doc: DESIGN_DOC, key: 'tauJoin', default: 0.75, min: 0.6, max: 0.95 },
     zod: { file: 'src/index.ts', name: 'tauJoin', default: 0.78, min: 0.6, max: 0.95 },
-    diverges: '设计文档默认 0.75，代码与 zod 都是 0.78（标定后上调，文档未同步）',
+    divergence: { docValue: 0.75, note: '标定后上调，文档未同步（代码与 zod 都是 0.78）' },
   },
   {
     name: 'DEFAULT_THRESHOLDS.tauLex',
@@ -418,7 +448,10 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     constName: null,
     design: { doc: DESIGN_DOC, key: 'tauLex', default: 0.12, min: 0.05, max: 0.5 },
     zod: { file: 'src/index.ts', name: 'tauLex', default: 0.05, min: 0.02, max: 0.5 },
-    diverges: '设计文档默认 0.12（其下界恰为 0.05），代码取的正是那个下界；zod 下界 0.02 比文档更宽',
+    divergence: {
+      docValue: 0.12,
+      note: '其下界恰为 0.05，代码取的正是那个下界；zod 下界 0.02 比文档的范围更宽',
+    },
   },
   {
     name: 'DEFAULT_THRESHOLDS.tauNew',
@@ -448,7 +481,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['词面判据本身的变化（tauLex）', '编码器可用率与其降级路径'],
     constName: null,
     zod: { file: 'src/index.ts', name: 'tauLexOnly', default: 0.1, min: 0.02, max: 0.6 },
-    diverges: '**设计文档 §7 没有这个键** —— 代码新增（降级路径），文档未同步',
+    diverges: '**代码新增（降级路径）**，文档未同步',
   },
   {
     name: 'DELTA_PEAK',
@@ -521,7 +554,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     ],
     diverges:
       '**设计文档 §7 的 topN 指召回条数**（对应 search.ts 的 RECALL_TOP_N），不是这里的落位候选数 ——' +
-      '本常量在文档里没有对应键。两件事同为 24 纯属巧合，改配置不会改这里',
+      '两件事同为 24 纯属巧合，改配置不会改这里',
   },
   {
     name: 'FINGERPRINT_CHARS',
@@ -671,7 +704,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       scale: '20 条 gold 查询',
       at: '2026-10-17',
     }),
-    display: 'IDF × log2(1+tf)（tf=1 时该因子恰为 1，条目退化成 v3 的纯 IDF）',
+    display: 'IDF × log2(1+tf)（tf 为 1 时该因子恰为 1，条目退化成 v3 的纯 IDF）',
     definedBy: { file: 'src/pipeline/entries.ts', name: '内联（无常量名）' },
     affects: '抽取入口的打分：IDF（区分度）乘上词频项（证据强度），决定十六个槽位归谁',
     inline: {
@@ -716,7 +749,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     }),
     definedBy: { file: 'src/pipeline/entries.ts', name: 'MIN_VOCAB_FOR_DF' },
     affects: '语料规模达到此值，泛词过滤（df/N > 0.5）才生效',
-    display: '12（= 使 p=0.5 处 Wilson 95% 半宽 ≤ 0.25 的最小 n）',
+    display: () => `${MIN_VOCAB_FOR_DF}（= 使 p=0.5 处 Wilson 95% 半宽 ≤ ${DF_FILTER_HALF_WIDTH} 的最小 n）`,
     variesWith: ['每 atom 的入口配额（配额越小，泛词线越早需要生效）', '语料语言', '上游切词规则'],
   },
   {
@@ -808,7 +841,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     group: ['declared', 'extracted', 'learned'],
     variesWith: ['入口来源分级本身变化时（例如新增一级）'],
     diverges:
-      '**设计文档 §7 没有这组键**（文档的四路权重是召回的 wVec/wEntry/wBody/wGraph，与本组不是一回事）；' +
+      '文档的四路权重是召回的 wVec/wEntry/wBody/wGraph，与本组不是一回事；' +
       '代码里 learned 一级写入侧不产生，仅由召回反哺',
   },
   {
@@ -890,10 +923,17 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_FORGET_COUNT_EFF' },
     affects: '遗忘线：count_eff 低于它的 learned 行删除',
     variesWith: ['hits 的存储口径（若将来改成小数累加，这条线要按文档回到 1.5）', '召回频次'],
-    design: { doc: DESIGN_DOC_T17, key: '防抖第 2 条（文档取 1.5，代码取 0.5，见 diverges）', default: 1.5 },
-    diverges:
-      '**文档 1.5 ｜ 代码 0.5**，理由见 evidence：文档的 count 是实数累加，hits 是整数列。' +
-      '这不是调参分歧，是存储口径不一致导致同一个数字无法照抄',
+    design: {
+      doc: DESIGN_DOC_T17,
+      key: '防抖第 2 条（文档取 1.5，代码取 0.5，见 divergence）',
+      default: 1.5,
+    },
+    divergence: {
+      docValue: 1.5,
+      note:
+        '文档的 count 是实数累加，hits 是整数列 —— 这不是调参分歧，' +
+        '是存储口径不一致导致同一个数字无法照抄',
+    },
   },
   {
     name: 'LEARNED_MAX_PER_ATOM',
@@ -961,12 +1001,13 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     ...recheckable(() => LEARNED_PROMOTE_MAX_WEIGHT, {
       tool: '无脚本，按字段读出',
       finding:
-        '没有独立数字，值是 ENTRY_WEIGHT.extracted（0.6）—— src/pipeline/entries.ts:577 就是' +
-        ' `export const LEARNED_PROMOTE_MAX_WEIGHT = ENTRY_WEIGHT.extracted`，不另写一份 0.6',
+        '没有独立数字，值是 ENTRY_WEIGHT.extracted（0.6）—— `src/pipeline/entries.ts` 里' +
+        ' `LEARNED_PROMOTE_MAX_WEIGHT` 的定义就是 `ENTRY_WEIGHT.extracted`，不另写一份 0.6',
       formula: true,
       guardedBy: ['test/entries-learned.test.mjs'],
     }),
     definedBy: { file: 'src/pipeline/entries.ts', name: 'LEARNED_PROMOTE_MAX_WEIGHT' },
+    refs: [{ file: 'src/pipeline/entries.ts', symbol: 'LEARNED_PROMOTE_MAX_WEIGHT' }],
     affects: '升档能升到的分值上限 —— 取 ENTRY_WEIGHT.extracted，永不等于 declared 的 1.0',
     variesWith: ['ENTRY_WEIGHT.extracted（同一个数的两个出口，改一个必须看另一个）'],
     design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 第 3 条（→ extracted，0.6）', default: 0.6 },
@@ -1029,7 +1070,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     group: ['primary', 'secondary', 'graphOnly'],
     variesWith: ['次属与图路引入的精度测量'],
     diverges:
-      '**设计文档 §7 没有这组键**。设计报告里出现过 graph 权重 0.5，代码的 graphOnly 是 0.70 ——' +
+      '设计报告里出现过 graph 权重 0.5，代码的 graphOnly 是 0.70 ——' +
       '两者不是同一个量，但不熟悉的人容易当成同一个',
   },
   {
@@ -1042,7 +1083,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/search.ts', name: 'DEFAULT_SEED_COUNT' },
     affects: '图路用向量路的前多少条做种子（A.slice(0, DEFAULT_SEED_COUNT)）',
     variesWith: ['图路的边密度与精度', '库规模'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
   },
   {
     name: 'K_VEC',
@@ -1055,7 +1095,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/search.ts', name: 'K_VEC' },
     affects: '向量路取多少条进融合（向量粗筛的宽度）',
     variesWith: ['库规模（库长大时固定取前 N 会让召回质量悄悄退化）'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有 —— 固定上限改预算制是 T45 批二（与 T40 合并）',
+    diverges: '**zod schema 里也没有** —— 固定上限改预算制是 T45 批二（与 T40 合并）',
   },
   {
     name: 'K_LEX',
@@ -1067,7 +1107,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/search.ts', name: 'K_LEX' },
     affects: '词面两路（Entry 与正文）各取多少条进融合',
     variesWith: ['库规模', '中文 bigram 的候选密度'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+    diverges: '**zod schema 里也没有**',
   },
   {
     name: 'K_GRAPH',
@@ -1079,7 +1119,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/search.ts', name: 'K_GRAPH' },
     affects: '图路一跳扩展取多少条进融合（与 OUT_DEGREE_CAP 分工：那条限每个种子的出度，这条限总量）',
     variesWith: ['图路的边密度', '库规模'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+    diverges: '**zod schema 里也没有**',
   },
   {
     name: 'RECALL_TOP_N',
@@ -1187,8 +1227,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     affects: '超预算时的裁剪顺序（路 -> 入口 -> 锚降级 -> 路清零 -> 锚减量）',
     variesWith: ['三段分工本身变化时（例如新增一段）'],
     diverges:
-      '**设计文档 §7 没有这个键**，zod schema 里也没有。它按字符串而非数值登记：' +
-      '列在此处的目的是让「行为契约级常量」不被漏掉',
+      '**zod schema 里也没有**。它按字符串而非数值登记：' + '列在此处的目的是让「行为契约级常量」不被漏掉',
   },
   {
     name: 'TIER_FULL_MIN',
@@ -1221,6 +1260,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs'],
     }),
     definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_BRIEF_MIN' },
+    refs: [{ file: 'src/tools/index.ts', symbol: 'LOW_RELEVANCE_HINT' }],
     affects:
       '库小于锚点表下端时的**默认**精简档下界；库 >= 12 条时生效值由 calib 的锚点表按规模给出，' +
       '本常量不再等于生效值。它同时仍是弱相关提示线 LOW_RELEVANCE_HINT 的取值来源',
@@ -1228,7 +1268,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     diverges:
       '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。' +
       '重标定已把生效值改成规模的函数（本次），但**弱相关提示线 LOW_RELEVANCE_HINT 仍是这个常数**' +
-      '（src/tools/index.ts:59 直接引用它）—— 工具层不在本次改动边界内，两处暂时分叉，见实现报告的未确定项。' +
+      '（`src/tools/index.ts` 的 `LOW_RELEVANCE_HINT` 直接引用它）—— 工具层不在本次改动边界内，两处暂时分叉，见实现报告的未确定项。' +
       '本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理',
   },
   {
@@ -1292,9 +1332,12 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       guardedBy: ['test/tools.test.mjs'],
     }),
     definedBy: { file: 'src/tools/index.ts', name: 'LOW_RELEVANCE_HINT' },
+    refs: [{ file: 'src/tools/index.ts', symbol: 'LOW_RELEVANCE_HINT' }],
     affects: 'isWeakMatch：低于此值在召回结果前标一句「可能不相关」（只提示不拦截）',
     variesWith: ['TIER_BRIEF_MIN 改动时（它是别名，不是独立取值）', '换编码模型'],
-    otherSites: ['src/tools/index.ts:48 `= TIER_BRIEF_MIN` —— 不是自己的数，与摘录档同源'],
+    otherSites: [
+      '`src/tools/index.ts` 的 `LOW_RELEVANCE_HINT` = TIER_BRIEF_MIN —— 不是自己的数，与摘录档同源',
+    ],
   },
   {
     name: 'DEFAULT_BUDGET',
@@ -1322,7 +1365,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_ANCHOR_MAX' },
     affects: '单条锚的字符上限（全文很长时截断，避免一条吃掉整段）',
     variesWith: ['atom 正文长度分布', '字符预算'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有 —— 运行时不可配置',
+    diverges: '**zod schema 里也没有** —— 运行时不可配置',
   },
   {
     name: 'DEFAULT_ENTRIES_PER_TOPIC',
@@ -1346,7 +1389,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/view.ts', name: 'DEFAULT_ENTRY_LINE_MAX' },
     affects: '单个主题的入口行字符上限（防止一行过长挤占锚段）',
     variesWith: ['入口词的长度分布', '每主题入口条数'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有',
+    diverges: '**zod schema 里也没有**',
   },
   {
     name: 'DEFAULT_PATH_LINES',
@@ -1380,11 +1423,12 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       'D15-3「低相关时入口段是主角，但也要收窄」—— 各档每个主题给几条入口是设计判断，无实测记录',
     ),
     definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_ENTRIES' },
+    refs: [{ file: 'src/pipeline/view.ts', symbol: 'TIER_ENTRIES' }],
     affects: '各档每个主题给几条入口（只有摘录档收窄）',
     group: ['full', 'brief', 'excerpt'],
     variesWith: ['入口段在各档里的实际贡献'],
     diverges:
-      '**值在代码里是字面量而不是引用常量**（view.ts:103-107 直接写 8 / 8 / 4），' +
+      '**值在代码里是字面量而不是引用常量**（`src/pipeline/view.ts` 的 `TIER_ENTRIES` 直接写 8 / 8 / 4），' +
       '与 DEFAULT_ENTRIES_PER_TOPIC 形成第二份同一个数',
   },
   {
@@ -1449,21 +1493,21 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/list.ts', name: 'LIST_MAX_LIMIT' },
     affects: '一页最多给多少条；请求值被强制钳制到 [1, 50]',
     variesWith: ['一次注入能容纳的摘要条数', '库规模'],
-    diverges: '**设计文档 §7 没有这个键**，zod schema 里也没有（工具侧有测试守着钳制行为）',
+    diverges: '**zod schema 里也没有**（工具侧有测试守着钳制行为）',
   },
   {
     name: 'LIST_DEFAULT_LIMIT',
     area: '目录',
     ...chosen(
       () => LIST_DEFAULT_LIMIT,
-      'list.ts:15 注释「取值偏小：列目录是为了定位，不是为了读完」：默认页大小是使用偏好选择，' +
+      '`src/pipeline/list.ts` 的 `LIST_DEFAULT_LIMIT` 注释「取值偏小：列目录是为了定位，不是为了读完」：默认页大小是使用偏好选择，' +
         '不是标定结果',
       { guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs'] },
     ),
     definedBy: { file: 'src/pipeline/list.ts', name: 'LIST_DEFAULT_LIMIT' },
+    refs: [{ file: 'src/pipeline/list.ts', symbol: 'LIST_DEFAULT_LIMIT' }],
     affects: '默认页大小',
     variesWith: ['同上'],
-    diverges: '**设计文档 §7 没有这个键**',
   },
   // ────────────────────── 迁移切分（migrate/split.ts）─────────────────────────
   {
@@ -1478,7 +1522,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/migrate/split.ts', name: 'MIN_ATOM_CHARS' },
     affects: '切分时一条 atom 的最小字符数（低于它不再切）',
     variesWith: ['「一句话讲一件事」这条写入约定的实际长度'],
-    diverges: '**设计文档 §7 没有这个键**（文档的 autoSplit 是一期关闭的配置项）',
+    diverges: '文档的 autoSplit 是一期关闭的配置项',
   },
   {
     name: 'MAX_ATOM_CHARS',
@@ -1509,7 +1553,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MIN_CHARS' },
     affects: '写入侧审核「自动处理·过短」：正文短于它的写入被拦下、不落库',
     variesWith: ['「一句话讲一件事」这条写入约定的实际长度分布', '语言', '正文里是否允许单句参数'],
-    diverges: '**设计文档 §7 没有这个键**；`lattice_write` 的入参契约里也没有这条下限',
+    diverges: '`lattice_write` 的入参契约里也没有这条下限',
   },
   {
     name: 'REVIEW_MAX_CHARS',
@@ -1524,7 +1568,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['同 MAX_ATOM_CHARS（atom 正文长度分布、FTS 索引体积、落位质量）'],
     constName: null,
     otherSites: ['src/migrate/split.ts 的 MAX_ATOM_CHARS 是它的真相源'],
-    diverges: '**设计文档 §7 没有这个键**',
   },
   {
     name: 'REVIEW_MAX_SEGMENTS',
@@ -1538,9 +1581,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     }),
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MAX_SEGMENTS' },
     affects: '一次写入最多自动切成多少条；超过则整条不写入，交回调用方自己拆',
-    display: '8（= 写入预算 1000 ms ÷ 单段实测 125 ms）',
+    display: () =>
+      `${REVIEW_MAX_SEGMENTS}（= 写入预算 ${REVIEW_WRITE_BUDGET_MS} ms ÷ 单段实测 ${REVIEW_SEGMENT_MS} ms）`,
     variesWith: ['单段写入耗时（编码器与词表重建）', '一次工具调用的时延预算'],
-    diverges: '**设计文档 §7 没有这个键**',
   },
   {
     name: 'REVIEW_SCAN_LIMIT',
@@ -1553,9 +1596,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     }),
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_LIMIT' },
     affects: '重复 / 高相似检测一次最多比多少个同主题成员（**只读，不写库**）',
-    display: '200（= 扫描预算 10 ms ÷ 单条实测 0.05 ms）',
+    display: () =>
+      `${REVIEW_SCAN_LIMIT}（= 扫描预算 ${REVIEW_SCAN_BUDGET_MS} ms ÷ 单条实测 ${REVIEW_MEMBER_SCAN_MS} ms）`,
     variesWith: ['单个主题的成员数分布', 'atom 正文的平均长度'],
-    diverges: '**设计文档 §7 没有这个键**',
   },
   {
     name: 'REVIEW_WRITE_BUDGET_MS',
@@ -2276,7 +2319,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   {
     name: 'RECALIBRATE_MIN_ATOMS',
     area: '校准样本',
-    // 值直接取 TIER_SCALE_STABLE_ATOMS（trigger.ts:15 就是引用），不是自己的数。
+    // 值直接取 TIER_SCALE_STABLE_ATOMS（`src/calibration/trigger.ts` 的 `RECALIBRATE_MIN_ATOMS` 就是引用），不是自己的数。
     ...recheckable(() => RECALIBRATE_MIN_ATOMS, {
       tool: '源码表达式（src/calibration/trigger.ts 直接引用 TIER_SCALE_STABLE_ATOMS）',
       finding:
@@ -2286,8 +2329,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       at: '2026-10-17',
       formula: true,
     }),
-    display: '192（= TIER_SCALE_STABLE_ATOMS）',
+    display: () => `${RECALIBRATE_MIN_ATOMS}（= TIER_SCALE_STABLE_ATOMS）`,
     definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_ATOMS' },
+    refs: [{ file: 'src/calibration/trigger.ts', symbol: 'RECALIBRATE_MIN_ATOMS' }],
     affects: '闸①：库小于 192 条不重标（S 的抽样波动在这个规模下与漂移同量级）',
     variesWith: ['查询集', '语料构成'],
   },
@@ -2357,13 +2401,13 @@ export const DESIGN_GAPS: readonly DesignGap[] = [
     key: 'ratioAnchor/Entry/Path',
     designDefault: 55,
     note: '**文档有、代码里键名不同**：实现在 pipeline/view.ts 的 SEGMENT_RATIO（小数 0.55 / 0.2 / 0.25）',
-    codeSites: ['src/pipeline/view.ts:16 SEGMENT_RATIO'],
+    refs: [{ file: 'src/pipeline/view.ts', symbol: 'SEGMENT_RATIO' }],
   },
   {
     key: 'wVec/wEntry/wBody/wGraph',
     designDefault: 1,
     note: '**文档有、代码里键名不同**：实现在 pipeline/search.ts 的 CHANNEL_WEIGHT（vec / entry / body / graph）',
-    codeSites: ['src/pipeline/search.ts:21 CHANNEL_WEIGHT'],
+    refs: [{ file: 'src/pipeline/search.ts', symbol: 'CHANNEL_WEIGHT' }],
   },
   {
     key: 'autoSplit',
@@ -2387,7 +2431,7 @@ export const DESIGN_GAPS: readonly DesignGap[] = [
       '**文档有、代码里用的是别的名字或名字相同但非数值**：enabled 与 encoderEnabled 在 index.ts 的' +
       ' Config 里同名；vaultPath 在代码里叫 dataDir（state.ts 的 resolveDataDir）；encoderModel 同名同默认。' +
       '列在此处是为了让「文档 §7 的每个键都有人认领」可核对',
-    codeSites: ['src/index.ts:42-51（enabled / dataDir / encoderEnabled / encoderModel）'],
+    refs: [{ file: 'src/index.ts', symbol: 'Config' }],
   },
 ]
 
@@ -2429,6 +2473,43 @@ export function undatedEntries(): ThresholdEntry[] {
     const o = e.calibration?.origin
     return o?.kind === 'recheckable' && o.formula !== true && o.at === undefined
   })
+}
+
+/**
+ * 字面量 `display` 里出现 `=` 即报（T55）。
+ *
+ * 等式写死在字符串里，常量一改它就与代码脱钩 —— 打印出来最像「已经核对过」的那一行，
+ * 恰恰是唯一没人核对的。判据只认字面量：函数形式的 display 是打印时现算的，等号随值变。
+ */
+export function displayProblems(entries: readonly ThresholdEntry[] = THRESHOLDS): string[] {
+  return entries
+    .filter((e) => typeof e.display === 'string' && e.display.includes('='))
+    .map((e) => e.name + '：display 是字面量且含「=」，等式会与常量脱钩 —— 改成函数，用模板字符串从常量插值')
+}
+
+/**
+ * 声明了分叉，就必须真的还在分叉（T55）：`docValue` 与当前值相等 = 分叉已经不存在。
+ *
+ * 这是唯一能把「代码改回去了、记录没跟着改」变成可见的办法。只认数值条目 —— 对象型阈值组
+ * 没法用一个数表达分叉，写在它们上面会是一条永远成立的断言（等于没写），所以也报。
+ */
+export function divergenceProblems(entries: readonly ThresholdEntry[] = THRESHOLDS): string[] {
+  const problems: string[] = []
+  for (const e of entries) {
+    const d = e.divergence
+    if (d === undefined) continue
+    const v = currentValue(e)
+    if (typeof v !== 'number') {
+      problems.push(e.name + '：divergence 只用于数值条目，当前值不是数字')
+      continue
+    }
+    if (d.docValue === v) {
+      problems.push(
+        e.name + '：divergence.docValue（' + d.docValue + '）与代码值相同 —— 分叉已不存在，删掉这条',
+      )
+    }
+  }
+  return problems
 }
 
 /** 评审基线的形状：两个集合各自是「条目名 → 为什么现在补不了」。 */

@@ -12,7 +12,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import {
+  DESIGN_GAPS,
   THRESHOLDS,
+  displayProblems,
+  divergenceProblems,
   needsReviewEntries,
   reviewBaselineProblems,
   undatedEntries,
@@ -91,6 +94,115 @@ describe('阈值来历：三个查询', () => {
         e.name + ' 是公式条目，不该进 undated',
       )
     }
+  })
+})
+
+describe('阈值来历：display 的等式必须是活值（T55）', () => {
+  it('字面量 display 里出现「=」→ 报一条，点名是哪条', () => {
+    const entry = { ...THRESHOLDS[0], name: 'FAKE_EQUATION', display: '8（= 1000 ÷ 125）' }
+    const problems = displayProblems([entry])
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /FAKE_EQUATION/)
+  })
+
+  it('函数形式的 display 不报 —— 等号是打印时现算的', () => {
+    const entry = { ...THRESHOLDS[0], name: 'FAKE_EQUATION', display: () => '8（= 1000 ÷ 125）' }
+    assert.deepEqual(displayProblems([entry]), [])
+  })
+
+  it('登记表里没有字面等式', () => {
+    assert.deepEqual(displayProblems(), [])
+  })
+})
+
+describe('阈值来历：refs 指得到符号（T55）', () => {
+  const ROOT = fileURLToPath(new URL('..', import.meta.url))
+  const refSites = [
+    ...THRESHOLDS.map((e) => [e.name, e.refs ?? []]),
+    ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
+  ]
+
+  it('登记的 refs 都看得到：文件存在，符号在文件里出现', () => {
+    for (const [name, refs] of refSites) {
+      for (const ref of refs) {
+        const text = readFileSync(ROOT + ref.file, 'utf8')
+        assert.ok(text.includes(ref.symbol), name + '：' + ref.file + ' 里找不到符号 ' + ref.symbol)
+      }
+    }
+  })
+
+  it('登记表里不再出现「文件:行号」的引用', () => {
+    const text = readFileSync(ROOT + 'src/thresholds.ts', 'utf8')
+    const hits = text.match(/[A-Za-z0-9_./-]+\.(?:ts|mjs|js):\d/g) ?? []
+    assert.deepEqual(hits, [], '行号会漂：改成 refs: [{ file, symbol }] 或「文件 + 符号名」的叙述')
+  })
+
+  it('当前应有至少一条 refs（否则这条检查在空转）', () => {
+    assert.ok(
+      refSites.some(([, refs]) => refs.length > 0),
+      '登记表里一条 refs 都没有',
+    )
+  })
+})
+
+describe('阈值来历：缺键由打印脚本生成（T55）', () => {
+  it('diverges 里不再手写「设计文档 §7 没有这个键」', () => {
+    const handwritten = THRESHOLDS.filter((e) => (e.diverges ?? '').includes('设计文档 §7 没有'))
+    assert.deepEqual(
+      handwritten.map((e) => e.name),
+      [],
+      '这句话由 print-thresholds.mjs 按「缺 design 且缺 external」自动补，手写会与字段脱钩',
+    )
+  })
+
+  it('缺 design 也缺 external 的条目，正是该自动列出的一批', () => {
+    const rows = THRESHOLDS.filter((e) => e.design === undefined && e.external === undefined)
+    assert.ok(rows.length > 0, '当前应有这样的条目；若都补上了 design，删掉这条断言')
+    assert.ok(
+      rows.every((e) => e.design === undefined),
+      '列出的条目不应有 design',
+    )
+  })
+})
+
+describe('阈值来历：分叉声明必须成立（T55）', () => {
+  const numeric = THRESHOLDS.find((e) => typeof e.value() === 'number')
+
+  it('docValue 与代码值相等 → 报「分叉已不存在」', () => {
+    const entry = {
+      ...numeric,
+      name: 'FAKE_DIVERGENCE',
+      divergence: { docValue: numeric.value(), note: '假的' },
+    }
+    const problems = divergenceProblems([entry])
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /FAKE_DIVERGENCE/)
+    assert.match(problems[0], /分叉已不存在/)
+  })
+
+  it('docValue 与代码值不同 → 不报', () => {
+    const entry = {
+      ...numeric,
+      name: 'FAKE_DIVERGENCE',
+      divergence: { docValue: numeric.value() + 1, note: '真的' },
+    }
+    assert.deepEqual(divergenceProblems([entry]), [])
+  })
+
+  it('对象型条目上声明 divergence → 报（那种断言永远成立）', () => {
+    const group = THRESHOLDS.find((e) => typeof e.value() === 'object')
+    const entry = { ...group, name: 'FAKE_GROUP', divergence: { docValue: 1, note: '假的' } }
+    const problems = divergenceProblems([entry])
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /只用于数值条目/)
+  })
+
+  it('登记表里声明的分叉都成立', () => {
+    assert.deepEqual(divergenceProblems(), [])
+    assert.ok(
+      THRESHOLDS.some((e) => e.divergence !== undefined),
+      '当前应有至少一条 divergence；若都删了，删掉这条断言',
+    )
   })
 })
 
