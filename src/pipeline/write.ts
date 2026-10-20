@@ -476,6 +476,28 @@ export function bumpTopicLex(db: DatabaseSync, topicId: number): void {
   topicLexCache.get(db)?.delete(topicId)
 }
 
+/**
+ * topic 词面指纹缓存的**实时**读数（M5-T60）。
+ *
+ * `entries` 是缓存的 topic 数（这份缓存按 topic 存，自然单位就是 topic）；
+ * `terms` 是这些指纹里 bigram 的总数 —— 它才是真正占内存的那一项，条目数本身
+ * 看不出一个 topic 的指纹有多宽（截断到 FINGERPRINT_CHARS × FINGERPRINT_MEMBERS）。
+ *
+ * 求和只走**已缓存**的那几个 topic，不碰库，也不调用 topicLexOf —— 后者会把没缓存的
+ * topic 现算一遍，那正是本函数要避免的事。
+ */
+export function topicLexCacheUsage(db: DatabaseSync): {
+  cached: boolean
+  entries: number
+  terms: number
+} {
+  const per = topicLexCache.get(db)
+  if (per === undefined) return { cached: false, entries: 0, terms: 0 }
+  let terms = 0
+  for (const set of per.values()) terms += set.size
+  return { cached: true, entries: per.size, terms }
+}
+
 interface Candidate {
   id: number
   /** 单位化的中心向量；完全无向量时为 null（词面模式下会出现）。 */

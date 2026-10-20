@@ -33,6 +33,7 @@ import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
+import { cacheUsage } from './cache-usage.js'
 import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
 import {
   getRuntime,
@@ -522,6 +523,9 @@ export function apply(ctx: Context, config: unknown): void {
             cacheSizeMB: Math.round(res.cacheSize / 1024 / 1024),
             busyTimeoutMs: res.busyTimeout,
           },
+          // 五处模块级缓存的实时占用（M5-T60）：只报数，且**每次现读**。口径与「为什么
+          // 不触发重建」写在 cache-usage.ts 的文件头 —— 这里只负责把读数摆出来。
+          caches: cacheUsage(rt.db),
           // 样本库只报条数：原文（哪怕一条摘录）都不该出现在健康检查里。
           //
           // 先按与运行时相同的口径登记一次目录：ping 可能先于任何业务工具被调用，

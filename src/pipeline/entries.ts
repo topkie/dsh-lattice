@@ -316,6 +316,13 @@ export interface VocabIndex {
   total(): number
   /** 完整统计。手写的最小词表可以不提供，调用方必须容忍它缺席。 */
   stat?(term: string): TermStat | undefined
+  /**
+   * 词表里不同 term 的个数（M5-T60：报缓存占用用）。
+   *
+   * 选填，与 `stat` 同一条理由：手写的最小词表不必为「报占用」实现它；
+   * 缺省时按 0 报，而不是让健康检查去遍历一个拿不到的 Map。
+   */
+  size?(): number
 }
 
 /**
@@ -401,6 +408,7 @@ export function buildVocabIndex(db: DatabaseSync): VocabIndex {
   return {
     df: (t: string) => map.get(t)?.df ?? 0,
     total: () => total,
+    size: () => map.size,
     stat: (t: string) => {
       const s = map.get(t)
       if (s === undefined) return undefined
@@ -661,6 +669,22 @@ function readVocab(db: DatabaseSync): VocabIndex {
   const index = buildVocabIndex(db)
   READ_VOCAB.set(db, { stamp, index })
   return index
+}
+
+/**
+ * 查询侧词表缓存的**实时**读数（M5-T60）。
+ *
+ * `entries` 报的是**词表里不同 bigram 的个数**，不是「有几份缓存」—— 缓存对每个
+ * 连接最多只有一份，报 1 看不出它有多大，而「113 ms、整表正文扫出来的 Map」正是
+ * 需要被看见的那件事。是否已缓存由 `cached` 单独回答，两者不混。
+ *
+ * **不调用 readVocab**：那条路会先查一次 stamp、再在失配时重建整份词表 ——
+ * 健康检查不能因为「看一眼占用」而付 113 ms。
+ */
+export function readVocabCacheUsage(db: DatabaseSync): { cached: boolean; entries: number } {
+  const hit = READ_VOCAB.get(db)
+  if (hit === undefined) return { cached: false, entries: 0 }
+  return { cached: true, entries: hit.index.size?.() ?? 0 }
 }
 
 /** (atom, term) 的复合键。用 \u0000 分隔，避免两个字段拼起来撞键。 */

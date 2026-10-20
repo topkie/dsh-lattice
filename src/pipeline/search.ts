@@ -172,6 +172,22 @@ export function invalidateVecCache(db: DatabaseSync): void {
   VEC_CACHE.delete(db)
 }
 
+/**
+ * 向量缓存当前占用的**实时**读数（M5-T60）。
+ *
+ * `entries` 是缓存里**真正持有的向量条数**，不是库里的 atom 数：维度不符的旧向量
+ * 在建缓存时就被跳过了，它们不占这份内存，报进来会让人低估剩下的空间、也会让
+ * 「库里有 3 条、缓存里 2 条」看起来像 bug。
+ *
+ * 只读 WeakMap，**不调用 loadVecCache** —— 健康检查顺手把缓存建起来，等于让观测
+ * 本身产生被观测的对象，那次 20 MB / 数十毫秒的开销会记在一次 ping 的账上。
+ */
+export function vecCacheUsage(db: DatabaseSync): { cached: boolean; entries: number } {
+  const hit = VEC_CACHE.get(db)
+  if (hit === undefined) return { cached: false, entries: 0 }
+  return { cached: true, entries: hit.ids.length }
+}
+
 function loadVecCache(db: DatabaseSync): VecCache {
   const hit = VEC_CACHE.get(db)
   if (hit !== undefined) {

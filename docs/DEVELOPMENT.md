@@ -169,7 +169,21 @@ node scripts/snapshot-baseline.mjs [--db .probe/baseline/lattice.db] [--label <�
 | `lattice_expand` | 展开全文 / 列兄弟 | 召回只给了摘要或截断正文时用 |
 | `lattice_list` | 列目录 | 「库里有什么」；只读、按写入顺序倒序、**总是分页**（上限 50），可按 kind / origin / scope / topic 过滤 |
 | `lattice_feedback` | 反馈上次召回 | `{ kind, ref }`：`ref` 是【锚】段的 1-based 序号；只写独立样本库，不写 edge / 主库、不触发重标 |
-| `lattice_ping` | 健康检查 | 报出解析后的数据目录、资源参数、工具清单与样本条数（`samples: { total, positive, negative }`） |
+| `lattice_ping` | 健康检查 | 报出解析后的数据目录、资源参数、工具清单、五处缓存的占用（`caches`）与样本条数（`samples: { total, positive, negative }`） |
+
+`caches` 报的是五处模块级缓存的**实时**占用（M5-T60）：每次调用现读，不建缓存，
+也不含容量上限与淘汰策略。「条目数」按各缓存的自然单位取 ——
+
+| 字段 | 缓存 | 条目数的单位 | 补充字段 |
+|---|---|---|---|
+| `vec` | 向量缓存 | atom | `cached`：这条连接上建过没有 |
+| `topicLex` | 主题词面指纹 | topic | `terms`：这些指纹里 bigram 的总数 |
+| `readVocab` | 查询侧词表 | term | `cached`：只由召回工具的反哺路径构建 |
+| `oldTopic` | 重聚类前的归属快照 | atom | 模块级，报的是最近一次快照的条数 |
+| `encoder` | 编码器本体 | ——（布尔） | 没有条目数，只报 `loaded` / `state` / `model` |
+
+读法：条目数为 0 且 `cached` 为 `false`，表示这份缓存**还没建过**；建过但里面是空的
+是另一件事（例如向量全被维度检查跳过）。两者混在一起，就分不清「没用到」与「用到了但没东西」。
 
 ### 工具提示词：只留模型必须知道的
 

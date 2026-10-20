@@ -607,6 +607,18 @@ export function snapshotOldTopicOf(db: DatabaseSync): Map<number, number> {
 }
 
 /**
+ * 「atom → 旧主属 topic」快照的**实时**读数（M5-T60）。
+ *
+ * 这份缓存是模块级的、不按连接分：它保存的是**最近一次**重聚类开始前的归属，
+ * 换一个库也不会清（只有下一次快照会 clear）。所以报出来的是「上一次重建留下的
+ * 那份快照的条数」—— 条数本身就是需要被看见的东西：它不清，就意味着一次重聚类
+ * 的内存一直挂在模块上。
+ */
+export function oldTopicCacheUsage(): { entries: number } {
+  return { entries: OLD_TOPIC_CACHE.size }
+}
+
+/**
  * 反推「旧 topic id → 它现在对应哪个 topic id」。
  *
  * 为什么要反推而不是直接算：新分配的 topic id 是 INSERT 出来的（自增），只有写库那一步

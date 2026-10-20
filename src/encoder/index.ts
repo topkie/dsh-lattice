@@ -83,6 +83,18 @@ export function encoderErrorCode(): string | null {
   return lastErrorCode
 }
 
+/**
+ * 编码器本体的**实时**占用（M5-T60）。
+ *
+ * 这一项没有「条目数」：编码器是一份模型本体，不是一张表。它自己的规模字段不由本模块
+ * 持有 —— `pipeline` 返回的对象是 @huggingface/transformers 的内部形状，版本之间不稳定，
+ * 拿它算参数量会在升级时静默给出错的数。所以只报**是不是已经加载**（`loaded`）、
+ * 当前状态与加载的模型名；这三样是从模块变量直读，不是快照。
+ */
+export function encoderCacheUsage(): { loaded: boolean; state: EncoderState; model: string | null } {
+  return { loaded: extractor !== null, state, model: loadedModel }
+}
+
 /** 异常 → 短 token：优先 `code`，其次类名。 */
 function codeOf(err: unknown): string {
   if (err !== null && typeof err === 'object') {
