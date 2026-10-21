@@ -3,7 +3,7 @@
 // 这里曾经把 @deepseek-ai/{cordis,dsh-tools,schemastery} 声明成 any 的替身。那等于把整块
 // 宿主契约关在类型检查之外，与 docs/DEVELOPMENT.md「不使用 any；确有必要时写明原因」
 // （CONTRIBUTING.md 有同一句）直接冲突：文档说不用，代码里三行都在用，谁也没写理由 ——
-// 这正是 M2 审核 F11 记下的那处张力。
+// 这正是审核 F11 记下的那处张力。
 //
 // 现在三者的类型都取自它们自己的包（peerDependencies，实测装得上）。删掉替身之后，
 // 宿主的真类型**当场报出两处真问题**：src/tools/index.ts 的 textOutput() 少了字面量

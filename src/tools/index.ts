@@ -99,7 +99,7 @@ export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN satisfies ThresholdValue<
 >
 
 /**
- * 有命中时追加在召回结果末尾的一句：关系可以显式声明（T38 的可发现性）。
+ * 有命中时追加在召回结果末尾的一句：关系可以显式声明（声明边的可发现性）。
  *
  * **只在返回文本里**：不改排序、不写库（判据就是「跑前后 atom / edge 行数与 data_version
  * 不变」）。写在末尾而不是开头，是因为它是一条「还有别的用法」的提示，不该挤在
@@ -282,7 +282,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const edges = args?.edges === undefined ? undefined : (args.edges as DeclaredEdgeInput[])
       let out
       try {
-        // 写入侧审核层（M3-T22）在 writeReviewed 里：长度类**自动处理**（过短拦下 / 过长切分），
+        // 写入侧审核层在 writeReviewed 里：长度类**自动处理**（过短拦下 / 过长切分），
         // 重复与高相似只产生提示。两者的产出都只经这一个返回值出去 —— 不写库、不建队列、
         // 不产生需要人处理的待办（§11.1：插件不做判断，只提供判断所需的信息）。
         out = await writeReviewed(rt.write, {
@@ -311,7 +311,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const multi = out.results.length > 1
       out.results.forEach((r, i) => {
         const action = r.action === 'joined' ? '并入已有主题' : '新建主题'
-        // 「尚未确认归属」而不是「已标记待定」（M4-D1）：后者会被读成「库里有个待办等人处理」，
+        // 「尚未确认归属」而不是「已标记待定」：后者会被读成「库里有个待办等人处理」，
         // 而本插件不建待办（§11.1）—— 没有队列、没有需要处理的条目，只是这一次落位没把握。
         // 次近编号给出来，调用方才能自己核对「它说的是哪个主题」；两个 id 的差别见 WriteResult.nearId。
         const secondId = r.created === 'ambiguous' ? (r.evidence?.secondId ?? null) : null
@@ -344,20 +344,20 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         if (r.kindAdjusted !== undefined) {
           lines.push('类型「' + r.kindAdjusted + '」认不出，已按「' + String(r.kind) + '」记。')
         }
-        // 位标志摘要（T36 判据 6）：给出**可核对的说法**，不让模型靠读中文猜。
+        // 位标志摘要（判据 6）：给出**可核对的说法**，不让模型靠读中文猜。
         // 位定义在 db/flags.ts 的 FLAG_*，与 ARCHITECTURE 一一对应。
         if (r.flags !== undefined && r.flags !== 0) {
           const tags: string[] = []
           if ((r.flags & 2) !== 0) tags.push('歧义（两个候选接近）')
           if ((r.flags & 4) !== 0) tags.push('未归类')
-          // 待拆分（T29）：只说是**怎么来的**，不说「该拆」—— 切点按长度定，没读内容。
+          // 待拆分：只说是**怎么来的**，不说「该拆」—— 切点按长度定，没读内容。
           if ((r.flags & 1) !== 0) tags.push('待拆分（按长度切出）')
           lines.push('标记：' + tags.join('；') + '（flags=' + r.flags + '）')
         }
         // 重复 / 高相似的提示挂在这里。**写入已经发生**，提示只是让调用方知道
         // 「库里另有一条与它重合」—— 处置权在它手上。
         for (const n of r.review ?? []) lines.push(n.message)
-        // 声明边（T38）：落库的与没落库的分开说。**只拒边、不拒记忆** ——
+        // 声明边：落库的与没落库的分开说。**只拒边、不拒记忆** ——
         // 拒因必须回显，否则调用方会以为关系已经建立（与防写回同一条纪律）。
         if (r.edgesDeclared !== undefined) {
           // duplicate 只记一行关系：不改去重判定。回执里点明，否则读的人会以为
@@ -385,7 +385,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         }
       }
 
-      // 写入侧重标尝试（T44 判据 7）：**异步、不 await** —— 写入的返回不该等一次标定。
+      // 写入侧重标尝试（判据 7）：**异步、不 await** —— 写入的返回不该等一次标定。
       // 失败只写日志与 meta，参数一个字都不动（判据 8）。
       void maybeRecalibrate()
 
@@ -409,7 +409,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
                 '取代（旧条不会删除）。',
         )
       }
-      // 取消取代（T67）：与 supersedes 对称，只动 superseded_by 这一列 ——
+      // 取消取代：与 supersedes 对称，只动 superseded_by 这一列 ——
       // 不删行、不改内容、不碰 edge 表（库里的关系行原样保留）。
       // 三种结果分开说：「没有改动」有两个不同原因（id 不在库里 / 本来就没被取代），
       // 混成一句，调用方就不知道下一步该做什么。
@@ -468,7 +468,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         budget: num(args?.budget, cfg.viewBudget),
         // 本地标定值（快照）优先于按规模插值；未标定时为 undefined，pipeline 自己会回落。
         briefMin: calibParams?.briefMin,
-        // 本次查询词，只用于待拆分候选的「使用场景」（T29）：设计要的就是「把这条疑似
+        // 本次查询词，只用于待拆分候选的「使用场景」：设计要的就是「把这条疑似
         // 该拆的记忆连同它被用来解决什么一起给出来」。其他锚行不受影响。
         scene: q,
       })
@@ -574,10 +574,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (String(row.origin) === 'user') meta.push('用户说的')
       else if (String(row.origin) === 'import') meta.push('导入的')
       if (row.superseded_by !== null) meta.push('已被 #' + Number(row.superseded_by) + ' 取代')
-      // 归档（T26）：归档条目仍可按 id 展开（显式检索是设计），但读的人要知道它已归档 ——
+      // 归档：归档条目仍可按 id 展开（显式检索是设计），但读的人要知道它已归档 ——
       // 否则展开输出与未归档的完全一样。标记只加一句，可见性不变。
       if ((Number(row.flags) & FLAG_ARCHIVED) !== 0) meta.push('已归档')
-      // 声明边（T38）：展开时把这条记忆**说过的**关系列出来，模型才能核对
+      // 声明边：展开时把这条记忆**说过的**关系列出来，模型才能核对
       // 「我声明的那条关系在不在」。只列 origin = declared 且方向是「这条 → 别条」的：
       // 推断出来的 near 边是派生物（召回【路】段已经在展示），方向反过来的边去查另一端更自然。
       const declared = rt.db

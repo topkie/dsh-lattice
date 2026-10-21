@@ -155,7 +155,7 @@ export const DF_FILTER_RATIO = 0.5 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '「过半数即无区分度」这句直觉定下的线：df/N 超过一半的词元直接丢弃。M2 审核 T11 记录该判据在基准库上够不到、从未在目标语料上触发，即没有任何测量给出 0.5'
+    why: '「过半数即无区分度」这句直觉定下的线：df/N 超过一半的词元直接丢弃。评审记录指出该判据在基准库上够不到、从未在目标语料上触发，即没有任何测量给出 0.5'
     failsWhen: ['库内 atom 数与来源分布', '语言（英文词表大，问题不明显）']
     affects: '泛词过滤：df/N 超过此比例的词元直接丢弃（不参与入口竞争）'
     diverges: '**本任务要治的原始病例**：判据取自直觉、在运行语料上不触发、且没有任何地方记着它的标定来源。治理（改相对判据）属后续执行点，本次只登记不改值'
@@ -183,7 +183,7 @@ export const MIN_TERM = 2 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '「二字词是中文检索的主力」这条设计判断；M1 B 类表只把它归为「汉语词长分布」，没有一次实测'
+    why: '「二字词是中文检索的主力」这条设计判断；B 类表只把它归为「汉语词长分布」，没有一次实测'
     failsWhen: ['上游切词规则（改成词级切分后长度含义会变）', '换成英文/日文语料']
     affects: '入口词元的长度下界（按码点）；低于它不参选'
   }
@@ -244,7 +244,7 @@ export const FRAGMENT_PENALTY = 0.35 satisfies ThresholdValue<
     why: '系数幅度按「让碎片落到有真词可选的槽位之外、又不至于候选不足时把槽位空出来」这条要求取；证据明写幅度是判断、不是扫描出来的。它引的标注测量测的是边界自由度判据的分开度，不是本系数'
     failsWhen: ['边界自由度判据本身的变化', '语料里真词与碎片的比例']
     affects: '边界自由度缺一侧的候选（疑似跨词边界碎片）得分乘以该系数；降权而非剔除（v4 起两侧都恒定的已直接出局）'
-    diverges: 'M2 审核实测：单靠该降权**不足以把二字碎片挤出展示窗口**（审核报告「二字汉字碎片」一节）。v4 因此把它上面的那档（两侧都恒定）改成硬判出局，本条只管「只剩一侧、或观测不足」的候选'
+    diverges: '审核实测：单靠该降权**不足以把二字碎片挤出展示窗口**（审核记录「二字汉字碎片」一节）。v4 因此把它上面的那档（两侧都恒定）改成硬判出局，本条只管「只剩一侧、或观测不足」的候选'
   }
 >
 
@@ -397,7 +397,7 @@ export interface VocabIndex {
   /** 完整统计。手写的最小词表可以不提供，调用方必须容忍它缺席。 */
   stat?(term: string): TermStat | undefined
   /**
-   * 词表里不同 term 的个数（M5-T60：报缓存占用用）。
+   * 词表里不同 term 的个数（报缓存占用用）。
    *
    * 选填，与 `stat` 同一条理由：手写的最小词表不必为「报占用」实现它；
    * 缺省时按 0 报，而不是让健康检查去遍历一个拿不到的 Map。
@@ -614,7 +614,7 @@ export const LEARNED_FEATURE_TERMS = 3 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '设计报告 §27「取 query 的 TF-IDF top-3 特征词」给定的个数，未在本库标定；取几个特征词是反哺强度与噪声之间的取舍'
+    why: '设计说明 §27「取 query 的 TF-IDF top-3 特征词」给定的个数，未在本库标定；取几个特征词是反哺强度与噪声之间的取舍'
     failsWhen: ['查询长度分布', '一次召回命中多少条 atom（乘数效应）', '冷启动阶段库还小、IDF 不稳']
     affects: '一次召回反哺几个查询特征词（取 query 的 TF-IDF 前三，与写入侧同一套抽取规则）'
     doc: 't17'
@@ -665,7 +665,7 @@ export const LEARNED_HALF_LIFE_DAYS = 90 satisfies ThresholdValue<
 /**
  * 遗忘线：count_eff 低于此值的 learned 行删掉。
  *
- * **与设计文档 §27 的 1.5 分叉，理由在存储层。** 文档的公式是
+ * **与设计说明 §27 的 1.5 分叉，理由在存储层。** 文档的公式是
  * `count += exp(-Δt_days/90)`，即 count 是**实数累加**；而 entry.hits 是
  * `INTEGER NOT NULL`，本仓库也没有第二个能存小数累加值的列。整数事件数下 1.5 是
  * **自相矛盾**的线：count_eff = hits × 2^(-Δ/90) ≤ hits，所以只出现过一次的条目
@@ -695,7 +695,7 @@ export const LEARNED_MAX_PER_ATOM = 12 satisfies ThresholdValue<
     why: '§27 防抖第 3 条「learned 入口 ≤ 12 条」给的值，未在本库标定；上限值本身是槽位额度的取舍'
     failsWhen: [
       'extracted 入口上限（DEFAULT_MAX_EXTRACTED=16）—— 两者是同一批槽位的两半',
-      '真实召回里「查询词不属于该 atom 已有入口」的比例（T17 探针实测这个比例很高，上限很少触发）',
+      '真实召回里「查询词不属于该 atom 已有入口」的比例（探针实测这个比例很高，上限很少触发）',
     ]
     guardedBy: ['test/entries-learned.test.mjs']
     affects: '单 atom 的 learned 入口上限，超出按 count_eff 淘汰最低的'
@@ -837,7 +837,7 @@ function learnedFeatureTerms(db: DatabaseSync, query: string): EntryRecord[] {
  * 这里的缓存键是 atom 表的 (行数, 最大 id, 最大 updated_at)，三者任一变化即重建；
  * 而且它只决定「这次 query 的哪三个词被反哺」，不参与任何索引内容的生成。
  *
- * 不缓存的代价是实测的：1374 条 atom 的库上 buildVocabIndex 要 **113 ms**（T17 探针），
+ * 不缓存的代价是实测的：1374 条 atom 的库上 buildVocabIndex 要 **113 ms**（探针实测），
  * 而这段开销会被加进每一次召回的返回路径。
  */
 const READ_VOCAB = new WeakMap<DatabaseSync, { stamp: string; index: VocabIndex }>()
@@ -857,7 +857,7 @@ function readVocab(db: DatabaseSync): VocabIndex {
 }
 
 /**
- * 查询侧词表缓存的**实时**读数（M5-T60）。
+ * 查询侧词表缓存的**实时**读数。
  *
  * `entries` 报的是**词表里不同 bigram 的个数**，不是「有几份缓存」—— 缓存对每个
  * 连接最多只有一份，报 1 看不出它有多大，而「113 ms、整表正文扫出来的 Map」正是
@@ -888,7 +888,7 @@ function entryKey(atomId: number, term: string): string {
  * 四条规则共用一个量是刻意的：若一个看次数、一个看新旧，「最低的那条」在两条规则下会是
  * 不同的行，淘汰顺序就无从解释，调参也只能靠猜。
  *
- * 代价是每轮反哺一次全表扫（entry 上 origin 没有索引）。实测开销见 T17 报告；
+ * 代价是每轮反哺一次全表扫（entry 上 origin 没有索引）。实测开销见探针报告；
  * 库大到这一步成为瓶颈时，正确做法是给 entry(origin) 加索引，而不是把扫描改成抽样 ——
  * 抽样会让「谁被淘汰」变成不可复现的。
  */

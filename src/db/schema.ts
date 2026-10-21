@@ -268,7 +268,7 @@ export type AtomOrigin = 'user' | 'model' | 'import'
 export const ATOM_ORIGINS: readonly AtomOrigin[] = ['user', 'model', 'import']
 
 /**
- * 记忆类型。与开发笔记 §2.5「什么该进记忆库」的六类对齐。
+ * 记忆类型。与设计说明 §2.5「什么该进记忆库」的六类对齐。
  *
  * **为什么是这六类**：它们各自回答「下次做同类事时能省下什么」—— 一个坑省一次错误，
  * 一条命令省一次翻文档，一条环境事实省一次试探。类型不参与检索（检索靠向量与词面），

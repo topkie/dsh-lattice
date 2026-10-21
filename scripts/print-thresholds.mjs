@@ -5,16 +5,16 @@
 //   2. 用 TypeScript 编译器 API 遍历 src 下每一个模块级变量声明，初始化式能静态求值成数字的
 //      （字面量、四则运算、括号、位运算），列出既没登记、也不在豁免清单里的（应当为空）。
 //
-// 该表的另一部分是**来历**（T54）：每个条目要么是 recheckable（测过、可复算），
+// 该表的另一部分是**来历**：每个条目要么是 recheckable（测过、可复算），
 // 要么是 chosen（没有测量能给出它）。来历的三种查询与评审基线检查在这里：
 //
 //   node scripts/print-thresholds.mjs --needs-review   声明可复算、但缺编码模型与语料规模的条目
 //   node scripts/print-thresholds.mjs --unguarded      没有测试按常量名断言默认值的条目
 //   node scripts/print-thresholds.mjs --undated        可复算、非公式、但没有记录测量时间的条目（只是信息）
 //   node scripts/print-thresholds.mjs --check-review   评审基线检查（门禁调用；失败即非零退出）
-//   node scripts/print-thresholds.mjs --doc-keys       设计文档键名 → 常量 → 文档默认值（文档改动后定位条目）
+//   node scripts/print-thresholds.mjs --doc-keys       设计说明键名 → 常量 → 文档默认值（文档改动后定位条目）
 //
-// 三个查询只读登记表，不写库、不改源码；T54 迁移完成后每条都有 origin。
+// 三个查询只读登记表，不写库、不改源码；那次迁移完成后每条都有 origin。
 //
 // 用法：node scripts/print-thresholds.mjs [--md] [--quiet]
 //
@@ -55,7 +55,7 @@ const has = (name) => process.argv.includes('--' + name)
 const MD = has('md')
 const QUIET = has('quiet')
 
-// ─────────────────── ⓪ 来历：三个查询与评审基线（T54）───────────────────
+// ─────────────────── ⓪ 来历：三个查询与评审基线 ───────────────────
 //
 // 三个查询都只读登记表，不写库、不改源码。
 
@@ -259,7 +259,7 @@ const EXEMPT_NON_NUMERIC = {
  */
 function numericValue(node) {
   if (ts.isNumericLiteral(node)) return Number(node.text.replace(/_/g, ''))
-  // `X satisfies T` 的值就是 X —— 来历在类型参数里，值仍要能被扫描器求值（T65 阶段 2）。
+  // `X satisfies T` 的值就是 X —— 来历在类型参数里，值仍要能被扫描器求值（阶段 2）。
   if (ts.isSatisfiesExpression(node)) return numericValue(node.expression)
   if (ts.isParenthesizedExpression(node)) return numericValue(node.expression)
   if (ts.isPrefixUnaryExpression(node)) {
@@ -328,7 +328,7 @@ function isDerived(node, known) {
  * 每个名字记下：位置、是否可静态求值成数字、初始化式节点。
  */
 /**
- * 读常量定义处的来历（T65 阶段 1）：`export const X = 0.78 satisfies ThresholdValue<'recheckable', {...}>`。
+ * 读常量定义处的来历（阶段 1）：`export const X = 0.78 satisfies ThresholdValue<'recheckable', {...}>`。
  *
  * 纯语法树就够 —— 不需要 typeChecker。`satisfies` 的右边是 TypeReferenceNode，
  * 第一个类型参数是 kind 的字面量类型，第二个是 TypeLiteralNode（字段名 → 字面量或元组类型）。
@@ -387,7 +387,7 @@ function readThresholdOrigin(d, sf) {
 }
 
 /**
- * 常量求值（T65 阶段 3）：扫到的声明里有一批是「靠别的常量算出来」的（`Math.floor(A / B)`、
+ * 常量求值（阶段 3）：扫到的声明里有一批是「靠别的常量算出来」的（`Math.floor(A / B)`、
  * `A * B`、`= OTHER`）。只认字面量的求值器对它们一律返回 null，于是这些条目在搬到定义处之后
  * 会从主表消失。这里做多轮求值：先能算的算出来，再把结果喂给下一轮。
  */
@@ -524,7 +524,7 @@ for (const info of decls) {
     }
     continue
   }
-  // 双来源（T65 阶段 1）：登记表里的一条，或常量自己带 `satisfies ThresholdValue<…>`，都算已登记。
+  // 双来源（阶段 1）：登记表里的一条，或常量自己带 `satisfies ThresholdValue<…>`，都算已登记。
   if (registered.has(info.name) || info.origin !== null) continue
   if (Object.prototype.hasOwnProperty.call(EXEMPT, info.name)) {
     exempted.push({
@@ -630,7 +630,7 @@ function zodProblems() {
   return problems
 }
 
-// ── 类型参数来源（T65 阶段 2）──────────────────────────────────────────────
+// ── 类型参数来源（阶段 2）──────────────────────────────────────────────
 //
 // 常量在定义处带 `satisfies ThresholdValue<…>` 的，来历就在这里，表里不再登记。
 // 这一层把两种来源拼成同一个形状，后面的打印、对照、断言都只认 ENTRIES。
@@ -685,7 +685,7 @@ function displayFrom(meta, value, lookup) {
 /** 常量名 → 当前值：display 模板里的 {NAME} 从这里查。 */
 const VALUE_BY_NAME = new Map(decls.filter((d) => d.value !== null).map((d) => [d.name, d.value]))
 
-/** 设计文档对照：类型参数里是扁平字段，这里拼回 Entry.design 的形状。 */
+/** 设计说明对照：类型参数里是扁平字段，这里拼回 Entry.design 的形状。 */
 function designFrom(meta) {
   if (typeof meta.docDefault !== 'number') return undefined
   const range = Array.isArray(meta.docRange) ? meta.docRange : []
@@ -762,7 +762,7 @@ if (QUERY_MODE !== undefined) {
   process.exit(0)
 }
 
-// `--doc-keys`：设计文档改了一条之后，用它找出受影响的条目（T65 阶段 4）。
+// `--doc-keys`：设计说明改了一条之后，用它找出受影响的条目（阶段 4）。
 //
 // 原先设想把设计对照做成一份独立的台账文件。否定的理由是同一条判据：台账会成为仓库内的
 // 第二个数据来源。清单现生成就没有这个问题 —— 它不是文件，改不动，也就不存在忘了同步。
@@ -806,7 +806,7 @@ const scanned = decls.filter((d) => d.value !== null)
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
 
-// ─────────────────────── ③′ 断言：登记里的关系必须成立（T55）───────────────────────
+// ─────────────────────── ③′ 断言：登记里的关系必须成立 ───────────────────────
 //
 // 三种关系原先靠手写的文字维持，现在由这里核对：
 //   1. display 里不写字面等式 —— 等式随常量变，写成字符串就跟不上；
@@ -827,7 +827,7 @@ const ORIGIN_FIELDS = new Set([
   'unit',
   'note',
   'display',
-  // 设计文档对照（T65 阶段 3 批 2）：原先在表里是 design 对象与 zod 指针，现在拆成扁平字段
+  // 设计说明对照（阶段 3 批 2）：原先在表里是 design 对象与 zod 指针，现在拆成扁平字段
   // 写进类型参数 —— 类型参数里嵌对象要多一层解析，而扁平字段在白名单里一眼看得全。
   'doc',
   'docKey',
@@ -846,7 +846,7 @@ const ORIGIN_FIELDS = new Set([
 ])
 const ORIGIN_KINDS = new Set(['recheckable', 'chosen'])
 
-/** 类型参数里的字段白名单与 kind 合法性（T65 阶段 1）：写错字段名不会编译报错，只能在这里抓。 */
+/** 类型参数里的字段白名单与 kind 合法性（阶段 1）：写错字段名不会编译报错，只能在这里抓。 */
 function thresholdOriginProblems() {
   const problems = []
   for (const d of decls) {
@@ -880,7 +880,7 @@ const assertionProblems = [
 ]
 const refSites = [
   ...ENTRIES.map((e) => [e.name, e.refs ?? []]),
-  ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
+  ...DESIGN_GAPS.map((g) => ['设计说明缺口 ' + g.key, g.refs ?? []]),
 ]
 for (const [where, refs] of refSites) {
   for (const ref of refs) {
@@ -991,7 +991,7 @@ say(
     '没有测量时间的见 --undated。补不上的条件记在 thresholds-review-baseline.json。',
 )
 
-// 表里只剩搬不动的条目（T65 阶段 4）。这一节解释每一条为什么没搬走 —— 按理由分组，
+// 表里只剩搬不动的条目（阶段 4）。这一节解释每一条为什么没搬走 —— 按理由分组，
 // 因为「对象组」与「外部包」的处置方式不同：前者等对象组拆分，后者只能等上游包改。
 if (THRESHOLDS.length > 0) {
   say('')
@@ -1011,9 +1011,9 @@ if (THRESHOLDS.length > 0) {
   }
 }
 
-// 设计文档对照
+// 设计说明对照
 say('')
-say('## 与设计文档 §7 的对照（只列有对应项的行）')
+say('## 与设计说明 §7 的对照（只列有对应项的行）')
 say('')
 const usedDocs = [
   ...new Set(
@@ -1023,7 +1023,7 @@ const usedDocs = [
   ),
 ]
 say(
-  '设计文档 = ' + (usedDocs.length === 0 ? '（无对应项）' : usedDocs.join('、')) + '（设计正文不进本仓库）。',
+  '设计说明 = ' + (usedDocs.length === 0 ? '（无对应项）' : usedDocs.join('、')) + '（设计正文不进本仓库）。',
 )
 say('')
 if (MD) {
@@ -1031,7 +1031,7 @@ if (MD) {
   say('|---|---|---|---|---|---|---|')
 }
 const designRows = []
-// D3：分叉必须有解释。zod 默认值与设计文档不同时，登记项里必须有 diverges 或 divergence 说明原因 ——
+// D3：分叉必须有解释。zod 默认值与设计说明不同时，登记项里必须有 diverges 或 divergence 说明原因 ——
 // 「存在分叉」本身不是问题（文档可能没同步），「分叉没人解释」才是：读表的人会在这里停下来，
 // 然后自己去猜。判据不是「不一致就红」，那会永久红。
 const unexplainedDiverges = []
@@ -1107,22 +1107,22 @@ if (!MD) {
   say('不一致 ' + inconsistent.length + ' 行：' + inconsistent.map((r) => r.name).join('、'))
 }
 
-// 「设计文档没有这个键」不再手写（T55 第 3 项）：句子由字段倒推，缺 design 也缺 external
+// 「设计说明没有这个键」不再手写（第 3 项）：句子由字段倒推，缺 design 也缺 external
 // 的条目自动出现在这里。手写的同一句话会与字段脱钩 —— 补上 design 之后它还在，而字段已经变了。
 const notInDesignDoc = ENTRIES.filter((e) => e.design === undefined && e.external === undefined)
 say('')
-say('## 设计文档 §7 没有对应键的条目（自动生成）')
+say('## 设计说明 §7 没有对应键的条目（自动生成）')
 say('')
 say('这一节不是手写的：条目缺 design 也缺 external 时，打印脚本补一句；给某条补上 design，它就从这里消失。')
-for (const e of notInDesignDoc) say('- ' + e.name + '（' + e.area + '）：设计文档 §7 没有这个键')
+for (const e of notInDesignDoc) say('- ' + e.name + '（' + e.area + '）：设计说明 §7 没有这个键')
 
 say('')
 say('## 分叉未解释（非零退出的条件之一）')
 say('')
 if (unexplainedDiverges.length === 0) {
-  say('- 无：所有与设计文档不同的 zod 默认值都写了 diverges 或 divergence')
+  say('- 无：所有与设计说明不同的 zod 默认值都写了 diverges 或 divergence')
 } else {
-  say('**以下阈值的 zod 默认值与设计文档不同，而登记项没有 diverges** —— 读表的人会停在这里：')
+  say('**以下阈值的 zod 默认值与设计说明不同，而登记项没有 diverges** —— 读表的人会停在这里：')
   for (const x of unexplainedDiverges) say('- 分叉未解释 ' + x)
 }
 say('')
@@ -1135,7 +1135,7 @@ if (assertionProblems.length === 0) {
   for (const p of assertionProblems) say('- ' + p)
 }
 say('')
-say('## 设计文档有、代码里没有的配置')
+say('## 设计说明有、代码里没有的配置')
 say('')
 for (const g of DESIGN_GAPS) {
   say('- ' + g.key + '（文档默认 ' + g.designDefault + '）：' + g.note)
@@ -1258,7 +1258,7 @@ if (assertionProblems.length > 0) {
 
 if (unexplainedDiverges.length > 0) {
   console.error('')
-  console.error('分叉未解释：以下阈值的 zod 默认值与设计文档不同，但登记项里没有 diverges。')
+  console.error('分叉未解释：以下阈值的 zod 默认值与设计说明不同，但登记项里没有 diverges。')
   console.error(
     "写法：值不同写 divergence: { docValue, note }，别的分叉写 diverges: '…'（读者要的是原因，不是差值）。",
   )

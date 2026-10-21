@@ -1,7 +1,7 @@
-// atom.flags 落地（M4-T36 判据 1–5）。
+// atom.flags 落地（判据 1–5）。
 //
 // 这里验的是「位写对了、过滤与 SQL 一致、不参与打分、旧库不回溯」；
-// 而「回执文案是否自洽」是 D1 的事 —— 两件独立的坏事，别用这一个的绿去替代那一个（v1.0 计划 §4 T36 的警告）。
+// 而「回执文案是否自洽」是 D1 的事 —— 两件独立的坏事，别用这一个的绿去替代那一个（v1.0 计划 §4 的警告）。
 //
 // 钩子放在 describe 内部（node:test 顶层钩子是全局的）。
 
@@ -35,7 +35,7 @@ function keywordEncoder(pairs) {
   }
 }
 
-describe('atom.flags 落地（T36）', () => {
+describe('atom.flags 落地', () => {
   let db = null
   let dir = ''
 

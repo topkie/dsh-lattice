@@ -1,4 +1,4 @@
-// 阈值来历（T54）的单元测试。
+// 阈值来历的单元测试。
 //
 // 三部分：
 //   ① 构造器的类型约束：chosen 的第二参数传对象必须编译报错（用 TypeScript 编译器 API
@@ -102,7 +102,7 @@ describe('阈值来历：三个查询', () => {
   })
 })
 
-describe('阈值来历：display 的等式必须是活值（T55）', () => {
+describe('阈值来历：display 的等式必须是活值', () => {
   it('字面量 display 里出现「=」→ 报一条，点名是哪条', () => {
     const entry = { ...THRESHOLDS[0], name: 'FAKE_EQUATION', display: '8（= 1000 ÷ 125）' }
     const problems = displayProblems([entry])
@@ -120,11 +120,11 @@ describe('阈值来历：display 的等式必须是活值（T55）', () => {
   })
 })
 
-describe('阈值来历：refs 指得到符号（T55）', () => {
+describe('阈值来历：refs 指得到符号', () => {
   const ROOT = fileURLToPath(new URL('..', import.meta.url))
   const refSites = [
     ...THRESHOLDS.map((e) => [e.name, e.refs ?? []]),
-    ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
+    ...DESIGN_GAPS.map((g) => ['设计说明缺口 ' + g.key, g.refs ?? []]),
   ]
 
   it('登记的 refs 都看得到：文件存在，符号在文件里出现', () => {
@@ -150,9 +150,9 @@ describe('阈值来历：refs 指得到符号（T55）', () => {
   })
 })
 
-describe('阈值来历：缺键由打印脚本生成（T55）', () => {
-  it('diverges 里不再手写「设计文档 §7 没有这个键」', () => {
-    const handwritten = THRESHOLDS.filter((e) => (e.diverges ?? '').includes('设计文档 §7 没有'))
+describe('阈值来历：缺键由打印脚本生成', () => {
+  it('diverges 里不再手写「设计说明 §7 没有这个键」', () => {
+    const handwritten = THRESHOLDS.filter((e) => (e.diverges ?? '').includes('设计说明 §7 没有'))
     assert.deepEqual(
       handwritten.map((e) => e.name),
       [],
@@ -170,7 +170,7 @@ describe('阈值来历：缺键由打印脚本生成（T55）', () => {
   })
 })
 
-describe('阈值来历：分叉声明必须成立（T55）', () => {
+describe('阈值来历：分叉声明必须成立', () => {
   // 不带 design 的数值条目：这个 describe 里有「写了 divergence 却没有 design」的用例，
   // 拿带 design 的条目当底座会让两条规则缠在一起。
   const numeric = THRESHOLDS.find((e) => typeof e.value() === 'number' && e.design === undefined)
@@ -295,7 +295,7 @@ describe('阈值来历：评审基线的四条规则', () => {
   })
 })
 
-describe('阈值来历：留在表里的条目要说明为什么搬不动（T65 阶段 4）', () => {
+describe('阈值来历：留在表里的条目要说明为什么搬不动（阶段 4）', () => {
   it('表里每条都写了 unmovable，且值在允许的集合里', () => {
     assert.deepEqual(unmovableProblems(), [])
     for (const e of THRESHOLDS) assert.ok(e.unmovable !== undefined, e.name + ' 没写 unmovable')

@@ -38,7 +38,7 @@ export interface StepTiming {
   ms: number
 }
 
-/** 重聚类的全部可调参数。默认值即设计报告给的参数。 */
+/** 重聚类的全部可调参数。默认值即设计说明给的参数。 */
 export interface ReclusterOptions {
   /** k 近邻图的每点邻居数，同时也是 min_samples（核心距离取第几近邻）。 */
   k?: number
@@ -158,7 +158,7 @@ export interface ClusterPipelineResult {
 /**
  * A→C 三段：建图 → boruvka 近似 MST → 层次树 → 稳定性 → 选簇 → 标签。
  *
- * **不碰库、不改入参**，因此可以被探针直接调用（T16 的 oracle 对照就是这么跑的）。
+ * **不碰库、不改入参**，因此可以被探针直接调用（oracle 对照就是这么跑的）。
  * 把这一半独立出来的另一个理由：它是唯一「错了不会崩、只会静默给出合法结果」的一段，
  * 隔离之后它可以被单独喂合成数据、单独断言 —— 而混在写库逻辑里就没法单测。
  */

@@ -60,7 +60,7 @@ export { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } 
 export type CreateReason = 'far' | 'ambiguous'
 
 /**
- * 写入方声明的一条关系边（T38）。
+ * 写入方声明的一条关系边。
  *
  * **type 不是白名单**：它是关系标签，不是分类标签。五个推荐值（related / refines /
  * supersedes / duplicate / requires）写在工具描述里给模型看，插件只校验**形状**
@@ -210,7 +210,7 @@ export interface WriteInput {
    */
   origin?: string
   /**
-   * 显式声明的关系边（T38）：`[{type, target}]`，target 是已存在的 atom id。
+   * 显式声明的关系边：`[{type, target}]`，target 是已存在的 atom id。
    *
    * 与写入**同一个事务**落库（origin = declared），所以「记忆进去了、关系没进去」
    * 这种半成品状态不存在。校验见 validateDeclaredEdges：不合法的边被跳过并回执，
@@ -264,7 +264,7 @@ export interface WriteResult {
    */
   forgotten?: { scanned: number; truncated: boolean }
   /**
-   * 写入侧审核给出的提示（M3-T22）。**只有当重复 / 高相似判据命中时才有** ——
+   * 写入侧审核给出的提示。**只有当重复 / 高相似判据命中时才有** ——
    * 长度类的结论不走这里（它改变的是「写几条」，由 `writeReviewed` 交给调用方）。
    *
    * 这一列存在本身就是那条约束的证词：审核的产出**只有一个去处**，就是这个返回值。
@@ -273,7 +273,7 @@ export interface WriteResult {
   review?: ReviewNote[]
   /** 这次比对了主属主题里的多少条；只在真的比过（scanned > 0）时带。 */
   reviewScan?: { scanned: number; truncated: boolean }
-  /** 落库的位标志（T36）。回执里据此给一句摘要，模型不必去读中文猜。 */
+  /** 落库的位标志。回执里据此给一句摘要，模型不必去读中文猜。 */
   flags?: number
   /**
    * 写入方给的类型不是六类之一、被归一到 `kind` 时，这里带上原值。
@@ -346,7 +346,7 @@ export interface WriteCtx {
    * 所以正常部署下这个字段根本不需要给（§44：复用已有判据，不发明新阈值）。
    */
   forget?: ForgetThresholds
-  /** 写入侧审核的阈值（M3-T22）。省略时用 review.ts 的默认值。 */
+  /** 写入侧审核的阈值。省略时用 review.ts 的默认值。 */
   review?: ReviewThresholds
 }
 
@@ -381,7 +381,7 @@ export const DEFAULT_THRESHOLDS: WriteThresholds = {
 /**
  * 双峰判定的差值线：sim1 - sim2 小于它且 sim1 ≥ tauNew 时，判「语义上说不清属于哪边」。
  *
- * 设计文档里有名字（deltaPeak，默认 0.06、范围 0.01-0.20），代码里此前是内联字面量 ——
+ * 设计说明里有名字（deltaPeak，默认 0.06、范围 0.01-0.20），代码里此前是内联字面量 ——
  * 同一件事在文档里是配置项、在代码里是魔法数。本次只把它提成具名常量，取值未变，
  * 也仍不进 zod（是否可配置是另一件事，改它要动对外形状）。
  */
@@ -389,11 +389,11 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
   'chosen',
   {
     area: '落位'
-    why: '双峰拒绝线：前两名余弦差小于多少算「分不开」。0.06 来自《设计报告》落位判定表与设计文档 §7 的 deltaPeak 默认值，没有测量给出它；它是对「两个候选要多近才拒绝并入」的取舍'
+    why: '双峰拒绝线：前两名余弦差小于多少算「分不开」。0.06 来自设计说明的两处：落位判定表与 §7 的 deltaPeak 默认值，没有测量给出它；它是对「两个候选要多近才拒绝并入」的取舍'
     failsWhen: ['换编码模型（余弦尺度的间距会变）', '同域不同子话题的密度']
     guardedBy: ['test/write.test.mjs']
     affects: 'decidePlacement：sim1 - sim2 小于此差值时判为「双峰」，退回新建（ambiguous）'
-    diverges: '**仍不进 zod schema**：运行时不可配置。T45 批一只把它从内联字面量提成具名常量（取值未变）——「文档有名字、代码里是魔法数」这一半已消除，可配置性是另一件事'
+    diverges: '**仍不进 zod schema**：运行时不可配置。第一批只把它从内联字面量提成具名常量（取值未变）——「文档有名字、代码里是魔法数」这一半已消除，可配置性是另一件事'
     doc: 't7'
     docKey: 'deltaPeak'
     docDefault: 0.06
@@ -428,7 +428,7 @@ export const DEFAULT_TOP_N = 24 satisfies ThresholdValue<
     why: '落位时取多少个 topic 候选：固定上限，由库规模与每次落位的代价决定，无记录；它与召回条数同为 24 是同值不同义，不合并 —— 合并会让「调注入条数」顺带改掉落位候选数'
     failsWhen: ['库内 topic 总数', '落位准确率对候选规模的敏感度']
     affects: 'loadCandidates 的默认候选上限（写入侧的 topic 候选数）'
-    diverges: '**设计文档 §7 的 topN 指召回条数**（对应 search.ts 的 RECALL_TOP_N），不是这里的落位候选数 ——两件事同为 24 纯属巧合，改配置不会改这里'
+    diverges: '**设计说明 §7 的 topN 指召回条数**（对应 search.ts 的 RECALL_TOP_N），不是这里的落位候选数 ——两件事同为 24 纯属巧合，改配置不会改这里'
     otherSites: [
       'src/tools/index.ts recall(..., { topN: cfg.topN }) —— 召回条数走的是配置（zod 的 topN），不是这里的 24',
     ]
@@ -588,7 +588,7 @@ export function bumpTopicLex(db: DatabaseSync, topicId: number): void {
 }
 
 /**
- * topic 词面指纹缓存的**实时**读数（M5-T60）。
+ * topic 词面指纹缓存的**实时**读数。
  *
  * `entries` 是缓存的 topic 数（这份缓存按 topic 存，自然单位就是 topic）；
  * `terms` 是这些指纹里 bigram 的总数 —— 它才是真正占内存的那一项，条目数本身
@@ -738,7 +738,7 @@ export const SEARCH_BODY_MAX_CHARS = 1600 satisfies ThresholdValue<
   'chosen',
   {
     area: '写入'
-    why: '进 trigram 索引的正文字符上限是索引代价与长正文细节召回之间的取舍：注释只说明「摘要重复一次」的理由，无实测标定记录；同一函数内此前写了两遍（判断与切片），T45 批一合并为一个常量'
+    why: '进 trigram 索引的正文字符上限是索引代价与长正文细节召回之间的取舍：注释只说明「摘要重复一次」的理由，无实测标定记录；同一函数内此前写了两遍（判断与切片），第一批合并为一个常量'
     failsWhen: ['atom 正文长度分布', '长正文的细节召回是否重要']
     affects: 'buildSearchBody 里进 trigram 索引的正文字符上限（超出即截断）'
   }
@@ -875,7 +875,7 @@ function commitWrite(
     for (const e of edges) {
       // 取代不走声明边（2026-10-21）：edges 里的 supersedes 只写一行关系、不写
       // superseded_by，等于「写了不生效」。留着只会让人踩，所以拒边并把调用方指到顶层
-      // 参数 supersedes —— 那条会真的标记旧条（T66 之后还决定它出不出现在召回里）。
+      // 参数 supersedes —— 那条会真的标记旧条（那次改造之后还决定它出不出现在召回里）。
       if (e.type === 'supersedes') {
         edgesRejected.push({
           type: e.type,
@@ -1080,7 +1080,7 @@ export async function writeAtom(
 
   const topicId = decision.kind === 'join' ? decision.topicId : -1
 
-  // ⑤ 重复 / 高相似：**只提示，不阻止**（M3-T22 的第二级）。
+  // ⑤ 重复 / 高相似：**只提示，不阻止**（审核的第二级）。
   //
   // 位置选在落位之后、提交之前：此刻才知道主属主题，而比对范围恰好就是它的成员。
   // 这一段只读库、不写库，也**不改变 decision** —— 写入路径的行为只受长度那一级影响。
@@ -1089,12 +1089,12 @@ export async function writeAtom(
   const reviewNotes: ReviewNote[] = []
   if (dup.hit !== null) reviewNotes.push(duplicateNote(dup.hit, dup.truncated))
 
-  // ⑥ 声明边（T38）：形状（type / 条数 / 重复）在事务外校验；「目标存在」与「自指」
+  // ⑥ 声明边：形状（type / 条数 / 重复）在事务外校验；「目标存在」与「自指」
   // 要等新 id 落地，放在事务内（见 commitWrite）。与写侧审核同一条纪律：**不阻断写入**，
   // 结论只走返回值。
   const declared = validateDeclaredEdges((input as { edges?: unknown }).edges)
 
-  // 落库的位：落位那一层只决定「歧义 / 未归类」，T29 的待拆分位与落位无关 ——
+  // 落库的位：落位那一层只决定「歧义 / 未归类」，待拆分位与落位无关 ——
   // 按长度切出来的每一段都带上它，哪怕这一段并入了已有主题（并入说明归属已确认，
   // 但切点仍然没有按内容判断过，那是两件事）。
   const flags =
@@ -1136,7 +1136,7 @@ export async function writeAtom(
     entries,
   }
   if (newTopic) result.created = decision.kind === 'create' ? decision.reason : 'far'
-  // 近邻 id 交出去（M4-D1）：回执里那句「尚未确认归属」需要调用方能核对指的是哪个主题。
+  // 近邻 id 交出去：回执里那句「尚未确认归属」需要调用方能核对指的是哪个主题。
   if (newTopic && nearId !== null) result.nearId = nearId
   if (hintMiss !== undefined) result.hintMiss = hintMiss
   if (evidence !== undefined) result.evidence = evidence
@@ -1174,7 +1174,7 @@ export interface ReviewedWrite {
 }
 
 /**
- * 写入入口（M3-T22）：先过长度审核，再逐段落到 `writeAtom`。
+ * 写入入口：先过长度审核，再逐段落到 `writeAtom`。
  *
  * **为什么长度审核在这一层而不是 `writeAtom` 里**：`writeAtom` 的契约是「写一条」，
  * 而「切分」的结论是「写几条」—— 它是调用方的决定，不是单条写入的内部状态。

@@ -1,4 +1,4 @@
-// 取代（T66）：被取代的条目不再当答案出现。
+// 取代：被取代的条目不再当答案出现。
 //
 // 这里验三件事：
 //   1. 旧条与新条都在候选里时，只出新条（旧条不是「分低」而是「过期」）；
@@ -30,7 +30,7 @@ function oneHot(i) {
 let dir = ''
 let db = null
 
-describe('取代：被取代的条目不再当答案（T66）', () => {
+describe('取代：被取代的条目不再当答案', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-supersede-'))
     db = openVault(join(dir, 'lattice.db')).db

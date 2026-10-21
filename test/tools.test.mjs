@@ -196,7 +196,7 @@ describe('lattice_write', () => {
   })
 })
 
-describe('写入侧审核：工具返回值（M3-T22）', () => {
+describe('写入侧审核：工具返回值', () => {
   // 这一组走的是**真实入口**：apply() 注册出来的 lattice_write → writeReviewed → 返回值组装。
   // 判据是「反馈只走工具返回值」，所以断言点全在那段文本上，外加「库里确实没有多出东西」。
 

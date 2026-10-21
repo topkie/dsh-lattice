@@ -12,12 +12,12 @@ import type { ThresholdValue } from '../threshold-types.js'
 import type { Mst } from './mst.js'
 import { sortEdgesByWeight } from './mst.js'
 
-/** 簇的规模门槛默认值（设计报告 §21 给的 `min_cluster_size = 3`）。 */
+/** 簇的规模门槛默认值（设计说明 §21 给的 `min_cluster_size = 3`）。 */
 export const DEFAULT_MIN_CLUSTER_SIZE = 3 satisfies ThresholdValue<
   'chosen',
   {
     area: '重聚类'
-    why: '设计报告 §21 写死 min_cluster_size = 3，没有给标定实验；「3 是不是对的」本轮没有测 —— 没有拿「人工判定哪些记忆属于同一主题」做对照，所以 3 的来历是设计报告'
+    why: '设计说明 §21 写死 min_cluster_size = 3，没有给标定实验；「3 是不是对的」本轮没有测 —— 没有拿「人工判定哪些记忆属于同一主题」做对照，所以 3 的来历是设计判断'
     failsWhen: ['库规模', '一条记忆的平均信息量', '「一个主题至少几条记忆才有用」这个产品判断']
     affects: '簇的规模门槛：小于此值的碎片在压缩阶段并入父簇，而不是各自成为一个主题。它是唯一带语义的聚类参数 —— 直接表达「多小算一个独立主题」'
   }

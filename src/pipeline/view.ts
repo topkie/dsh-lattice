@@ -109,7 +109,7 @@ export interface ViewOptions {
    */
   briefMin?: number
   /**
-   * 本次查询词，作为「使用场景」标在待拆分候选的锚行上（T29）。
+   * 本次查询词，作为「使用场景」标在待拆分候选的锚行上。
    *
    * 为什么由调用方传：查询词只存在于调用方（`lattice_recall` 的 q），注入层不读请求上下文。
    * 搜索路由（`src/index.ts`）虽然也有 q，但它直接输出 JSON、**不调用本函数** ——
@@ -151,7 +151,7 @@ export const DEFAULT_BUDGET = 6000 satisfies ThresholdValue<
   'chosen',
   {
     area: '注入'
-    why: '注入字符预算是容量选择：只有设计文档 §7 给了默认值 6000 与范围 1000–20000，没有标定依据'
+    why: '注入字符预算是容量选择：只有设计说明 §7 给了默认值 6000 与范围 1000–20000，没有标定依据'
     failsWhen: ['模型上下文窗口', '一次注入里锚段的平均长度']
     affects: '注入字符预算的默认值（工具调用可覆盖）'
     diverges: '**同一个默认值写了三遍**：view.ts 的 DEFAULT_BUDGET、zod 的 .default(6000)、index.ts 的 `?? 6000`。三处目前一致'
@@ -166,7 +166,7 @@ export const DEFAULT_ANCHOR_MAX = 1200 satisfies ThresholdValue<
   'chosen',
   {
     area: '注入'
-    why: '单条锚的字符上限是显示容量选择：源码无注释，设计文档 §7 也没有这个键'
+    why: '单条锚的字符上限是显示容量选择：源码无注释，设计说明 §7 也没有这个键'
     failsWhen: ['atom 正文长度分布', '字符预算']
     affects: '单条锚的字符上限（全文很长时截断，避免一条吃掉整段）'
     diverges: '**zod schema 里也没有** —— 运行时不可配置'
@@ -188,7 +188,7 @@ export const DEFAULT_ENTRY_LINE_MAX = 160 satisfies ThresholdValue<
   'chosen',
   {
     area: '注入'
-    why: '单行入口的字符上限是显示判断：源码无注释，设计文档与 zod 里都没有这个键'
+    why: '单行入口的字符上限是显示判断：源码无注释，设计说明与 zod 里都没有这个键'
     failsWhen: ['入口词的长度分布', '每主题入口条数']
     affects: '单个主题的入口行字符上限（防止一行过长挤占锚段）'
     diverges: '**zod schema 里也没有**'
@@ -270,7 +270,7 @@ export const TIER_FULL_MIN = 0.55 satisfies ThresholdValue<
     failsWhen: ['换编码模型（余弦尺度直接变）', '库规模与来源分布', '语料的领域混合度']
     guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs']
     affects: 'tierOf：最高余弦 >= 此值走完整档（三段全给）'
-    diverges: '**标定语料与运行库不一致**：标定在基准库上，而插件跑在宿主库上（M2 审核指出的同一类问题）。本表不再记语料规模与来源分布 —— 是否仍适用，看对应重标报告；没有报告时按「无记录」处理，不猜'
+    diverges: '**标定语料与运行库不一致**：标定在基准库上，而插件跑在宿主库上（评审指出的同一类问题）。本表不再记语料规模与来源分布 —— 是否仍适用，看对应重标报告；没有报告时按「无记录」处理，不猜'
   }
 >
 /** 精简档下界的**默认值**（库小于锚点表下端时用它）；生效值见 calib 的锚点表。 */
@@ -331,7 +331,7 @@ function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
 /**
  * 某个主题下命中的 atom 的入口词，按权重降序。
  *
- * 已归档的 atom 不进【入口】段（T26）：它的 entry 行还在库里，但默认不该被看见 ——
+ * 已归档的 atom 不进【入口】段：它的 entry 行还在库里，但默认不该被看见 ——
  * 漏了这一处，模型仍然能从入口词读出归档内容，而锚段看起来一切正常。
  */
 function topicEntries(db: DatabaseSync, topicId: number, limit: number): string[] {
@@ -391,7 +391,7 @@ function pathLinesFor(
     ph +
     ')' +
     scopeSql +
-    // 已归档的邻居不进【路】段（T26）：边还在（归档不删边），但默认不该被看见。
+    // 已归档的邻居不进【路】段：边还在（归档不删边），但默认不该被看见。
     '   AND (b.flags & ' +
     FLAG_ARCHIVED +
     ') = 0' +
@@ -445,7 +445,7 @@ function clip(s: string, max: number): string {
  * 为什么标在锚段、而不是另起一段清单：这几件事都改变「这条记忆该不该信」，而模型读到
  * 锚段的时刻，正是它要做这个判断的时刻。id 本身是自增的，也就等于天然的写入顺序。
  *
- * T29 的两种标记也挂在这里（与「已被取代」同一位置）：
+ * 待拆分的两种标记也挂在这里（与「已被取代」同一位置）：
  *   - 待拆分（flags 的 bit0）：候选状态，由写入时的长度切分置位。说法必须带上
  *     「切点按长度、未判内容」，否则模型会把它读成「系统判断过该拆」。
  *   - 用户已确认应拆分：人在界面上按过确认（状态在 meta 的 split_confirmed 里）。
@@ -539,7 +539,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   // 确认清单只在这里转成 Set 一次：它在三段渲染里每次 build() 都要查，而 hits 最多几十条。
   const splitConfirmed = new Set(recalled.meta.splitConfirmed ?? [])
   const splitSegments = new Map(recalled.meta.splitPendingSegments ?? [])
-  // 被取代而没有出现在结果里的条数（T66）。锚段末尾给一句，读者才知道「少的那条」不是丢了。
+  // 被取代而没有出现在结果里的条数。锚段末尾给一句，读者才知道「少的那条」不是丢了。
   const supersededDropped = recalled.meta.suppressedSuperseded ?? 0
   const anchorQuota = Math.floor(budget * SEGMENT_RATIO.anchors)
   const entryQuota = Math.floor(budget * SEGMENT_RATIO.entries)

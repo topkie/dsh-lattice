@@ -15,7 +15,7 @@ import { closeRuntime } from '../dist/state.js'
  * callback，父插件不受影响（registry.ts：inject 就是 plugin({ inject, apply })）。
  * 替身按契约照做：给了 `webServer` 就跑回调，没给就只记下依赖、不跑。
  *
- * 为什么这两条要分开测：M3-T19 实测的那次失败**没有报错**，只是路由没注册 ——
+ * 为什么这两条要分开测：实测的那次失败**没有报错**，只是路由没注册 ——
  * 「静默跳过」正是缺陷的直接形态，所以要同时钉住「给了就注册」与「没给不抛也不注册」。
  */
 function fakeCtx({ webServer } = {}) {
@@ -105,7 +105,7 @@ describe('插件契约', () => {
       'lattice_write',
     ])
     assert.equal(names.length, 6)
-    // T35 判据 8：audit 是内部模块 + 只读路由，绝不进模型侧。
+    // 判据 8：audit 是内部模块 + 只读路由，绝不进模型侧。
     assert.ok(!names.includes('lattice_audit'), '体检不得注册成工具')
     for (const t of ctx.registered) assert.equal(typeof t.output.render, 'function')
   })
@@ -147,14 +147,14 @@ describe('插件契约', () => {
     assert.deepEqual([...inject], ['tools'], '模块级 inject 不得包含 webServer')
     assert.deepEqual(ctx.injected, [['webServer']], '只对 webServer 做条件注入')
 
-    // M3-T19 加了目录与搜索（共三条只读），M3-T20 加了删除（写端点），
-    // M4-T44 加了日志导出（只读）与日志清空（写端点），
-    // M4-T35 加了体检（只读；它只出现在路由，不出现在工具表），
-    // M4-T26 加了归档与恢复（两条写端点；模型侧不新增工具）。
-    // M4-T29 加了拆分候选的确认与忽略（两条写端点；模型侧仍不新增工具）。
+    // 其余路由是陆续加的：目录与搜索（共三条只读）、删除（写端点）、
+    // 日志导出（只读）与日志清空（写端点）、
+    // 体检（只读；它只出现在路由，不出现在工具表）、
+    // 归档与恢复（两条写端点；模型侧不新增工具）、
+    // 拆分候选的确认与忽略（两条写端点；模型侧仍不新增工具）。
     // 条目详情也是一条只读路由（点开才取全文）。
     // 整理入口是两条写路由（规划 / 取消；状态并入体检，不单开只读路由）。
-    // 清空「学到的入口」是一条写路由（T50）。
+    // 清空「学到的入口」是一条写路由。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
     assert.equal(routes.length, 15, '六条只读路由 + 九条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
@@ -292,7 +292,7 @@ describe('插件契约', () => {
   })
 
   /**
-   * 归档 / 恢复两条写端点（T26 判据 5、6）：栅栏与删除同形；重复调用是幂等而不是报错。
+   * 归档 / 恢复两条写端点（判据 5、6）：栅栏与删除同形；重复调用是幂等而不是报错。
    *
    * 四条栅栏各拒一次，而不是只挑一条：四条挡的是四种不同的越权形态
    * （外站 / 方法 / 跨站简单请求的类型 / 超大请求体），漏一条就是漏一种。
@@ -400,7 +400,7 @@ describe('插件契约', () => {
     assert.equal(row.h, vecBefore, '归档不改向量')
     assert.equal(Number(row.flags), 0, '恢复之后位应当回到 0')
   })
-  it('目录路由的 includeArchived：默认不列，显式传 1 时列出（T26 判据 4 的界面一侧）', () => {
+  it('目录路由的 includeArchived：默认不列，显式传 1 时列出（判据 4 的界面一侧）', () => {
     const seedDb = openVault(join(baseConfig.dataDir, 'lattice.db')).db
     const now = Date.now()
     seedDb
@@ -436,7 +436,7 @@ describe('插件契约', () => {
     assert.equal(res.out.body.total, 1, '勾选「显示已归档」时要列出来')
   })
   /**
-   * 体检端点（M4-T35）：栅栏与最近一条只读路由同形；没有库时**报无数据**，
+   * 体检端点：栅栏与最近一条只读路由同形；没有库时**报无数据**，
    * 而不是 500、也不是「全部正常」。这条路由不走 getRuntime，所以不会顺手建库。
    */
   it('体检端点：非回环 403、非 GET 405、没有库时报无数据', () => {

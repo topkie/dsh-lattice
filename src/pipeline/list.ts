@@ -138,12 +138,12 @@ export function listAtoms(db: DatabaseSync, opts: ListOptions = {}): ListResult 
     // 按位过滤而不是等值：一个 atom 可以同时有多个标记，等值匹配会让「查歧义」漏掉
     // 同时被标了「未归类」的行。
     //
-    // 这一支**不排除归档**（T26）：给了位过滤就是显式检索。于是 flags=16 能列出归档条目，
+    // 这一支**不排除归档**：给了位过滤就是显式检索。于是 flags=16 能列出归档条目，
     // flags=2 仍然能列出「既歧义又归档」的行 —— 两个条件都在问具体标记，不该互相遮蔽。
     where.push('(flags & ?) <> 0')
     args.push(opts.flags)
   } else if (opts.includeArchived !== true) {
-    // 默认结果不含归档（T26：默认不召回）。这是「没给位过滤」的那一支，
+    // 默认结果不含归档（默认不召回）。这是「没给位过滤」的那一支，
     // 与上面互斥 —— 两个分支都写归档条件会让 flags=16 永远为空。
     where.push('(flags & ?) = 0')
     args.push(FLAG_ARCHIVED)

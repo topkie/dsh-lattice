@@ -7,7 +7,7 @@
 // 这里读两边的**源码文本**逐值对照。为什么不断言运行时：浏览器半根本不在 Node 里执行
 // （它调 window.__ModuleLoader__），运行时要造一个宿主环境，那测的就不是这份字节了。
 //
-// 与 T29 的界面用例同一条理由：形状上写死的东西，只能在源码层面钉住。
+// 与界面用例同一条理由：形状上写死的东西，只能在源码层面钉住。
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

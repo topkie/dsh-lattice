@@ -52,7 +52,7 @@ export const NEAR_K = 4 satisfies ThresholdValue<
   'recheckable',
   {
     area: '图扩展'
-    tool: 'T18 探针 03（无脚本）'
+    tool: '探针 03（无脚本）'
     finding: '参数网格（K = 2/3/4/6/8 × cosMin = 0.70/0.75/0.80）：96%（1293/1374）的 atom 过线邻居多于 K，所以 MOD 由 K 直接决定 —— K=4 → 3.86、K=6（cosMin 0.75）→ 4.64；按 §36 的 MOD 目标区间 2~5 取中点 4'
     scale: '基准库 1374 条 atom（只有一个规模档）'
     failsWhen: ['库规模（atom 越多近邻越密）', '换编码模型（余弦尺度会变）', '§36 的 MOD 目标区间']
@@ -72,7 +72,7 @@ export const NEAR_COS_MIN = 0.7 satisfies ThresholdValue<
   'recheckable',
   {
     area: '图扩展'
-    tool: 'T18 探针 01（余弦分布）与探针 03（参数网格）'
+    tool: '探针 01（余弦分布）与探针 03（参数网格）'
     finding: 'top-16 邻居的 cos 中位数 0.748、p10 0.685 —— 0.70 与 0.86 之间没有自然断点，抬线砍不掉一批「明显更差」的边，只会制造孤点：0.70 → 孤立 1.6%，0.75 → 8.1%（越过 §36 的 <8% 目标），0.80 → 34%（越过 20% 报警线）。0.70 是三个候选里唯一同时满足 MOD 与孤立率两条区间的。它不是「相似」的语义线，只是「别把可用的 atom 变成孤点」的底线'
     scale: '基准库 1374 条 atom'
     failsWhen: ['换编码模型（余弦尺度会变）', '§36 的孤立率目标', '语料的领域混合度']
@@ -85,7 +85,7 @@ export const OUT_DEGREE_CAP = 16 satisfies ThresholdValue<
   'chosen',
   {
     area: '图扩展'
-    why: '设计文档给的值，未在本库标定：§33 的降级路径、§40 的反例判据、技术文档 4.2 的图路参数都写 16，值来自设计文档；它是 K 被调大时的兜底，不是标定出来的上限'
+    why: '设计说明给的值，未在本库标定：§33 的降级路径、§40 的反例判据、技术文档 4.2 的图路参数都写 16，值出自那里；它是 K 被调大时的兜底，不是标定出来的上限'
     failsWhen: ['NEAR_K（K 接近或超过 16 时它才开始生效）', '库规模与语料密度']
     affects: '出度硬上限。两个来源各自用一次、**不合并计数**：推断边每 atom ≤ 16（inferEdges 把超出的邻居截断），声明边每批 ≤ 16（write.ts 把超出的边拒掉）。所以同一个 atom 可以有 16 条推断边 + 16 条声明边，合计不设上限。查询侧（graphPath 的每个种子）也用它截断候选，同样不参与前两者的计数'
     doc: 't18fail'
@@ -111,7 +111,7 @@ export const GRAPH_INFER_MAX_ATOMS = 4000 satisfies ThresholdValue<
 /**
  * 图路认的 kind 白名单，与 search.ts 的图路 SQL 必须一致。
  *
- * `related` 是模型**声明**的 kind（T38）：它带来的候选不在向量路里，图路因此第一次
+ * `related` 是模型**声明**的 kind：它带来的候选不在向量路里，图路因此第一次
  * 有「非几何」的输入可引进 —— 此前四类 kind 里三类没有写入方，实际只有 near，
  * 而 near 与向量路同源（search.ts 的 freshGraph 过滤就是在处理这件事）。
  *
@@ -287,7 +287,7 @@ export function inferEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
     }
   }
 
-  // duplicate：表在基准库上可能是空的（T16 的判据只认 cos ≥ 0.92 且词面 ≥ 0.72），
+  // duplicate：表在基准库上可能是空的（判据只认 cos ≥ 0.92 且词面 ≥ 0.72），
   // 这里如实按行读取，不额外放宽 —— 放宽等于在别处偷偷定义第二条重复判据。
   const pairRows = db.prepare('SELECT a_id, b_id, cos, lexical FROM atom_pair').all() as Array<{
     a_id: number | bigint

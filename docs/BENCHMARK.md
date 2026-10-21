@@ -166,7 +166,7 @@ LongBench 的 context 分三类：维基派生（CC BY-SA，可再分发）、�
 1. **语料 commit**：仓库地址 + 完整 40 位 sha，不是分支名（分支会动）；
 2. **文件校验和**：每个用到的数据文件的 sha256；
 3. **装置侧**：查询集文件的 sha256（`querySet.sha256`，脚本自动算）、建库规则名
-   （库的 `meta` 表里 `entry_rule`，如 `bigram-idf-v4`）、schema 版本。
+   （库的 `build_info` 表里 `entry_rule`，如 `bigram-idf-v4`）、结构版本。
 
 **本仓库当前没有 LongBench 基线**，所以上面第 1、2 项还没有具体值。
 这里刻意不写未经核对的 commit 与校验和：写一个查不回来的 sha，比空着更坏 ——

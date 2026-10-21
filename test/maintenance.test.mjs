@@ -1,4 +1,4 @@
-// T47 判据 6（栅栏与 confirm）与 T50 四条判据的用例。
+// 整理入口判据 6（栅栏与 confirm）与清空「学到的入口」四条判据的用例。
 //
 // **这一组完全不碰全局状态**（既不调 `apply`，也不 `configureLog`）。日志与 runtime 都是
 // 进程级单例，本组一旦配置它们，`log.test.mjs` 的用例就会读不到自己刚写的日志 —— 实测过两次：
@@ -51,7 +51,7 @@ function entryOrigins(db) {
   return out
 }
 
-describe('T50 判据 1：只删 learned', () => {
+describe('清空「学到的入口」判据 1：只删 learned', () => {
   it('清空之后只有 learned 消失，atom 与其它来源的入口一条不少', () => {
     const { db } = openVault(join(dir, 'lattice.db'))
     seedLearned(db, 3)
@@ -80,7 +80,7 @@ describe('T50 判据 1：只删 learned', () => {
   })
 })
 
-describe('T50 判据 2：零条也留痕', () => {
+describe('清空「学到的入口」判据 2：零条也留痕', () => {
   it('没有 learned 时返回 0、不报错；内核函数自己写一条留痕日志', () => {
     const { db } = openVault(join(dir, 'lattice.db'))
     assert.equal(clearLearned(db), 0, '零条是有效结果，不是错误')
@@ -96,7 +96,7 @@ describe('T50 判据 2：零条也留痕', () => {
     assert.equal(JSON.parse(String(sanitized.detail)).cleared, 0, '零条也是合法 detail')
   })
 })
-describe('T47 判据 6 与 T50 判据 3：栅栏与 confirm（源码级）', () => {
+describe('整理入口判据 6 与清空「学到的入口」判据 3：栅栏与 confirm（源码级）', () => {
   it('两条整理路由与清空路由都走 guardWrite，且都有 confirm 分支', () => {
     const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
     const recluster = /async function reclusterRoute\(([\s\S]*?)\n}/.exec(src)

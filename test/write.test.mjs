@@ -137,7 +137,7 @@ describe('写入管线：落位（向量 + 词面双票）', () => {
       .get(r.atomId)
     assert.equal(Number(edges.n), 1, 'ambiguous 必须留下 near 边，否则这条记忆彻底孤立')
 
-    // M4-D1：回执要能核对「没把握」指的是哪两个候选。
+    // 回执要能核对「没把握」指的是哪两个候选。
     // nearId 是 near 边指向的最近候选，secondId 是次近候选 —— 两者在这个场景里不同，
     // 混用会让回执给的编号对不上 lattice_list / SQL。
     assert.equal(typeof r.nearId, 'number', 'D1：新建主题且指向候选时应带 nearId')
@@ -145,10 +145,10 @@ describe('写入管线：落位（向量 + 词面双票）', () => {
     const nearEdge = db.prepare("SELECT dst_id FROM edge WHERE kind = 'near' AND src_id = ?").get(r.atomId)
     assert.equal(Number(nearEdge.dst_id), r.nearId, 'D1：nearId 必须就是 near 边的目标')
 
-    // D1 当时的判据是「只改回执、不写 flags」；**T36 落地后存储有意改变**（ambiguous 置歧义位）。
+    // 当时的判据是「只改回执、不写 flags」；**位标志落地后存储有意改变**（ambiguous 置歧义位）。
     // 那条历史语义保留在这里的注释里，而 flags 的完整判据归 test/flags.test.mjs —— 两处各写一套就会分叉。
     const flags = db.prepare('SELECT flags FROM atom WHERE id = ?').get(r.atomId)
-    assert.equal(Number(flags.flags) & 2, 2, 'T36 起：ambiguous 落「歧义」位')
+    assert.equal(Number(flags.flags) & 2, 2, '位标志落地起：ambiguous 落「歧义」位')
   })
 
   it('远到低于 τ_new 时新建且不留 near 边', async () => {

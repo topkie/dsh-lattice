@@ -5,18 +5,18 @@
 //   2. 注册六个工具：ping（健康检查）、write、recall、expand、list、feedback
 //
 // 外加十二条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
-//   /api/lattice-ping-mini      库的规模（T19 最小实跑留下的座位验证，实测通过的那条基线）
+//   /api/lattice-ping-mini      库的规模（最小实跑留下的座位验证，实测通过的那条基线）
 //   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径（**不含正文**）
 //   /api/lattice-atom           详情：按 id 取一条的全文（点开才取；只读，与工具无关）
 //   /api/lattice-search         搜索：与 lattice_recall 同一条数据路径，但**不记命中**
-//   /api/lattice-audit          体检：只读结构指标，供面板与维护者（M4-T35；不进模型侧）
-//   /api/lattice-log-export     降级日志导出：只读，返回 CSV 附件（M4-T44）
+//   /api/lattice-audit          体检：只读结构指标，供面板与维护者（不进模型侧）
+//   /api/lattice-log-export     降级日志导出：只读，返回 CSV 附件
 //   /api/lattice-forget         **删除**：物理删除 + 留痕（§44）。写端点
-//   /api/lattice-log-clear      清空降级日志：写端点，要求 { confirm: true }（M4-T44）
-//   /api/lattice-archive        **归档**：置 flags 的 bit4，内容不删（T26）。写端点
-//   /api/lattice-unarchive      取消归档：清 bit4，恢复默认可见（T26）。写端点
-//   /api/lattice-split-confirm  确认某条待拆分：清 bit0 + 记一条状态（T29）。写端点
-//   /api/lattice-split-ignore   忽略某条待拆分：清 bit0 + 写日志（T29）。写端点
+//   /api/lattice-log-clear      清空降级日志：写端点，要求 { confirm: true }
+//   /api/lattice-archive        **归档**：置 flags 的 bit4，内容不删。写端点
+//   /api/lattice-unarchive      取消归档：清 bit4，恢复默认可见。写端点
+//   /api/lattice-split-confirm  确认某条待拆分：清 bit0 + 记一条状态。写端点
+//   /api/lattice-split-ignore   忽略某条待拆分：清 bit0 + 写日志。写端点
 //
 // 六条只读路由的栅栏只留「本机回环」一道；六条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
@@ -119,11 +119,11 @@ const ATOM_ROUTE_PATH = '/api/lattice-atom'
 const SEARCH_ROUTE_PATH = '/api/lattice-search'
 
 /**
- * 体检路由：只读结构指标（M4-T35）。
+ * 体检路由：只读结构指标。
  *
  * 为什么是路由而不是工具：体检是维护/诊断动作，不在模型的工作流里；
  * 结构指标又只作参考，工具化等于把参考值直接递给模型、容易被读成结论。
- * 面板（M4-T28）只做展示，口径与数据都在 pipeline/audit.ts 这一处。
+ * 面板只做展示，口径与数据都在 pipeline/audit.ts 这一处。
  */
 const AUDIT_ROUTE_PATH = '/api/lattice-audit'
 
@@ -137,9 +137,9 @@ const AUDIT_ROUTE_PATH = '/api/lattice-audit'
 const FORGET_ROUTE_PATH = '/api/lattice-forget'
 
 /**
- * 归档 / 恢复路由：只改 `atom.flags` 的 bit4（T26）。
+ * 归档 / 恢复路由：只改 `atom.flags` 的 bit4。
  *
- * 为什么不是工具、也不加模型侧参数：设计报告 §11.1 把三权分开 —— 「是否仍然有效」
+ * 为什么不是工具、也不加模型侧参数：设计说明 §11.1 把三权分开 —— 「是否仍然有效」
  * 归模型（写入时声明 supersedes），「失效后是否还要被检索到」归插件（这一位），
  * 「物理删除」归用户。归档是可见性动作，模型侧多一个动作就等于让模型替用户决定
  * 什么该消失；工具表因此仍是六个。
@@ -151,7 +151,7 @@ const ARCHIVE_ROUTE_PATH = '/api/lattice-archive'
 const UNARCHIVE_ROUTE_PATH = '/api/lattice-unarchive'
 
 /**
- * 拆分候选的两个决定（T29）：确认 / 忽略。
+ * 拆分候选的两个决定：确认 / 忽略。
  *
  * 为什么不是工具、也不加模型侧参数：这两个动作是**人的判断**。写入时的切分是自动的，
  * 但「这条到底该不该拆」要读内容，而读内容作判断正是模型侧不该被要求做的事（§11.1：
@@ -167,7 +167,7 @@ const SPLIT_CONFIRM_ROUTE_PATH = '/api/lattice-split-confirm'
 const SPLIT_IGNORE_ROUTE_PATH = '/api/lattice-split-ignore'
 
 /**
- * 整理入口的两条写路由（T47）：规划与取消。
+ * 整理入口的两条写路由：规划与取消。
  *
  * 为什么是两条而不是一条带动作参数：与归档 / 恢复同一条理由 —— 动作方向写进路径。
  * 但这里共用同一个 handler 而不是两份：两者的差别只是调哪个函数，而栅栏、读体、回执形状
@@ -180,7 +180,7 @@ const RECLUSTER_PLAN_ROUTE_PATH = '/api/lattice-recluster-plan'
 const RECLUSTER_CANCEL_ROUTE_PATH = '/api/lattice-recluster-cancel'
 
 /**
- * 清空「学到的入口」（T50）。
+ * 清空「学到的入口」。
  *
  * 它删的是**数据**（召回反哺学到的入口词），不可撤销，但可以重新长出来 —— 再走几次召回
  * 就有了，只是长回来的是新词。所以它比删除记忆轻、比归档重：要给，但要有两道确认，
@@ -241,14 +241,14 @@ const DEFAULT_ENCODER_MODEL = 'Xenova/bge-small-zh-v1.5'
  * 第三个是落位时取多少个 topic 候选。三者同值纯属巧合 —— 合并会把「改注入条数」变成
  * 「改 recall 的默认参数」或「改落位候选数」。
  *
- * 名字带上了配置项前缀（T65 阶段 3 批 2 改）：它与写入侧的常量同名不同量，搬到定义处后
+ * 名字带上了配置项前缀（阶段 3 批 2 改）：它与写入侧的常量同名不同量，搬到定义处后
  * 打印表里会出现两行同名条目，读的人分不清哪一行是哪一个。
  */
 const CONFIG_TOP_N_DEFAULT = 24 satisfies ThresholdValue<
   'chosen',
   {
     area: '召回融合'
-    why: '配置项 topN 的默认条数：容量选择，没有测量给出它；与设计文档 §7 的 topN 默认值一致，但这条记录的是「配置入口的默认值」，文档对照那一条在 RECALL_TOP_N 上'
+    why: '配置项 topN 的默认条数：容量选择，没有测量给出它；与设计说明 §7 的 topN 默认值一致，但这条记录的是「配置入口的默认值」，文档对照那一条在 RECALL_TOP_N 上'
     failsWhen: ['注入字符预算', '一次注入能容纳的摘要条数']
     affects: 'Config.topN 的默认值；调用方不传 topN 时，召回交注入层的条数'
     diverges: '**与 RECALL_TOP_N、写入侧 DEFAULT_TOP_N 同为 24、不同量**：这条是配置项的默认值，改它等于改「默认注入多少条」；另两条分别是 recall 的兜底参数与落位候选数'
@@ -374,7 +374,7 @@ export function apply(ctx: Context, config: unknown): void {
   // 放在这里而不是 webServer 的子 fiber 里：没有界面的 profile 也要正常关闭日志库。
   ctx.effect(() => () => closeLog(), 'dsh-lattice: log flush')
 
-  // ── 浏览器半的座位（M3-T19 最小验证） ─────────────────────────────────────────
+  // ── 浏览器半的座位（最小验证） ─────────────────────────────────────────
   //
   // 这段代码本身不是功能，是**验证**：宿主的设置页里能不能出现一个属于本插件的区块、
   // 区块里的 fetch 能不能打到本插件后端的路由。路由只读、无请求体，返回库的规模。
@@ -387,8 +387,8 @@ export function apply(ctx: Context, config: unknown): void {
   // impl.fiber.state === ACTIVE），而 loader 是**并发**启动所有顶层条目的
   // （plugin-loader 的 config/group.ts：Promise.all 一把 create）。webServer 的 fiber 要等
   // [Service.init] 里 server.listen 落地才转 ACTIVE，于是 apply 走到那里时常常拿到
-  // undefined —— 静默跳过、路由永不注册。M3-T19 重启实测的 404 就是这个形态；
-  // 复现见开发笔记的探针 t19-route-registration.mjs（真 cordis 4.0.4，场景 1）。
+  // undefined —— 静默跳过、路由永不注册。重启实测的 404 就是这个形态；
+  // 复现见路由注册探针（真 cordis 4.0.4，场景 1）。
   //
   // ctx.inject(deps, callback) 起的是一个**子 fiber**（registry.ts：inject 就是
   // plugin({ inject, apply })），激活条件只挂在子 fiber 上：webServer 缺席时它停在 PENDING、
@@ -469,7 +469,7 @@ export function apply(ctx: Context, config: unknown): void {
           path: SPLIT_IGNORE_ROUTE_PATH,
           handler: (req, res) => splitRoute(runtimeCfg, req, res, false),
         }),
-        // 整理入口（T47）：规划 / 取消共用同一个 handler，理由见 RECLUSTER_* 常量的注释。
+        // 整理入口：规划 / 取消共用同一个 handler，理由见 RECLUSTER_* 常量的注释。
         webServer.register({
           kind: 'exact',
           path: RECLUSTER_PLAN_ROUTE_PATH,
@@ -520,7 +520,7 @@ export function apply(ctx: Context, config: unknown): void {
           ok: true,
           plugin: name,
           version: VERSION,
-          // 标定状态（T44 判据 1/2/4）：未标定**只进这里与日志**，不进召回返回。
+          // 标定状态（判据 1/2/4）：未标定**只进这里与日志**，不进召回返回。
           calibration: { state: rt.calibration.state, reason: rt.calibration.reason ?? null },
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
@@ -546,7 +546,7 @@ export function apply(ctx: Context, config: unknown): void {
             cacheSizeMB: Math.round(res.cacheSize / 1024 / 1024),
             busyTimeoutMs: res.busyTimeout,
           },
-          // 五处模块级缓存的实时占用（M5-T60）：只报数，且**每次现读**。口径与「为什么
+          // 五处模块级缓存的实时占用：只报数，且**每次现读**。口径与「为什么
           // 不触发重建」写在 cache-usage.ts 的文件头 —— 这里只负责把读数摆出来。
           caches: cacheUsage(rt.db),
           // 样本库只报条数：原文（哪怕一条摘录）都不该出现在健康检查里。
@@ -606,7 +606,7 @@ function miniPing(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse)
       ok: true,
       plugin: name,
       version: VERSION,
-      // 规模含已归档（T26）：这一项回答的是「库有多大」，不是「默认列表有多少条」。
+      // 规模含已归档：这一项回答的是「库有多大」，不是「默认列表有多少条」。
       // 用默认口径会让归档悄悄改变库的规模读数 —— 而归档什么都没删。
       atoms: listAtoms(rt.db, { limit: 1, includeArchived: true }).total,
     })
@@ -630,7 +630,7 @@ function reasonOf(e: unknown): string {
  * （插件路由不带任何 CORS 头）。回环这道仍然必须留：宿主对插件路由不做鉴权
  * （见 dsh-host-webserver 的说明），而这些路由会把整个记忆库报给任何能连上的人。
  *
- * 与 miniPing 里那段是有意的重复：那条路由是 T19 实测通过的基线，本轮不动它的函数体。
+ * 与 miniPing 里那段是有意的重复：那条路由是早先实测通过的基线，本轮不动它的函数体。
  */
 function guardLoopback(req: IncomingMessage, res: ServerResponse): boolean {
   const remote = req?.socket?.remoteAddress ?? ''
@@ -694,7 +694,7 @@ function atomsRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerRespons
   const params = queryOf(req)
   try {
     const rt = getRuntime(cfg)
-    // includeArchived 是界面上的「显示已归档」勾选（T26）：默认不传 = 只看未归档。
+    // includeArchived 是界面上的「显示已归档」勾选：默认不传 = 只看未归档。
     // 它只影响这一条只读路由；`lattice_list` 的显式检索走 flags 位过滤，两者不共用一个参数。
     const r = listAtoms(rt.db, {
       kind: params.get('kind') ?? '',
@@ -743,7 +743,7 @@ function atomRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse
 }
 
 /**
- * 体检：只读结构指标（M4-T35）。
+ * 体检：只读结构指标。
  *
  * 与其他只读路由的**一处有意的不同**：这里不用 getRuntime，而是自己只读打开库。
  * 三个理由：
@@ -866,7 +866,7 @@ async function searchRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
 /**
  * 写端点的栅栏：回环 + 只认 POST + 要求 application/json。
  *
- * 为什么比只读那组多两道（依据见 M3 的 T19 前置调研与修复报告）：只读路由无请求体，
+ * 为什么比只读那组多两道（依据见前置调研与修复报告）：只读路由无请求体，
  * 跨站页面即使发得出去也**读不到响应**（插件路由不带任何 CORS 头），所以只留回环即可。
  * 写路由不一样 —— 它不需要读到响应就已经造成了后果。
  *
@@ -982,7 +982,7 @@ async function forgetRoute(cfg: RuntimeConfig, req: IncomingMessage, res: Server
 }
 
 /**
- * 归档 / 恢复：改 flags 的 bit4（T26）。
+ * 归档 / 恢复：改 flags 的 bit4。
  *
  * 与删除的区别写在 pipeline/archive.ts 的文件头：归档不删内容、不留墓碑、不做防写回。
  * 这里因此没有二次确认（比删除轻），也没有「回收站」这种中间态 —— 归档本身就是那个中间态。
@@ -1032,7 +1032,7 @@ async function archiveRoute(
 }
 
 /**
- * 拆分候选的决定：确认或忽略（T29）。
+ * 拆分候选的决定：确认或忽略。
  *
  * 两者的共同点：都清 `atom.flags` 的 bit0，所以界面上的候选提示消失。差别只有一处 ——
  * 确认另记一条状态（meta 的 split_confirmed），下次召回会在锚行提示「用户已确认应拆分」；
@@ -1088,7 +1088,7 @@ async function splitRoute(
 }
 
 /**
- * 整理入口（T47）：规划与取消。
+ * 整理入口：规划与取消。
  *
  * 三条边界：
  *   1. 规划要 `confirm: true` —— 一次误触会重排全库主题，而它不可撤销；
@@ -1147,7 +1147,7 @@ async function reclusterRoute(
 }
 
 /**
- * 启动补跑：上次规划过却没跑完的整理，这里补一次（T47）。
+ * 启动补跑：上次规划过却没跑完的整理，这里补一次。
  *
  * 判据是「`planned` 有值」，不看时间 —— 进程崩溃、断电、关窗口留下的是同一个痕迹。
  * 没有计划时它什么也不做。
@@ -1181,7 +1181,7 @@ function bootResume(cfg: RuntimeConfig): void {
   }
 }
 /**
- * 清空「学到的入口」（T50）。
+ * 清空「学到的入口」。
  *
  * 三件事：删的只有 `origin='learned'` 那一类；回执给出实际删掉的条数（0 也是有效结果）；
  * 内核函数里另写一条日志（回答「发生过」）。

@@ -19,7 +19,7 @@ import type { ThresholdValue } from '../threshold-types.js'
  * 每点保留的最近邻个数 k 的默认值。
  *
  * 取 2 有两个理由，**都不是「随便挑的」**：
- *   1. 设计报告给的 `min_samples = 2`，而 min_samples 的语义就是「核心距离取第几近邻」，
+ *   1. 设计说明给的 `min_samples = 2`，而 min_samples 的语义就是「核心距离取第几近邻」，
  *      即 `k`。两者是同一个参数，代码里也只留一个。
  *   2. 本机在基准库（1 374 条真实向量）上扫过 k ∈ {2,3,4,6,8,16}，只有 k=2 能把
  *      簇数 / 噪声比例落在参照实现（clusternova，`mpts=2`）的同一区间；
@@ -32,8 +32,8 @@ export const DEFAULT_KNN_K = 2 satisfies ThresholdValue<
   'recheckable',
   {
     area: '重聚类'
-    tool: 'T16 探针（无脚本）'
-    finding: '基准库上与参照实现（clusternova，mpts=2）对照：k=2 得 82 簇 / 噪声占 68.9%，参照 75 簇 / 73.4%，双向成员重合度 0.77 / 0.85；k≥6 时本实现塌缩到个位数簇。设计报告 §21 给 min_samples = 2，而 min_samples 与 k 在本实现里是同一个参数'
+    tool: '重聚类探针（无脚本）'
+    finding: '基准库上与参照实现（clusternova，mpts=2）对照：k=2 得 82 簇 / 噪声占 68.9%，参照 75 簇 / 73.4%，双向成员重合度 0.77 / 0.85；k≥6 时本实现塌缩到个位数簇。设计说明 §21 给 min_samples = 2，而 min_samples 与 k 在本实现里是同一个参数'
     scale: '基准库 1374 条真实向量、512 维（只有一个规模档）'
     failsWhen: ['库规模（k 越大越小簇越易被抹平）', '语料密度分布', '换编码模型（余弦尺度会变）']
     affects: 'k 近邻图每点保留的邻居数，同时也是 min_samples（核心距离取第几近邻）—— 它决定互可达距离里「核心距离」那一项有多大，也就决定了小簇会被抹平到什么程度'

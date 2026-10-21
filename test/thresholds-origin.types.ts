@@ -1,4 +1,4 @@
-// 判据 1 的类型用例（T54）：chosen 的第二参数是 string，传对象必须在编译期报错。
+// 判据 1 的类型用例：chosen 的第二参数是 string，传对象必须在编译期报错。
 //
 // 这个文件不在 tsconfig.json 的 include 里（那里只收 src/**），由
 // test/thresholds.test.mjs 用 TypeScript 编译器 API 检查：诊断数为 0 才通过。
@@ -13,7 +13,7 @@ export const notAString = chosen(() => 42, { tool: 'x' })
 // 正例：写法正确时编译通过（这里没有 @ts-expect-error，也不该有错误）
 export const ok = recheckable(() => 42, { tool: '不算脚本', finding: '只是类型用例' })
 
-// T54 迁移完成后删掉的两个过渡字段：再写回去必须编译报错，不能悄悄复活。
+// 那次迁移完成后删掉的两个过渡字段：再写回去必须编译报错，不能悄悄复活。
 // @ts-expect-error evidence 已删除，来历写在 origin 里
 export const withEvidence: ThresholdCalibration = { evidence: '旧的解释字段' }
 

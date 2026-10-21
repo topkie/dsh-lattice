@@ -84,7 +84,7 @@ export function encoderErrorCode(): string | null {
 }
 
 /**
- * 编码器本体的**实时**占用（M5-T60）。
+ * 编码器本体的**实时**占用。
  *
  * 这一项没有「条目数」：编码器是一份模型本体，不是一张表。它自己的规模字段不由本模块
  * 持有 —— `pipeline` 返回的对象是 @huggingface/transformers 的内部形状，版本之间不稳定，

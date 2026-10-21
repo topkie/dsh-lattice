@@ -1,6 +1,6 @@
-// T47 整理入口的用例：规划、取消、四态、一次性执行、一起回滚。
+// 整理入口的用例：规划、取消、四态、一次性执行、一起回滚。
 //
-// 判据编号与 `4.4` 的「T47 的判据」一一对应（第 6 条是栅栏，另有用例文件覆盖同形写法）。
+// 判据编号与 `4.4` 的「整理入口的判据」一一对应（第 6 条是栅栏，另有用例文件覆盖同形写法）。
 //
 // **这一组不加载真实模型**：向量是手写的（沿不同维度），够 runRecluster 分出簇即可。
 // 判据要的是状态与行数，与向量质量无关。
@@ -76,7 +76,7 @@ function snapshot(db) {
   }
 }
 
-describe('T47 判据 1：规划不改数据', () => {
+describe('整理入口判据 1：规划不改数据', () => {
   it('规划只写状态行：记忆 / 主题 / atom_pair / 入口的行数与主题向量都不动', () => {
     const { db } = openVault(dbFile)
     seed(db, 6)
@@ -90,7 +90,7 @@ describe('T47 判据 1：规划不改数据', () => {
   })
 })
 
-describe('T47 判据 2：四态可区分', () => {
+describe('整理入口判据 2：四态可区分', () => {
   it('idle / planned / running / failed 各报一个值', async () => {
     const { db } = openVault(dbFile)
     seed(db, 6)
@@ -118,7 +118,7 @@ describe('T47 判据 2：四态可区分', () => {
   })
 })
 
-describe('T47 判据 3：取消幂等，执行中拒收', () => {
+describe('整理入口判据 3：取消幂等，执行中拒收', () => {
   it('没计划时取消不报错；有计划时清干净；再取消幂等；执行中回拒', async () => {
     const { db } = openVault(dbFile)
     seed(db, 6)
@@ -147,7 +147,7 @@ describe('T47 判据 3：取消幂等，执行中拒收', () => {
   })
 })
 
-describe('T47 判据 4：延迟只跑一次', () => {
+describe('整理入口判据 4：延迟只跑一次', () => {
   it('到点跑一次；跑完计划与开始痕迹都清掉，状态回 idle', async () => {
     const { db } = openVault(dbFile)
     seed(db, 6)
@@ -186,7 +186,7 @@ describe('T47 判据 4：延迟只跑一次', () => {
   })
 })
 
-describe('T47 判据 5：一起回滚', () => {
+describe('整理入口判据 5：一起回滚', () => {
   it('提交前抛错，主题表与 atom_pair 都回到调用前', async () => {
     const { db } = openVault(dbFile)
     seed(db, 8)

@@ -46,7 +46,7 @@ export interface RuntimeConfig {
 }
 
 /**
- * 标定状态的两种取值与四种原因（T44）。
+ * 标定状态的两种取值与四种原因。
  *
  * **为什么不把「未标定」压成一个布尔**：never（从来没标过）、small_db（库太小，标了也不可信）、
  * model_changed（换过编码模型）、snapshot_invalid（快照坏了或版本不符）四者的补救动作不同 ——
@@ -73,7 +73,7 @@ export interface Runtime {
   cfg: RuntimeConfig
   /** 库文件路径，健康检查与排障要用。 */
   file: string
-  /** 标定状态（T44）：快照可用则给出参数，否则说明为什么不可用。 */
+  /** 标定状态：快照可用则给出参数，否则说明为什么不可用。 */
   calibration: CalibrationState
 }
 
@@ -126,7 +126,7 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
 let lastCalibrationKey: string | null = null
 
 /**
- * 读库里的标定快照，给出「这次运行时到底用哪套参数」（T44）。
+ * 读库里的标定快照，给出「这次运行时到底用哪套参数」。
  *
  * 顺序是有意的：先判快照在不在，再判版本，最后判模型。反过来会把「快照坏了」
  * 报成「换过模型」—— 那是两个不同的补救动作（修快照 vs 重标）。
@@ -266,7 +266,7 @@ function causeCode(err: unknown): string {
 }
 
 /**
- * 写入侧的重标尝试（T44 判据 3/5/7/8）。**不抛** —— 调用方是写入路径。
+ * 写入侧的重标尝试（判据 3/5/7/8）。**不抛** —— 调用方是写入路径。
  *
  * 顺序按代价排：库规模、正样本数、冷却都不需要算 S；只有这三道过了才花一次抽样。
  * 「判了 S」本身要记时间 —— 否则每次写入都要重算一次 S（40ms 量级），而写入是高频路径。

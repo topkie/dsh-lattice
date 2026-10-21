@@ -1,4 +1,4 @@
-// T29（pending_split 异步确认）的判据用例。
+// 待拆分（pending_split 异步确认）的判据用例。
 //
 // 判据编号与任务描述一致：
 //   1 候选产生   2 召回呈现   3 呈现不改排序与档位
@@ -155,7 +155,7 @@ function fakeReq({ remote = '127.0.0.1', method = 'POST', type = 'application/js
 let dbFile = ''
 let db = null
 
-describe('T29 判据 1：按长度切分产生候选', () => {
+describe('待拆分判据 1：按长度切分产生候选', () => {
   beforeEach(() => {
     dbFile = join(
       tmpdir(),
@@ -207,7 +207,7 @@ describe('T29 判据 1：按长度切分产生候选', () => {
 let receiptDir = ''
 let receiptTools = []
 
-describe('T29 判据 1：写入回执说明切了几段', () => {
+describe('待拆分判据 1：写入回执说明切了几段', () => {
   beforeEach(() => {
     resetEncoder()
     closeRuntime()
@@ -238,7 +238,7 @@ describe('T29 判据 1：写入回执说明切了几段', () => {
 
 // ─────────────────────────── 判据 2：召回呈现 ───────────────────────────
 
-describe('T29 判据 2：召回时把候选连同使用场景给出来', () => {
+describe('待拆分判据 2：召回时把候选连同使用场景给出来', () => {
   beforeEach(() => {
     dbFile = join(
       tmpdir(),
@@ -325,7 +325,7 @@ describe('T29 判据 2：召回时把候选连同使用场景给出来', () => {
 
 // ─────────────────────────── 判据 3：呈现不改排序与档位 ───────────────────────────
 
-describe('T29 判据 3：标记只增文本，不改排序与档位', () => {
+describe('待拆分判据 3：标记只增文本，不改排序与档位', () => {
   beforeEach(() => {
     dbFile = join(
       tmpdir(),
@@ -389,7 +389,7 @@ describe('T29 判据 3：标记只增文本，不改排序与档位', () => {
 
 // ─────────────────────────── 判据 6：呈现不写库 ───────────────────────────
 
-describe('T29 判据 6：召回不写库', () => {
+describe('待拆分判据 6：召回不写库', () => {
   beforeEach(() => {
     dbFile = join(
       tmpdir(),
@@ -537,7 +537,7 @@ function logEvents(dir) {
   }
 }
 
-describe('T29 判据 4 / 5：确认与忽略', () => {
+describe('待拆分判据 4 / 5：确认与忽略', () => {
   beforeEach(() => {
     resetEncoder()
     closeRuntime()
@@ -709,7 +709,7 @@ describe('T29 判据 4 / 5：确认与忽略', () => {
 
 // ─────────────────────────── 界面入口（源码级） ───────────────────────────
 
-describe('T29：界面上的两个动作', () => {
+describe('待拆分：界面上的两个动作', () => {
   /**
    * 浏览器半是手写的发布产物（不参与 tsc、不 import 宿主半），所以这里的检查是**源码级**的：
    * 路径与位值两侧各写一遍，写错不会有任何编译错误。与 log.test.mjs 的界面用例同一条理由。

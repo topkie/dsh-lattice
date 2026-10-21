@@ -1,4 +1,4 @@
-// 写入侧重标的四道闸与失败不半改（M4-T44 判据 5/7/8）。
+// 写入侧重标的四道闸与失败不半改（判据 5/7/8）。
 //
 // 钩子放在 describe 内部：node:test 的顶层 beforeEach/afterEach 是**全局**的，
 // 本文件会关运行时与样本库，放顶层会把别的测试文件的配置一起关掉。
@@ -113,7 +113,7 @@ async function addNegatives(n, top1 = 0.3) {
   }
 }
 
-describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () => {
+describe('重标触发：四道闸与失败不半改（判据 5/7/8）', () => {
   beforeEach(() => {
     closeRuntime()
     try {

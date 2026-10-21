@@ -1,4 +1,4 @@
-// 归档（T26）：默认不召回、仍可显式检索。
+// 归档：默认不召回、仍可显式检索。
 //
 // 这里验的是「可见性开关」这一件事的两面：
 //   1. 默认路径（召回四路、注入三段、目录默认结果）看不到归档条目；
@@ -37,7 +37,7 @@ function oneHot(i) {
 let dir = ''
 let db = null
 
-describe('归档：默认不可见、显式可检索（T26）', () => {
+describe('归档：默认不可见、显式可检索', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-archive-'))
     db = openVault(join(dir, 'lattice.db')).db

@@ -45,11 +45,11 @@ atom          记忆本体（唯一真相源）
                       601 字只讲一件事的文本同样会被标上，它说的是「切点没读过内容」。
                       召回命中时锚行标「疑似应拆分（切点按长度，未判内容）」并附本次
                       查询词；界面上两个动作，两者都清这一位、都不执行拆分：
-                      确认 → 另记 meta 的 split_confirmed，下次召回提示可按内容重写并
+                      确认 → 另记 split_queue 的 confirmed，下次召回提示可按内容重写并
                       声明 supersedes；忽略 → 只写一条日志（split.ignored）
                 bit1 = 2 歧义（两个候选接近，落位没把握）
                 bit2 = 4 未归类（与任何已有主题都不像）
-                bit3 = 8 已被取代（设计文档已命名；**未实现**，被取代关系只走 superseded_by 列）
+                bit3 = 8 已被取代（设计说明已命名；**未实现**，被取代关系只走 superseded_by 列）
                 bit4 = 16 已归档：默认不召回、不进注入三段、列表默认不列；
                       显式检索（lattice_list 给 flags=16、界面勾「显示已归档」）仍可见。
                       归档只改这一位：内容、向量、入口、边都还在，取消归档即恢复可见
@@ -60,8 +60,12 @@ entry         检索入口：term + bigram 索引列 + 权重 + 来源
 atom_topic    主属（权重 1.0）与次属（0.4~0.6）
 edge          记忆之间的关系：declared 由模型声明，inferred 由向量近邻重算
 atom_pair     atom 两两相似对（重聚类时填；供图扩展与去重查询用）
-forgotten     已删除记忆的墓碑（v4 起有；库里**不存正文**，只留指纹与摘要）
-meta          构建元信息（来源、入口规则版本、构建时间）
+forgotten     已删除记忆的墓碑（库里**不存正文**，只留指纹与摘要）
+build_info       建库元信息（入口抽取规则标识、来源、构建者、构建时间）
+recluster_state  整理（重聚类）的三个时刻：计划、开始、完成
+calib_state      标定检查：上次检查时间、上次错误
+split_queue      待拆分候选：切了几段、是否确认过、入队时间
+meta             校准快照（由外部标定包写，本插件不写）
 atom_search   检索侧物化表 → atom_fts（trigram）
               entry        → entry_fts（unicode61 + CJK bigram）
 ```
@@ -239,7 +243,7 @@ SQLite 的 FTS5 `trigram` 分词器按 3 字符滑窗建索引，**对长度 ≤
 （`not-built` / `built` / `too-large`）—— 两者回答不同的问题，不共用一套判定。
 
 **「无数据」与「没有发现」分开报**。`atom_pair` 由重聚类建立，空表因此有两种含义：
-没建过（先跑一次重建）与建过但没有（比过了，没有）。体检读 `meta` 里的 `recluster_at`
+没建过（先跑一次重建）与建过但没有（比过了，没有）。体检读 `recluster_state` 里的 `completed_at`
 区分它们；这个标记由 `rebuildAtomPairs` 在写表后留下。空库报 `dataState: 'empty'`，
 比例给 null 而不是 0 —— 0 会被读成结论。
 

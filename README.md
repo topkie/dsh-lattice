@@ -73,11 +73,11 @@ pnpm run build
 | `node_modules/dsh-lattice/` | `dist/`、`lib/`、`package.json`、`cordis.patch.yml` |
 | `node_modules/lattice-calib/` | `dist/`、`package.json` |
 
-`<DSH_HOME>` 因平台而异；不确定就找宿主配置里 `profiles/` 所在的那一层。
+profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<profile 名>/`；不确定就找宿主配置里 `profiles/` 所在的那一层。
 只复制 `dist/` 或只复制 `lib/` 会出现「后端是新版、设置页是旧版」，两样要一起复制。
 
 装好后用一次写入与一次召回确认：让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；
-也可以直接调 `lattice_ping`，它返回插件版本、库结构版本与当前编码器状态。
+也可以直接调 `lattice_ping`：它返回插件版本、标定状态、数据目录、编码器配置（`off` 或模型名），以及五处缓存的实时占用 —— 编码器是否真的加载成功看 `caches.encoder.state`。
 
 卸载：删掉 `node_modules/dsh-lattice/` 与 `node_modules/lattice-calib/`，重启宿主。
 记忆数据在独立的数据目录里，不会被这一步删掉。

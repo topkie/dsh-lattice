@@ -1,4 +1,4 @@
-// T60：五处模块级缓存的占用可见性（lattice_ping 的 caches 字段）。
+// 五处模块级缓存的占用可见性（lattice_ping 的 caches 字段）。
 //
 // 四条判据各自的用例：
 //   1. 读得到 —— ping 输出里有每处缓存的条目数（编码器那一项例外，它是布尔）；
@@ -112,7 +112,7 @@ async function seedVectors(db, texts) {
 // run.mjs 末尾，它的钩子在别的文件的 beforeEach **之后**跑，closeRuntime() 会把别人
 // 刚配好的日志库关掉：log.test.mjs 有 6 条用例因此变红（单独跑却全绿）。钩子放进
 // describe，作用域就只剩这里的用例。
-describe('缓存占用（T60）', () => {
+describe('缓存占用', () => {
   beforeEach(() => {
     // 编码器与运行时都是模块级单例：不复位的话会沿用上一个用例的 / 上一个文件的实例。
     resetEncoder()
@@ -131,7 +131,7 @@ describe('缓存占用（T60）', () => {
     }
   })
 
-  describe('缓存占用（T60 判据 1）', () => {
+  describe('缓存占用（判据 1）', () => {
     it('ping 输出里有每处缓存的条目数，不是「有 / 无」', async () => {
       const j = await pingJson()
       assert.ok(j.caches, 'ping 必须带 caches 字段')
@@ -152,7 +152,7 @@ describe('缓存占用（T60）', () => {
     })
   })
 
-  describe('缓存占用是实时值（T60 判据 2）', () => {
+  describe('缓存占用是实时值（判据 2）', () => {
     it('向量缓存：写 3 条并召回后，条目数从 0 变成 3', async () => {
       const j0 = await pingJson()
       assert.equal(j0.caches.vec.entries, 0)
@@ -242,7 +242,7 @@ describe('缓存占用（T60）', () => {
     })
   })
 
-  describe('ping 不引入新开销（T60 判据 3）', () => {
+  describe('ping 不引入新开销（判据 3）', () => {
     it('库里有带向量的 atom 时 ping 仍不建缓存；真正用一次缓存后才出现', async () => {
       const db = await runtimeDb()
       await seedVectors(db, [
@@ -294,7 +294,7 @@ describe('缓存占用（T60）', () => {
     }
   }
 
-  describe('可见性层不重建、不淘汰（T60 判据 3 / 4）', () => {
+  describe('可见性层不重建、不淘汰（判据 3 / 4）', () => {
     it('聚合函数只读缓存容器，不碰重建与淘汰', () => {
       assertClean(cacheUsage.toString(), 'cacheUsage')
     })

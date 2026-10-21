@@ -1,4 +1,4 @@
-// 取消取代（T67）：lattice_write 的 unsupersede 只清「被取代」标记。
+// 取消取代：lattice_write 的 unsupersede 只清「被取代」标记。
 //
 // 判据对应：
 //   1. 对被取代的 id 传 unsupersede → superseded_by 变 NULL，回执说「已取消」；

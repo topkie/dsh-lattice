@@ -99,7 +99,7 @@ export interface RecallMeta {
   /** 被标记为重复而压制的 atom 数。 */
   suppressed: number
   /**
-   * 因「已被取代」而不出现在结果里的 atom 数（T66）。
+   * 因「已被取代」而不出现在结果里的 atom 数。
    *
    * 与 `suppressed` 分开报：重复是两条讲同一件事、取分高的那条；取代是旧条的内容已被
    * 新条替代、旧条不该再当答案。合成一个数时，「为什么少了一条」不可解释。
@@ -130,7 +130,7 @@ export interface RecallMeta {
    */
   graphStatus: string
   /**
-   * 用户已确认「这条应当拆分」的 atom id（T29）。来自 meta 的 split_confirmed 清单，
+   * 用户已确认「这条应当拆分」的 atom id。来自 meta 的 split_confirmed 清单，
    * 上限由 SPLIT_CONFIRMED_MAX 夹住（FIFO）。注入层据此把锚行提示换成「已确认」的说法。
    *
    * 为什么由召回带出来而不是让注入层自己读：meta 是库里的东西，注入层只该认识
@@ -194,7 +194,7 @@ export function invalidateVecCache(db: DatabaseSync): void {
 }
 
 /**
- * 向量缓存当前占用的**实时**读数（M5-T60）。
+ * 向量缓存当前占用的**实时**读数。
  *
  * `entries` 是缓存里**真正持有的向量条数**，不是库里的 atom 数：维度不符的旧向量
  * 在建缓存时就被跳过了，它们不占这份内存，报进来会让人低估剩下的空间、也会让
@@ -290,7 +290,7 @@ function entryPath(db: DatabaseSync, query: string, k: number, scope?: string): 
 }
 
 /**
- * 默认召回不含已归档的 atom（T26：归档 = 默认不出现，显式检索才出现）。
+ * 默认召回不含已归档的 atom（归档 = 默认不出现，显式检索才出现）。
  *
  * 写成 SQL 片段而不是在结果上过滤：三路词面/图路本来就是 SQL，加在结果上要多一次
  * 往返，还会让 meta.counts 与实际候选数对不上。向量路没有 SQL 可加，见 vecPath。
@@ -418,7 +418,7 @@ interface VecHit {
  *
  * 为什么不把 flags 一起塞进向量缓存：那个缓存只按**行数**失效，而归档不改行数。
  * 把状态缓存进去，归档会对向量路静默失效（词面三路已经过滤、向量路照旧命中），
- * 这种「一路漏过滤」正是 T26 要防的形态。现查一次走 `idx_atom_flags` 的部分索引，
+ * 这种「一路漏过滤」正是归档改动要防的形态。现查一次走 `idx_atom_flags` 的部分索引，
  * 代价远小于一次召回本身。
  */
 function archivedIdSet(db: DatabaseSync): Set<number> {
@@ -472,10 +472,10 @@ export const MAX_QUERY_TERMS = 48 satisfies ThresholdValue<
   'chosen',
   {
     area: '召回融合'
-    why: '单路最多用多少词进 FTS 查询是判断：长查询切出的 bigram 会很多，超出部分区分度也低；M1 把它归为「中文 bigram 的候选密度」，但无实测'
+    why: '单路最多用多少词进 FTS 查询是判断：长查询切出的 bigram 会很多，超出部分区分度也低；分类表把它归为「中文 bigram 的候选密度」，但无实测'
     failsWhen: ['库规模', '查询长度分布', '中文 bigram 的候选密度']
     affects: '单路最多用多少个词进 FTS 查询'
-    diverges: 'M1 已把它列为「按实际候选数取、用 FTS5 查询复杂度上限兜底」的待办项，未做'
+    diverges: '它已被列为「按实际候选数取、用 FTS5 查询复杂度上限兜底」的待办项，未做'
   }
 >
 
@@ -484,7 +484,7 @@ export const MAX_QUERY_TERMS = 48 satisfies ThresholdValue<
  *
  * 三个值是三个量，不是「同一个数的三份拷贝」：kVec 决定向量粗筛的宽度，kLex 决定
  * 词面两路（Entry 与正文）各自的名额，kGraph 决定图路一跳扩展的上限。取值随库规模
- * 变化，固定上限在库长大时会让召回质量悄悄退化 —— 改预算制属后续执行点（T45 批二），
+ * 变化，固定上限在库长大时会让召回质量悄悄退化 —— 改预算制属后续执行点（第二批），
  * 本次只把它们从内联字面量提成具名常量，取值未变。
  */
 export const K_VEC = 100 satisfies ThresholdValue<
@@ -494,7 +494,7 @@ export const K_VEC = 100 satisfies ThresholdValue<
     why: '向量路进融合的固定条数上限：随库规模变化、实际约束的是召回质量而不是性能，无记录、无实测；取多少是固定上限的取舍'
     failsWhen: ['库规模（库长大时固定取前 N 会让召回质量悄悄退化）']
     affects: '向量路取多少条进融合（向量粗筛的宽度）'
-    diverges: '**zod schema 里也没有** —— 固定上限改预算制是 T45 批二（与 T40 合并）'
+    diverges: '**zod schema 里也没有** —— 固定上限改预算制是第二批的事（与另一项合并）'
   }
 >
 export const K_LEX = 100 satisfies ThresholdValue<
@@ -528,7 +528,7 @@ export const DEFAULT_SEED_COUNT = 10 satisfies ThresholdValue<
   'chosen',
   {
     area: '召回融合'
-    why: '图路用向量路的前多少条做种子：源码无注释、开发笔记里也没有这个数，是固定条数上的取舍，无测量'
+    why: '图路用向量路的前多少条做种子：源码无注释、设计说明里也没有这个数，是固定条数上的取舍，无测量'
     failsWhen: ['图路的边密度与精度', '库规模']
     affects: '图路用向量路的前多少条做种子（A.slice(0, DEFAULT_SEED_COUNT)）'
   }
@@ -548,7 +548,7 @@ export const RECALL_TOP_N = 24 satisfies ThresholdValue<
     why: '24 只在调用方不传 topN 时起作用，生产路径实际生效的是配置项 topN（zod 默认 24）；默认条数是容量选择，没有测量给出它'
     failsWhen: ['注入字符预算', '一次注入能容纳的摘要条数']
     affects: '召回交给注入层的默认条数（调用方不传 topN 时用它）'
-    diverges: '**与 DEFAULT_TOP_N 同为 24、不同量**（T45 批一判定为恰好同值，不合并）：那个是落位时取多少个 topic 候选，这个是召回交注入层的条数。设计文档 §7 的 topN 指后者'
+    diverges: '**与 DEFAULT_TOP_N 同为 24、不同量**（第一批判定为恰好同值，不合并）：那个是落位时取多少个 topic 候选，这个是召回交注入层的条数。设计说明 §7 的 topN 指后者'
     doc: 't7'
     docKey: 'topN'
     docDefault: 24
@@ -632,7 +632,7 @@ export const DUP_LEX = 0.72 satisfies ThresholdValue<
 >
 
 /**
- * 取代压制（T66）：一条记忆被另一条取代时，只要取代它的那条也在本次候选里，就不出被取代的那条。
+ * 取代压制：一条记忆被另一条取代时，只要取代它的那条也在本次候选里，就不出被取代的那条。
  *
  * **为什么条件是「取代者在候选里」**：取代者这次没命中却把旧条压掉，等于这一组什么都不给 ——
  * 用户看不到新条，也看不到旧条。旧条是唯一还能用的信息（注入层会标「已被取代」）。

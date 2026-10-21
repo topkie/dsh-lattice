@@ -104,7 +104,7 @@ min 0.642，而阈值 τ_join = 0.78 是拿 30~50 字短句标定的 —— 于�
 **验证的前提是「基准库与待测代码同规则」。** 前提不成立时，测出来的差值可能全部来自规则差异，
 而不是被验证的那次改动 —— 而且这种差值看起来通常很正常，不会以报错的形式提醒你。
 
-所以基准库自带说明：`meta` 表记录 schema 版本、**入口抽取规则标识**、来源、构建者与时间
+所以基准库自带说明：结构版本记在 `PRAGMA user_version` 里，`build_info` 表记录**入口抽取规则标识**、来源、构建者与时间
 （见 `src/db/build-info.ts`）。改动任何影响抽取结果的逻辑时，必须同时改 `ENTRY_RULE_ID`
 （`src/pipeline/entries.ts`），否则旧库会继续冒充成「同一套规则」。
 
@@ -415,6 +415,19 @@ src/
 6. **写入事务固定行数**：长任务走"只读导出 → 内存计算 → 短事务切换"的影子重建。
 7. **模型懒加载**：插件激活时只注册，不做重活，避免拖慢宿主启动。
 
+## 改库结构
+
+库结构只有一份定义：`src/db/schema.ts` 里的 `SNAPSHOT_V5` —— 一组把一个空库直接建到最新结构的语句。`SCHEMA_VERSION` 要与它同时改，三处联动：
+
+1. **语句表**：新表或新索引直接写进 `SNAPSHOT_V5`；改已有表就改那一条语句。
+2. **版本号**：`SCHEMA_VERSION` 加一。`MIGRATIONS` 的第 0 步就是 `SNAPSHOT_V5`，下标 0 表示空库 —— 新建库一次建到最新版，不重放历史语句。
+3. **打开时的断言**：`openVault` 在非只读打开之后，拿 `DDL` 与库里实际存在的对象比对（`missingObjects`），对不上就报「库的版本号是 N，但结构不符」并停下。版本号是声明，对象清单是证据。
+
+只读打开（`readOnly`）既不跑断言也不迁移 —— 它不写库，也不该因为结构问题被拦。
+
+**0.9 起只认两个版本**：0（空库，建出快照）与 `SCHEMA_VERSION`。其它版本一律报错，提示从备份恢复或导出后重新导入 —— 本插件不修改无法识别的库。
+
+**加对象之后**：`test/db.test.mjs` 里「空库建出哪些表和索引」的断言要跟着补；`scripts/build-baseline.mjs` 的 `MIN_OBJECTS`（表、索引、触发器的下限）也要跟着调，否则基准库自检会误报。
 ## 测试
 
 - 纯函数 → 单元测试，覆盖边界（空输入、超长、非对齐数据…）
@@ -453,7 +466,7 @@ src/
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 | `scripts/snapshot-baseline.mjs` | 另存对照库快照到 `.probe/snap/<标签>/`（改规则**之前**跑） |
 | `scripts/build-baseline.mjs` | 重建基准库（`--source <cards.json>`），自带三条自检 |
-| `scripts/print-thresholds.mjs` | 阈值总览：打印名称/值/来历/可变条件 + 与设计文档对照 + 覆盖核对（AST，两种来源）+ 三个来历查询 + `--doc-keys` + 评审基线检查（不需模型，可随时跑） |
+| `scripts/print-thresholds.mjs` | 阈值总览：打印名称/值/来历/可变条件 + 与设计说明对照 + 覆盖核对（AST，两种来源）+ 三个来历查询 + `--doc-keys` + 评审基线检查（不需模型，可随时跑） |
 
 基准库由 `scripts/build-baseline.mjs` 生成、快照由 `scripts/snapshot-baseline.mjs` 另存
 （见上「标准验证库」）。**改入口规则类的验证脚本不再自带默认库路径**：要对比就显式给
@@ -514,10 +527,10 @@ export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
 | `failsWhen` | 什么变了它就该重标（原先叫 `variesWith`） |
 | `affects` | 影响管线里的哪一段 |
 | `display` / `unit` | 显示模板与单位换算：`{v}` 是当前值，`{NAME}` 是别的常量 |
-| `doc` / `docKey` / `docDefault` | 设计文档对照：短名（`t7` / `t17` / `t18fail`）、文档键名、文档给的默认值 |
+| `doc` / `docKey` / `docDefault` | 设计说明对照：短名（`t7` / `t17` / `t18fail`）、文档键名、文档给的默认值 |
 | `docRange` / `docScale` / `docKeys` | 文档给的范围、单位换算倍数、文档把一组键写成一行时各子键在代码里的名字 |
 | `zod` | zod 的指针：`{ file, name }`，值现读，不抄 |
-| `divergence` | 与设计文档分叉的原因。**只写原因**，文档值从 `docDefault` 读 |
+| `divergence` | 与设计说明分叉的原因。**只写原因**，文档值从 `docDefault` 读 |
 | `refs` / `otherSites` / `diverges` | 引用的源码位置、第二个取值点、没法用一个数字表达的分叉 |
 
 **显示值与分叉记录也是断言。** `display` 里的数字写成模板：`{v}` 是当前值、`{NAME}` 是别的
@@ -535,7 +548,7 @@ export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
   条件补不上的，才写进评审基线。
 - `node scripts/print-thresholds.mjs --unguarded`：没有测试按常量名断言默认值的条目。
 - `node scripts/print-thresholds.mjs --undated`：可复算、但没有记录测量时间的条目。只是信息，不要求动作。
-- `node scripts/print-thresholds.mjs --doc-keys`：设计文档键名 → 常量 → 文档默认值。
+- `node scripts/print-thresholds.mjs --doc-keys`：设计说明键名 → 常量 → 文档默认值。
   文档改了一条之后，用它定位受影响的条目。
 
 **评审基线**（`thresholds-review-baseline.json`）是临时清单，只允许变短：

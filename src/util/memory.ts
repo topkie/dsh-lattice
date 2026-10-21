@@ -55,7 +55,7 @@ export const MMAP_LIMIT_BYTES = (256 * 1024 * 1024) satisfies ThresholdValue<
     failsWhen: ['机器内存', '库文件大小']
     guardedBy: ['test/memory.test.mjs']
     affects: 'mmap 窗口上限'
-    diverges: '**已从常量改成推导值**（M1 待办一第 2、3 项），但仍是一个写死的上限'
+    diverges: '**已从常量改成推导值**（待办第 2、3 项），但仍是一个写死的上限'
     display: '{v} MB（上限，与「内存的八分之一」取更小者）'
     unit: 'MB'
   }
