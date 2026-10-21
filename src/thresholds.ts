@@ -57,7 +57,7 @@ import {
   LEARNED_PROMOTE_MAX_WEIGHT,
 } from './pipeline/entries.js'
 import { AFFILIATION, CHANNEL_WEIGHT } from './pipeline/search.js'
-import { MIN_ANCHORS, SEGMENT_RATIO, TRIM_ORDER } from './pipeline/view.js'
+import { SEGMENT_RATIO, TRIM_ORDER } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
 import { RECALIBRATE_MIN_ATOMS } from './calibration/trigger.js'
 import { DEFAULT_THRESHOLDS } from './pipeline/write.js'
@@ -627,37 +627,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     diverges:
       '**上端是夹紧，不是外推**：比 1374 条更大的库本次没有测量（实现报告未确定项 5 记的同一件事），' +
       '故 > 1374 条时取 0.525 不再上移。下端同理，< 12 条退回默认值 0.45',
-  },
-  {
-    name: 'TIER_ANCHOR_CAP',
-    unmovable: '对象组',
-    area: '注入',
-    ...chosen(
-      () => ({ full: Number.POSITIVE_INFINITY, brief: 8, excerpt: MIN_ANCHORS }),
-      '分档设计决定：完整档不限（预算机制已管住总量）、精简档 8、摘录档取 MIN_ANCHORS；无实测记录，' +
-        'brief=8 与 DEFAULT_ENTRIES_PER_TOPIC 同值也未说明是巧合还是有意',
-    ),
-    definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_ANCHOR_CAP' },
-    affects: '各档的锚条数上限（完整档不设上限，交给预算管）',
-    group: ['full', 'brief', 'excerpt'],
-    variesWith: ['各档的字符预算', 'MIN_ANCHORS 改动时（摘录档上限跟着走）'],
-  },
-  {
-    name: 'TIER_ENTRIES',
-    unmovable: '对象组',
-    area: '注入',
-    ...chosen(
-      () => ({ full: 8, brief: 8, excerpt: 4 }),
-      'D15-3「低相关时入口段是主角，但也要收窄」—— 各档每个主题给几条入口是设计判断，无实测记录',
-    ),
-    definedBy: { file: 'src/pipeline/view.ts', name: 'TIER_ENTRIES' },
-    refs: [{ file: 'src/pipeline/view.ts', symbol: 'TIER_ENTRIES' }],
-    affects: '各档每个主题给几条入口（只有摘录档收窄）',
-    group: ['full', 'brief', 'excerpt'],
-    variesWith: ['入口段在各档里的实际贡献'],
-    diverges:
-      '**值在代码里是字面量而不是引用常量**（`src/pipeline/view.ts` 的 `TIER_ENTRIES` 直接写 8 / 8 / 4），' +
-      '与 DEFAULT_ENTRIES_PER_TOPIC 形成第二份同一个数',
   },
   // ENTRY_LABEL_CHARS 已并入 TOPIC_LABEL_CHARS（同一个量：主题标签的宽度），
   // 见「落位」一节的 TOPIC_LABEL_CHARS 行。

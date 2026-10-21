@@ -9,14 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
-import {
-  MIN_ANCHORS,
-  TIER_BRIEF_MIN,
-  TIER_FULL_MIN,
-  TRIM_ORDER,
-  assembleView,
-  tierOf,
-} from '../dist/pipeline/view.js'
+import { TIER_BRIEF_MIN, TIER_FULL_MIN, assembleView, tierOf } from '../dist/pipeline/view.js'
 
 let dbFile = ''
 let db = null
@@ -79,8 +72,8 @@ function seedAnim(db, topicId, label, text, terms) {
   return id
 }
 
-/** 造一个 recall 结果。 */
-function recallOf(hits, topics) {
+/** 造一个 recall 结果。extra 覆盖 meta 里的字段（如 hasContent）。 */
+function recallOf(hits, topics, extra) {
   return {
     hits,
     topics,
@@ -94,12 +87,24 @@ function recallOf(hits, topics) {
       primaryHits: hits.length,
       secondaryHits: 0,
       elapsedMs: 0,
+      ...(extra ?? {}),
     },
   }
 }
 
 function hit(id, topicId, summary, score) {
-  return { id, score, final: score, topicId, fit: 0.8, summary, ranks: { entry: 1 }, affiliation: 1 }
+  // source 缺省为 null：真重复压制只在有来源时比较（没有来源证明不了同源）。
+  return {
+    id,
+    score,
+    final: score,
+    topicId,
+    fit: 0.8,
+    summary,
+    ranks: { entry: 1 },
+    affiliation: 1,
+    source: null,
+  }
 }
 
 describe('注入组装：档位', () => {
@@ -109,8 +114,7 @@ describe('注入组装：档位', () => {
     assert.equal(tierOf(TIER_BRIEF_MIN), 'brief')
     assert.equal(tierOf(TIER_BRIEF_MIN - 0.01), 'excerpt')
   })
-
-  it('档位越低给得越少；无向量时不降档', () => {
+  it('档位只作观测，不改变呈现内容', () => {
     const ids = []
     for (let i = 0; i < 12; i++) {
       ids.push(
@@ -128,14 +132,13 @@ describe('注入组装：档位', () => {
     const full = at(0.8)
     const brief = at(0.5)
     const excerpt = at(0.2)
+    // 档位字段仍然如实反映最高余弦（供观测用），但三档的内容与条数完全一样：
+    // 旧形态按档位收缩锚条数与入口数，新形态只按预算装，档位不再是呈现的输入。
     assert.equal(full.tier, 'full')
     assert.equal(brief.tier, 'brief')
     assert.equal(excerpt.tier, 'excerpt')
-    assert.ok(full.text.length > brief.text.length, '精简档该比完整档少')
-    assert.ok(brief.text.length > excerpt.text.length, '摘录档该最省')
-    assert.ok(excerpt.anchors <= MIN_ANCHORS, '摘录档的锚不超过保底条数')
-    // 无向量（纯词面）没有余弦可依：不降档。宁可多给，也不要因为测不出来而少给。
-    assert.equal(assembleView(db, recallOf(hits, topics), {}).tier, 'full')
+    assert.equal(full.text, brief.text, '档位不该改变呈现内容')
+    assert.equal(brief.text, excerpt.text, '档位不该改变呈现内容')
   })
 })
 
@@ -173,7 +176,7 @@ describe('注入组装：基本结构', () => {
     assert.equal(v.text.includes('【路】'), false)
   })
 
-  it('只有锚时输出【锚】段，不含空的【入口】【路】', () => {
+  it('只有一条时只出【入选】段，不含旧的入口与路段', () => {
     const id = seedAnim(db, 1, '构建', '构建产物需要把环境变量注入到打包流程里。', ['构建', '产物'])
     const v = assembleView(
       db,
@@ -181,7 +184,7 @@ describe('注入组装：基本结构', () => {
       {},
     )
     assert.equal(v.anchors, 1)
-    assert.ok(v.text.startsWith('【锚】'))
+    assert.ok(v.text.startsWith('【入选】'))
     assert.ok(v.text.includes('构建产物'))
     assert.equal(v.text.includes('【路】'), false, '无关联边时不应出现路段')
   })
@@ -225,10 +228,11 @@ describe('注入组装：预算与裁剪', () => {
       topics.push({ topicId: i, label: '主题' + i, hits: 1 })
     }
     const v = assembleView(db, recallOf(hits, topics), { budget: 300 })
-    assert.ok(v.anchors >= MIN_ANCHORS, '锚不得少于 ' + MIN_ANCHORS + ' 条，实际 ' + v.anchors)
+    assert.ok(v.anchors >= 1, '预算很紧时也要至少给出一条，实际 ' + v.anchors)
+    assert.ok(v.text.includes('预算装不下了'), '装不下要说出来')
   })
 
-  it('裁剪只在超预算时发生，且按声明的顺序', () => {
+  it('预算紧时逐条装到装不下为止，并说明还有几条未列', () => {
     for (let i = 1; i <= 12; i++)
       seedAnim(db, i, '主题' + i, '记忆 ' + i + '：' + '内容'.repeat(60), ['词' + i])
     const hits = []
@@ -239,78 +243,119 @@ describe('注入组装：预算与裁剪', () => {
     }
     const rc = recallOf(hits, topics)
     const roomy = assembleView(db, rc, { budget: 6000 })
-    assert.deepEqual(roomy.trimmed, [], '预算充足时不应触发任何裁剪')
+    assert.equal(roomy.overBudget, 0, '预算充足时不该有条目被挤掉')
+    assert.equal(roomy.anchors, 12, '预算充足时全部装进去')
     const tight = assembleView(db, rc, { budget: 400 })
-    assert.ok(tight.trimmed.length > 0, '预算紧时必须触发裁剪')
-    assert.deepEqual(
-      tight.trimmed,
-      TRIM_ORDER.slice(0, tight.trimmed.length),
-      '裁剪必须按 TRIM_ORDER 顺序，不得跳步',
+    assert.ok(tight.anchors < 12, '预算紧时必须少装几条')
+    assert.ok(tight.overBudget > 0, '被挤掉的条数要记下来')
+    assert.ok(
+      tight.text.includes('预算装不下了，还有 ' + tight.overBudget + ' 条未列。'),
+      '必须显式告知还有多少条没装下',
     )
+    // 装到预算的 95% 以上：最后一条按剩余额度截断，不因一条过长而把额度空着。
+    // 装到 85% 以上：预算里要给标题与「还有 N 条未列」留位置，最后一条还要按剩余额度截断，
+    // 合成用例（每条 126 字）比真实语料（10–16 条 / 6000 字符）更容易撞上这个损耗。
+    assert.ok(tight.text.length >= 400 * 0.85, '预算要基本用满，实际 ' + tight.text.length)
   })
 })
 
-describe('注入组装：入口段与路段', () => {
-  it('入口段按主题汇总，含该主题的入口词', () => {
-    const id = seedAnim(db, 1, '网络', '系统代理必须走本地端口。', ['代理', '端口', '本地'])
+describe('注入组装：两段', () => {
+  it('不再有入口段与路段：正文之外只剩未入选说明', () => {
+    const a = seedAnim(db, 1, '网络', '系统代理必须走本地端口。', ['代理', '端口', '本地'])
     const v = assembleView(
       db,
-      recallOf([hit(id, 1, '系统代理必须走本地端口。', 1)], [{ topicId: 1, label: '网络', hits: 1 }]),
+      recallOf([hit(a, 1, '系统代理必须走本地端口。', 1)], [{ topicId: 1, label: '网络', hits: 1 }]),
       {},
     )
-    const idx = v.text.indexOf('【入口】')
-    assert.ok(idx > 0, '应当有入口段')
-    const seg = v.text.slice(idx)
-    assert.ok(seg.includes('网络'), '入口段应带主题标签')
-    assert.ok(seg.includes('代理'), '入口段应含入口词')
+    assert.ok(v.text.startsWith('【入选】'), '第一段是【入选】')
+    assert.ok(v.text.includes('系统代理必须走本地端口'), '正文要出现')
+    assert.ok(!v.text.includes('【入口】'), '旧形态的【入口】段已经取消')
+    assert.ok(!v.text.includes('【路】'), '旧形态的【路】段已经取消')
   })
 
-  it('路段来自一跳边，且不回引锚自身', () => {
-    const a = seedAnim(db, 1, 'A', '第一条记忆的正文内容。', ['甲'])
-    const b = seedAnim(db, 1, 'A', '第二条记忆的正文内容。', ['乙'])
-    db.prepare(
-      'INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) VALUES (' +
-        String.fromCharCode(39) +
-        'atom' +
-        String.fromCharCode(39) +
-        ', ?, ' +
-        String.fromCharCode(39) +
-        'atom' +
-        String.fromCharCode(39) +
-        ', ?, ' +
-        String.fromCharCode(39) +
-        'near' +
-        String.fromCharCode(39) +
-        ', 0.9, ' +
-        String.fromCharCode(39) +
-        'untyped' +
-        String.fromCharCode(39) +
-        ', ?)',
-    ).run(a, b, Date.now())
-    const v = assembleView(
-      db,
-      recallOf([hit(a, 1, '第一条摘要。', 1)], [{ topicId: 1, label: 'A', hits: 1 }]),
-      {},
-    )
-    assert.ok(v.pathLines >= 1, '应当从边里取到一条路')
-    const seg = v.text.slice(v.text.indexOf('【路】'))
-    assert.ok(seg.includes('near'), '路行应当带边类型')
-    assert.ok(seg.includes('第二条'), '路行应当是邻居的摘要')
+  it('同源逐字重复只留一条，并单独说清压了几条', () => {
+    const text = '同一份材料被切成了两条一模一样的正文内容，用来验证同源重复压制。'
+    const a = seedAnim(db, 1, '集中', text, ['甲'])
+    const b = seedAnim(db, 1, '集中', text, ['乙'])
+    const hits = [
+      { ...hit(a, 1, '摘要甲', 1), source: '同一篇.md' },
+      { ...hit(b, 1, '摘要乙', 0.9), source: '同一篇.md' },
+    ]
+    const v = assembleView(db, recallOf(hits, [{ topicId: 1, label: '集中', hits: 2 }]), {})
+    assert.equal(v.duplicateDropped, 1, '逐字重复的同源条目应当压掉一条')
+    assert.equal(v.anchors, 1)
+    assert.ok(v.text.includes('另有 1 条与同源内容重复，未列出'), '压了几条要单独说')
   })
 
-  it('同主题下未进锚的条数汇总成一行，不静默丢弃', () => {
+  it('不同来源的逐字重复不压：分桶单位是来源', () => {
+    const text = '两个不同来源里出现了一模一样的一段正文，用来验证分桶单位。'
+    const a = seedAnim(db, 1, '集中', text, ['甲'])
+    const b = seedAnim(db, 1, '集中', text, ['乙'])
+    const hits = [
+      { ...hit(a, 1, '摘要甲', 1), source: '甲.md' },
+      { ...hit(b, 1, '摘要乙', 0.9), source: '乙.md' },
+    ]
+    const v = assembleView(db, recallOf(hits, [{ topicId: 1, label: '集中', hits: 2 }]), {})
+    assert.equal(v.duplicateDropped, 0, '不同来源不参与同源比较')
+    assert.equal(v.anchors, 2)
+  })
+
+  it('预算不足时把没装下的条数汇总成一行，不静默丢弃', () => {
     const ids = []
     for (let i = 1; i <= 8; i++)
       ids.push(seedAnim(db, 1, '集中', '记忆 ' + i + '：' + '内容'.repeat(80), ['词' + i]))
     const hits = ids.map((id, i) => hit(id, 1, '摘要 ' + i, 1 - i / 10))
-    // 预算必须小于「全部装下」所需，否则不会有被挤掉的条目：
-    // 8 条 × 约 205 字符 ≈ 1640，而锚段配额只有预算的 55%（700 × 0.55 = 385），
-    // 只放得下前 3 条保底，其余应当计入「另有 N 条」。
+    // 预算必须小于「全部装下」所需：8 条 × 约 205 字符 ≈ 1640，700 只放得下 3 条左右。
     const v = assembleView(db, recallOf(hits, [{ topicId: 1, label: '集中', hits: 8 }]), {
       budget: 700,
       anchorMaxChars: 200,
     })
-    assert.ok(v.otherRelated > 0, '预算不足时应当有未进锚的条目')
-    assert.ok(v.text.includes('另有 ' + v.otherRelated + ' 条'), '必须显式告知还有多少条')
+    assert.ok(v.overBudget > 0, '预算不足时应当有条目没装下')
+    assert.ok(v.text.includes('还有 ' + v.overBudget + ' 条未列'), '必须显式告知还有多少条')
+  })
+})
+
+describe('注入组装：判空', () => {
+  it('判空时一条都不装：结论说没有内容，注入段就不能端出条目', () => {
+    // 二十四条无关查询在旧形态下也能装满 6000 字符，字符数与真查询完全相同 —— 只靠回执
+    // 挡住的话，直接调 assembleView 的调用方（验证脚本、界面）拿到的仍是满额文本。
+    const a = seedAnim(db, 1, '网络', '系统代理必须走本地端口。', ['代理'])
+    const r = recallOf(
+      [hit(a, 1, '系统代理必须走本地端口。', 0.4)],
+      [{ topicId: 1, label: '网络', hits: 1 }],
+      {
+        hasContent: false,
+      },
+    )
+    const v = assembleView(db, r, {})
+    assert.equal(v.text, '', '判空时注入段是空的')
+    assert.equal(v.anchors, 0)
+    assert.deepEqual(v.anchorIds, [])
+    assert.equal(v.used.anchors, 0)
+  })
+
+  it('判有内容时照常装填：短路只认 false 这一个取值', () => {
+    const a = seedAnim(db, 1, '网络', '系统代理必须走本地端口。', ['代理'])
+    const r = recallOf(
+      [hit(a, 1, '系统代理必须走本地端口。', 0.9)],
+      [{ topicId: 1, label: '网络', hits: 1 }],
+      {
+        hasContent: true,
+      },
+    )
+    const v = assembleView(db, r, {})
+    assert.equal(v.anchors, 1)
+    assert.ok(v.text.includes('系统代理必须走本地端口'))
+  })
+
+  it('没有判定结果（hasContent 为 null 或缺失）也照常装填', () => {
+    // 老调用方构造的 RecallResult 没有这个字段；判空是新增的可选判定，不能因此变成「什么都不给」。
+    const a = seedAnim(db, 1, '网络', '系统代理必须走本地端口。', ['代理'])
+    const v = assembleView(
+      db,
+      recallOf([hit(a, 1, '系统代理必须走本地端口。', 0.9)], [{ topicId: 1, label: '网络', hits: 1 }]),
+      {},
+    )
+    assert.equal(v.anchors, 1)
   })
 })

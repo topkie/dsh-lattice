@@ -17,11 +17,10 @@
 // （现在已经 8 个参数），反馈是低频动作；挂上去等于每次写入都替反馈付一次参数成本。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ThresholdValue } from '../threshold-types.js'
 import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
-import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
-import { TIER_BRIEF_MIN, assembleView } from '../pipeline/view.js'
+import { RECALL_TOP_N, recall, recordRecall } from '../pipeline/search.js'
+import { assembleView } from '../pipeline/view.js'
 import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef } from '../samples/index.js'
 import {
   FLAG_ARCHIVED,
@@ -69,37 +68,6 @@ function textOutput() {
 }
 
 /**
- * 「库小到没法标定」时的**兜底**提示线 —— 按库规模重标后的那条线不在这里。
- *
- * 实际生效的线由 calib 的锚点表给出（`briefMinForDb()` 现取，经 `pipeline/calibrate.ts`
- * 转发），并随 `assembleView()` 的结果一起返回；调用方要传的是那个值。
- *
- * 原值是 0.68，实测**永不触发**：gold 集的 top1 中位数就有 0.683。一个永不触发的
- * 提示与没有提示是一回事，却看起来还在工作 —— 那比没有更糟。
- *
- * ⚠️ **这里此前分叉过一次**：本常量绑的是 `TIER_BRIEF_MIN`（0.45），而实际生效的线在
- * 1374 库上是 0.525 —— 两者差 0.075，落在这个区间里的召回会被判「相关」并**不提示**。
- * 上面原本写着「分头定两个数，只会让它们慢慢分叉」，而它自己就是这个形态。
- * 2026-10-17 修正：`isWeakMatch()` 改为接受 `briefMin`，调用处传 `view.briefMin`。
- */
-export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN satisfies ThresholdValue<
-  'recheckable',
-  {
-    area: '注入'
-    tool: '无脚本（D15-4 / D15-5 的实测，未点名脚本路径）'
-    finding: '原值 0.68 永不触发：gold 集 top1 中位数就有 0.683 ——「一个永不触发的提示与没有提示是一回事，却看起来还在工作」；改为与摘录档下界同源（= TIER_BRIEF_MIN），理由是两者回答同一个问题：「这次的匹配算不算相关」。标定约束落在 0.398 与 0.524 之间'
-    scale: '同 D15-2：20 条 gold + 4 条无关查询'
-    failsWhen: ['TIER_BRIEF_MIN 改动时（它是别名，不是独立取值）', '换编码模型']
-    guardedBy: ['test/tools.test.mjs']
-    affects: 'isWeakMatch：低于此值在召回结果前标一句「可能不相关」（只提示不拦截）'
-    refs: [{ file: 'src/tools/index.ts'; symbol: 'LOW_RELEVANCE_HINT' }]
-    otherSites: [
-      '`src/tools/index.ts` 的 `LOW_RELEVANCE_HINT` = TIER_BRIEF_MIN —— 不是自己的数，与摘录档同源',
-    ]
-  }
->
-
-/**
  * 有命中时追加在召回结果末尾的一句：关系可以显式声明（声明边的可发现性）。
  *
  * **只在返回文本里**：不改排序、不写库（判据就是「跑前后 atom / edge 行数与 data_version
@@ -137,17 +105,6 @@ function hasOnlyRecordedEdge(edges: unknown, rejected: DeclaredEdgeNote[] | unde
     if (typeof e.type !== 'string' || typeof e.target !== 'number') return false
     return ONLY_RECORDED_KINDS.includes(e.type) && !rejectedKeys.has(e.type + '\u0000' + String(e.target))
   })
-}
-
-/**
- * 这次召回的结果值不值得给模型看 —— 是否该在结果前提示「可能不相关」。
- *
- * 抽成纯函数是为了能直接测判据本身 —— 否则要构造「库里有一条毫不相关的记忆」
- * 这类场景，而真实模型下那条记忆总会得到一个不算低的相似度，测不出边界。
- */
-export function isWeakMatch(meta: RecallMeta, briefMin: number = LOW_RELEVANCE_HINT): boolean {
-  if (meta.vectorMissing) return false // 纯词面模式没有余弦可依，不做判断
-  return meta.topCosine < briefMin
 }
 
 /** 所有权的可读说法。目录里给的是给人看的词，不是字段值。 */
@@ -443,7 +400,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const recallTool = defineTool({
     name: 'lattice_recall',
     description:
-      '按需取回记忆。返回三段：【锚】记忆正文（每条带 id，标「我」=用户说的、「导入」=外部来源、「已被 #N 取代」=已修订），【入口】相关说法，【路】关联线索。答案取决于「之前定过什么」的问题先查；与历史无关的常识不必查。',
+      '按需取回记忆。返回两段：【入选】记忆正文（每条带 id，标「我」=用户说的、「导入」=外部来源、「已被 #N 取代」=已修订），以及未入选的条目为什么没列出来。库里没有相关内容的，会直接说没有。答案取决于「之前定过什么」的问题先查；与历史无关的常识不必查。',
     parameters: {
       query: {
         type: 'string',
@@ -497,13 +454,11 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (recalled.meta.vectorMissing) notes.push('（编码器不可用，本次为纯词面召回）')
       if (recalled.meta.lexicalDegraded) notes.push('（词面两路均未命中，仅向量路有结果）')
       if (recalled.meta.shortTermMiss) notes.push('（查询含两字词但入口层零命中）')
-      // 召回总会返回 topN 条，不管相关性。把最高相似度**如实**报出来，调用方才知道该不该信；
-      // 低于提示线时再补一句「可能不相关」。这里只标注、不拦截 —— 见 LOW_RELEVANCE_HINT。
-      if (!recalled.meta.vectorMissing && recalled.hits.length > 0) {
-        const c = recalled.meta.topCosine
-        // 传本库当前生效的那条线（`view` 就在上面一行），而不是兜底值 —— 两者在 1374 库上差 0.075。
-        const hint = isWeakMatch(recalled.meta, view.briefMin) ? '，可能不相关' : ''
-        notes.push('（最高相似度 ' + c.toFixed(2) + hint + '）')
+      // 不再报「最高相似度 0.47」这类分数：分数是本插件内部的刻度，用户拿不到对照，
+      // 报出来只会让人以为它能跨库比较（实测同一句无关问句在三个库上差 0.079）。
+      // 判据改成与本库自己的参考分布比，结论只有两态，见 pipeline/refdist.ts。
+      if (ref.reason === 'library-too-small' && recalled.hits.length > 0) {
+        notes.push('库里只有 ' + ref.atoms + ' 条，判定还不可靠；以下是按相关度列出的前几条。')
       }
       // 记一次命中。召回本身是只读语义，这一步失败不该让召回失败 —— 但也绝不假装成功：
       // 库里的命中计数会因此偏低，这是刻意选的失败方向。
@@ -534,8 +489,20 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       } catch {
         /* 只读连接等场景下写不了，不影响召回结果 */
       }
+      // 判空在装填之前：库里确实没有针对这个问题的内容时，给出任何一条都是凑数。
+      // 那句话只在这一个结论上出现，与「候选耗尽」的措辞不同 —— 两件事看起来像，含义相反：
+      // 一个是「库里没有」，一个是「库里有但只找到这么多」。
+      if (recalled.meta.hasContent === false) {
+        return notes.join('\n') + '\n\n库里没有针对这个问题的内容。'
+      }
       if (recalled.hits.length === 0) return notes.join('\n') + '\n\n没有找到相关记忆。'
-      return notes.join('\n') + '\n\n' + view.text + '\n\n（' + DECLARED_EDGE_HINT + '）'
+      // 判空时 assembleView 给的是空串（见 pipeline/view.ts 的短路返回），别拼出一个空行。
+      const tail: string[] = view.text.length > 0 ? [view.text] : []
+      if (view.anchors === 1) tail.push('只找到一条相关的。')
+      else if (recalled.hits.length < (cfg.topN ?? RECALL_TOP_N)) {
+        tail.push('候选用完了，只有 ' + recalled.hits.length + ' 条。')
+      }
+      return notes.join('\n') + '\n\n' + tail.join('\n') + '\n\n（' + DECLARED_EDGE_HINT + '）'
     },
   })
 

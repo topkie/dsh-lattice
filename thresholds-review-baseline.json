@@ -52,8 +52,6 @@
     "DEFAULT_ENTRIES_PER_TOPIC": "公式派生值没有测试按常量名断言；测试用显式配额覆盖入口条数。",
     "DEFAULT_ENTRY_LINE_MAX": "入口行字符上限没有测试按常量名断言；运行时不可配置。",
     "DEFAULT_PATH_LINES": "路段行数上限没有测试按常量名断言；测试用显式预算触发裁剪。",
-    "TIER_ANCHOR_CAP": "各档锚条数上限没有测试按常量名断言；测试按档位行为覆盖。",
-    "TIER_ENTRIES": "各档入口条数在代码里是字面量 8 / 8 / 4，没有常量名可断言。",
     "PATH_SUMMARY_CHARS": "路段摘要截断长度没有测试按常量名断言。",
     "ANCHOR_SUMMARY_CHARS": "锚摘要截断长度没有测试按常量名断言。",
     "DEMOTED_ANCHOR_CHARS": "降级锚截断长度没有测试按常量名断言。",

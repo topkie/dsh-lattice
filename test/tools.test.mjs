@@ -12,8 +12,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { setArchived } from '../dist/pipeline/archive.js'
-import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC, isWeakMatch, LOW_RELEVANCE_HINT } from '../dist/tools/index.js'
-import { briefMinFor } from '../dist/pipeline/calibrate.js'
+import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC } from '../dist/tools/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 
 let dir = ''
@@ -235,7 +234,7 @@ describe('lattice_recall', () => {
   it('返回的是组装好的三段式文本，不是裸数组', async () => {
     await tool('lattice_write').execute({ text: '系统代理必须走本地端口。' })
     const out = await tool('lattice_recall').execute({ query: '代理' })
-    assert.ok(out.includes('【锚】'), '输出: ' + out)
+    assert.ok(out.includes('【入选】'), '输出: ' + out)
     assert.equal(out.trim().startsWith('['), false, '不应返回 JSON 数组')
   })
 
@@ -257,68 +256,43 @@ describe('lattice_recall', () => {
       await tool('lattice_write').execute({ text: '记忆第 ' + i + ' 条，包含可检索的关键词' + i + '。' })
     }
     const out = await tool('lattice_recall').execute({ query: '关键词', budget: 900 })
-    const body = out.slice(out.indexOf('【锚】'))
+    const body = out.slice(out.indexOf('【入选】'))
     assert.ok(body.length <= 900 + 60, '正文应当受预算约束，实际 ' + body.length)
   })
 })
 
-describe('低相关提示', () => {
-  // 判据抽成了纯函数（meetsRelevance），这里直接测它 —— 不构造库，也不依赖编码器。
-  // 早先想用「写一条毫不相关的记忆再查」来测，被真实模型否掉了：
-  // 库里只有一条时它总能拿到 0.57 的相似度，那是用例问题而非判据问题。
-  const meta = (topCosine, vectorMissing = false) => ({
-    counts: { vec: 1, entry: 1, body: 0, graph: 0 },
-    lexicalDegraded: false,
-    shortTermMiss: false,
-    vectorMissing,
-    suppressed: 0,
-    topCosine,
-    primaryHits: 1,
-    secondaryHits: 0,
-    elapsedMs: 0,
+describe('召回回执的固定措辞', () => {
+  // 回执措辞是行为清单 C1/C9 的落点：两段结构、不暴露内部分数、说清为什么少。
+  // 编码器由替身强制失败，所以「判空」与「库还小」两种措辞在这里出现不了
+  // （参考分布建不出来，hasContent 为 null 是诚实的不判定）；这里测得到的是
+  // 两段结构与「候选用完了」两种。
+
+  it('回执是两段结构，不暴露内部分数，也不打「可能不相关」', async () => {
+    await tool('lattice_write').execute({ text: '系统代理必须走本地端口。' })
+    const out = await tool('lattice_recall').execute({ query: '代理' })
+    assert.ok(out.includes('【入选】'), '输出: ' + out)
+    assert.ok(!out.includes('【入口】'), '三段形态已经取消')
+    assert.ok(!out.includes('【路】'), '三段形态已经取消')
+    assert.ok(!out.includes('可能不相关'), '绝对阈值那句已经删掉')
+    assert.ok(!/最高相似度/.test(out), '不向用户报分数')
   })
 
-  it('低于阈值判为弱相关（会提示）', () => {
-    // 0.4 是实测的「无关查询」上界（4 条无关问法 max 0.398）。
-    assert.equal(isWeakMatch(meta(0.4)), true)
-    assert.equal(isWeakMatch(meta(LOW_RELEVANCE_HINT - 0.01)), true)
+  it('候选用完了要说出来', async () => {
+    await tool('lattice_write').execute({ text: '系统代理必须走本地端口。' })
+    await tool('lattice_write').execute({ text: '代理配置写在环境变量里，端口默认 7890。' })
+    const out = await tool('lattice_recall').execute({ query: '代理' })
+    assert.ok(out.includes('候选用完了，只有'), '输出: ' + out)
   })
 
-  it('兜底阈值必须落在实测的两端之间', () => {
-    // 实测（279 条基准库）：相关 gold 20 条 top1 最低 0.524；无关 4 条最高 0.398。
-    // 这条断言守的是**兜底值**（库小到没法标定时用的那个）；
-    // **实际生效的线按库规模重标**，它在 1374 库上是 0.525 —— 已经超出这个区间，
-    // 而那不算违反：那两端的实测取自 279 条库，不是 1374 条库。
-    assert.ok(LOW_RELEVANCE_HINT > 0.398, '必须高于无关查询的上界')
-    assert.ok(LOW_RELEVANCE_HINT < 0.524, '必须低于相关查询的下界')
+  it('只找到一条时说的是那一条，不说候选耗尽', async () => {
+    await tool('lattice_write').execute({ text: '系统代理必须走本地端口。' })
+    const out = await tool('lattice_recall').execute({ query: '代理' })
+    assert.ok(out.includes('只找到一条相关的。'), '输出: ' + out)
   })
 
-  it('判据用的是传进来的那条线，不是那个兜底常量', () => {
-    // 这条是 2026-10-17 处置清单 A1 的回归：此前 isWeakMatch 只读 LOW_RELEVANCE_HINT，
-    // 而 lattice_recall 实际应当用 assembleView() 返回的 briefMin（按库规模重标）。
-    // 取本库（1374 条）实际生效的线，构造一个落在两条线之间的余弦 ——
-    // 按兜底值判「相关」（不提示），按本库的线判「弱相关」（提示）。
-    const actual = briefMinFor(1374, LOW_RELEVANCE_HINT)
-    assert.ok(actual > LOW_RELEVANCE_HINT, '本库的线应当高于兜底值（否则这条用例就没意义）')
-    const between = (LOW_RELEVANCE_HINT + actual) / 2
-    assert.equal(isWeakMatch(meta(between)), false, '按兜底值：不提示')
-    assert.equal(isWeakMatch(meta(between), actual), true, '按本库的线：提示')
-  })
-
-  it('达到阈值不提示', () => {
-    assert.equal(isWeakMatch(meta(LOW_RELEVANCE_HINT)), false)
-    assert.equal(isWeakMatch(meta(0.9)), false)
-  })
-
-  it('纯词面模式不判断（没有余弦可依）', () => {
-    assert.equal(isWeakMatch(meta(0, true)), false)
-  })
-
-  it('阈值与实测分布的关系（记录现状，不是断言正确）', () => {
-    // 真实模型上实测：相关查询 0.45~0.70，「完全不相关」0.50 —— 两者重叠，
-    // 所以这里**不能**断言阈值能分开它们，只记录当前取值。
-    // 标定前不应把它当硬门槛用（见 tools/index.ts 里的说明）。
-    assert.ok(LOW_RELEVANCE_HINT > 0.4 && LOW_RELEVANCE_HINT < 0.8)
+  it('一条都没有时直说没找到', async () => {
+    const out = await tool('lattice_recall').execute({ query: '完全不存在的词' })
+    assert.ok(out.includes('没有找到相关记忆'), '输出: ' + out)
   })
 })
 

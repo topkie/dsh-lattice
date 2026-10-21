@@ -355,17 +355,21 @@ describe('判据 4：graphStatus 分开报数，且只有声明边的库图路�
       ).run(a, b, Date.now())
 
       const q = '依赖解析要开 hoisted 才不重复装包'
-      const res = recall(db, q, unitAt(0), { topN: 1 })
+      const res = recall(db, q, unitAt(0), { topN: 2 })
       assert.ok(res.meta.counts.graph > 0, '图路必须不为 0：' + JSON.stringify(res.meta.counts))
       assert.ok(res.meta.graphStatus.includes('声明边 1 条'), res.meta.graphStatus)
       assert.ok(res.meta.graphStatus.includes('推断边 0 条'), res.meta.graphStatus)
       assert.deepEqual(edgeOriginCounts(db), { declared: 1, inferred: 0 }, '库里应当只有声明边')
 
-      // 图路段真的有内容：b 的摘要出现在【路】段里，并带「声明」标记（与 near 分开）。
+      // 声明边的作用是「把邻居带进候选」，不再单独渲染一段：
+      // 放宽 topN 后 b 应当进候选并装进【入选】，注入文本里不再有【路】段。
+      assert.ok(
+        res.hits.map((h) => h.id).includes(b),
+        '声明边的邻居应当进候选：' + JSON.stringify(res.hits.map((h) => h.id)),
+      )
       const view = assembleView(db, res, {})
-      assert.ok(view.text.includes('【路】'), '应当有路段：' + view.text)
-      assert.ok(view.text.includes('装包链接失败时先看解析策略'), '路段里应当有声明边的邻居：' + view.text)
-      assert.ok(view.text.includes('声明'), '路段应当标出这条边是声明的：' + view.text)
+      assert.ok(!view.text.includes('【路】'), '路段已经取消：' + view.text)
+      assert.ok(view.text.includes('装包链接失败时先看解析策略'), '进了候选的邻居装进【入选】')
     })
   })
 })
@@ -490,7 +494,7 @@ describe('判据 7：可发现性（工具描述 + 召回末尾提示）', () =>
         const out = await tool('lattice_recall').execute({ query: '系统代理' })
         const after = ruler.read()
 
-        assert.ok(out.includes('【锚】'), '应当有命中：' + out)
+        assert.ok(out.includes('【入选】'), '应当有命中：' + out)
         assert.ok(out.trimEnd().endsWith('（' + DECLARED_EDGE_HINT + '）'), '末尾应当有提示句：' + out)
         assert.equal(out.split(DECLARED_EDGE_HINT).length - 1, 1, '提示句只出现一次')
         // 召回工具本身会记命中计数（recordRecall）：那是「召回」的既有语义，不是提示带来的写入。

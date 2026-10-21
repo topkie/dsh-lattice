@@ -734,7 +734,7 @@ function suppressSuperseded(items: RecallHit[]): { dropped: RecallHit[] } {
 }
 
 /** 字符 3-gram。中文没有空格可切，按字符切才对得上「几乎逐字重复」这个直觉。 */
-function trigramsOf(text: string): Set<string> {
+export function trigramsOf(text: string): Set<string> {
   const t = text.replace(/\s+/g, ' ')
   const out = new Set<string>()
   for (let i = 0; i + 3 <= t.length; i++) out.add(t.slice(i, i + 3))
@@ -742,7 +742,7 @@ function trigramsOf(text: string): Set<string> {
 }
 
 /** 覆盖度：小集合里有多大比例出现在大集合里。一条是另一条的前缀时接近 1.0。 */
-function coverageOf(a: Set<string>, b: Set<string>): number {
+export function coverageOf(a: Set<string>, b: Set<string>): number {
   const [small, big] = a.size <= b.size ? [a, b] : [b, a]
   if (small.size === 0) return 0
   let n = 0

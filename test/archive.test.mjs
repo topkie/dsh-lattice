@@ -133,7 +133,7 @@ describe('归档：默认不可见、显式可检索', () => {
     )
   })
 
-  it('判据 1/2：归档条目的入口词不再出现在【入口】、摘要不再出现在【路】，但行都在库里', async () => {
+  it('判据 1/2：归档条目不进召回结果，注入文本里也不出现，但行都在库里', async () => {
     const V0 = oneHot(10)
     // 0.8 × 方向 10 + 0.6 × 方向 11 已经是单位向量，与 V0 的余弦恰好 0.8（≥ tauJoin 0.78）→
     // 与第一条同主题，但查询向量（V0）与它的相似度够低，不会把它拉进命中。
@@ -142,42 +142,31 @@ describe('归档：默认不可见、显式可检索', () => {
     mix[11] = 0.6
     const ids = await seed([
       ['系统代理必须走本地端口，否则访问境外源会直接超时。', V0],
-      ['本地端口被防火墙挡住时，境外源会直接超时。', mix],
+      ['代理本地端口被防火墙挡住时，境外源会直接超时。', mix],
       ['棱镜色散实验的读数记录在实验本第三页。', oneHot(12)],
     ])
     const topicOf = (id) => Number(db.prepare('SELECT topic_id FROM atom WHERE id = ?').get(id).topic_id)
-    assert.equal(topicOf(ids[0]), topicOf(ids[1]), '前提：两条必须同主题，否则【入口】这一路测不到')
-
-    // 给第二条补一个「只在它身上」的入口词，并把两条连起来：这两样都不能靠写入管线的默认行为保证。
-    const now = Date.now()
-    db.prepare(
-      'INSERT INTO entry(atom_id, term, bigram, weight, origin, hits, last_seen, created_at)' +
-        ' VALUES (?, ?, ?, ?, ?, 0, NULL, ?)',
-    ).run(ids[1], '归档专用入口词', '归档 档专 专用 用入 入口 口词', 9.9, 'declared', now)
-    db.prepare(
-      'INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at)' +
-        " VALUES ('atom', ?, 'atom', ?, 'near', 0.9, 'inferred', ?)",
-    ).run(ids[0], ids[1], now)
+    assert.equal(topicOf(ids[0]), topicOf(ids[1]), '前提：两条必须同主题')
     // superseded_by 非空：证明归档不会顺手清掉这一列。
-    db.prepare('UPDATE atom SET superseded_by = ? WHERE id = ?').run(ids[0], ids[1])
+    // 故意挂在第三条上 —— 它不参与这一问，不会触发取代压制；挂在前两条上会让
+    // 「两条都该进候选」这个前提与压制规则打架。
+    db.prepare('UPDATE atom SET superseded_by = ? WHERE id = ?').run(ids[0], ids[2])
+
+    // 建边是惰性初始化：首次召回会写推断边。先热身一次，让 before/after 比的是归档本身。
+    recall(db, '代理', null, {})
 
     const before = {
       counts: counts(['atom', 'entry', 'atom_topic', 'edge']),
       vec: db.prepare('SELECT hex(embedding) AS h FROM atom WHERE id = ?').get(ids[1]).h,
-      superseded: db.prepare('SELECT superseded_by AS s FROM atom WHERE id = ?').get(ids[1]).s,
+      superseded: db.prepare('SELECT superseded_by AS s FROM atom WHERE id = ?').get(ids[2]).s,
     }
 
-    // 纯词面查询：只命中第一条（第二条没有「代理」）。没有查询向量，图路就不参与 ——
-    // 这样【路】段里的第二条只能来自边，不能来自向量粗筛。
+    // 纯词面查询：两条正文都含「代理」，都该进候选。旧形态还要靠【入口】与【路】两段才看得见
+    // 第二条，那两段已经取消；归档过滤这条路仍然要在候选生成处生效。
     const r0 = recall(db, '代理', null, {})
-    assert.deepEqual(
-      r0.hits.map((h) => h.id),
-      [ids[0]],
-      '前提：第二条不该被这一问命中',
-    )
+    assert.deepEqual(r0.hits.map((h) => h.id).sort(), [ids[0], ids[1]].sort(), '前提：两条都该被这一问命中')
     const view0 = assembleView(db, r0, {}).text
-    assert.ok(view0.includes('归档专用入口词'), '前提：【入口】里应当有这个入口词')
-    assert.ok(view0.includes('本地端口被防火墙挡住时'), '前提：【路】里应当有邻居摘要')
+    assert.ok(view0.includes('本地端口被防火墙挡住时'), '前提：未归档时它的正文在【入选】里')
 
     setArchived(db, { atomId: ids[1], archived: true })
 
@@ -185,17 +174,16 @@ describe('归档：默认不可见、显式可检索', () => {
     assert.deepEqual(
       r1.hits.map((h) => h.id),
       [ids[0]],
-      '另一条未归档的命中不受影响',
+      '归档条目不得进候选；另一条不受影响',
     )
     const view1 = assembleView(db, r1, {}).text
-    assert.ok(!view1.includes('归档专用入口词'), '【入口】不得出现归档条目的入口词')
-    assert.ok(!view1.includes('本地端口被防火墙挡住时'), '【路】不得出现归档条目的摘要')
+    assert.ok(!view1.includes('本地端口被防火墙挡住时'), '归档条目的正文不得出现在注入文本里')
 
     // 判据 2：内容与关系一行没少，向量一个字节没变。
     const after = {
       counts: counts(['atom', 'entry', 'atom_topic', 'edge']),
       vec: db.prepare('SELECT hex(embedding) AS h FROM atom WHERE id = ?').get(ids[1]).h,
-      superseded: db.prepare('SELECT superseded_by AS s FROM atom WHERE id = ?').get(ids[1]).s,
+      superseded: db.prepare('SELECT superseded_by AS s FROM atom WHERE id = ?').get(ids[2]).s,
     }
     assert.deepEqual(after, before, '归档只改 flags：行数、向量、superseded_by 都不许变')
     const flags = Number(db.prepare('SELECT flags FROM atom WHERE id = ?').get(ids[1]).flags)

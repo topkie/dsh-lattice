@@ -1,8 +1,9 @@
-// 用真实模型验证注入组装：预算是否够用、三段的比例是否落在设计区间内。
+// 用真实模型验证注入组装：预算是否用满、装了几条、超预算次数是否为零。
 //
-// T7 的验收判据是「输出符合预算比例」。这里量的是**组装后各段的实际字符占比**，
-// 与 SEGMENT_RATIO（55/20/25）对照 —— 两者不必逐位相等（段内容长度是算出来的），
-// 但锚必须占大头，且总长不得超预算。
+// 旧口径量的是锚 / 入口 / 路三段的字符占比，与 SEGMENT_RATIO（55/20/25）对照。
+// 三段与配额在机制替换（0.5.0）里删掉了：现在的口径是「按余弦序逐条装到字符预算」，
+// 所以这里改成量四件事 —— 超预算次数（必须 0）、装了几条、用了预算的百分之多少、
+// 未入选时有没有说明。判据不在这条脚本里，它只报数字；三库对照另有脚本。
 //
 // 用法：node scripts/verify-view.mjs
 
@@ -12,7 +13,7 @@ import { openVault } from '../dist/db/open.js'
 import { ensureEncoder, encode } from '../dist/encoder/index.js'
 import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
 import { recall } from '../dist/pipeline/search.js'
-import { assembleView, SEGMENT_RATIO } from '../dist/pipeline/view.js'
+import { assembleView } from '../dist/pipeline/view.js'
 
 const OUT = '.probe'
 mkdirSync(OUT, { recursive: true })
@@ -33,6 +34,7 @@ const NOTES = [
   'FTS5 的 trigram 分词器对两字中文查询返回零命中。',
 ]
 
+const BUDGET = 6000
 const f = join(OUT, 'view-verify.db')
 for (const s of ['', '-wal', '-shm']) rmSync(f + s, { force: true })
 const { db } = openVault(f)
@@ -43,71 +45,48 @@ for (let i = 0; i < NOTES.length; i++) {
 
 const QUERIES = ['符号链接失败', '数据库并发读写', '池化方式', '清理中间产物', '中文短词检索', '代理超时']
 let overBudget = 0
-const ratios = []
+const rows = []
 console.log('')
-console.log('查询'.padEnd(16) + '总长  锚%   入口%  路%   锚数 入口主题 路行 降级 另有')
-console.log('-'.repeat(78))
+console.log('查询'.padEnd(16) + '总长   占预算  条数  重复压制  未列  有未入选说明')
+console.log('-'.repeat(72))
 for (const q of QUERIES) {
   const r = recall(db, q, await enc(q), { topN: 24 })
-  const v = assembleView(db, r, { budget: 6000 })
-  if (v.text.length > 6000) overBudget++
-  // 注意：不能把段落头的「绝对索引」当成长度 —— 那样锚段的长度会被算成
-  // 锚+入口+路的偏移量，占比完全失真。这里按段落头切分后再量。
-  const seg = (text) => {
-    const a = text.indexOf('【锚】')
-    const e = text.indexOf('【入口】')
-    const p = text.indexOf('【路】')
-    const endAnchor = e < 0 ? (p < 0 ? text.length : p) : e
-    const endEntry = p < 0 ? text.length : p
-    return {
-      anchor: endAnchor - a,
-      entry: e < 0 ? 0 : endEntry - e,
-      path: p < 0 ? 0 : text.length - p,
-    }
-  }
-  const sg = seg(v.text)
-  const anchorChars = sg.anchor
-  const entryChars = sg.entry
-  const pathChars = sg.path
-  const total = anchorChars + entryChars + pathChars || 1
-  const pa = (anchorChars / total) * 100
-  const pe = (entryChars / total) * 100
-  const pp = (pathChars / total) * 100
-  ratios.push([pa, pe, pp])
+  const v = assembleView(db, r, { budget: BUDGET })
+  if (v.text.length > BUDGET) overBudget++
+  const pct = (v.text.length / BUDGET) * 100
+  // 未入选的两种来源：同源真重复被压掉的、预算装不下的。两者都会在尾巴里说一句。
+  const hasTail = /另有 \d+ 条|预算装不下了/.test(v.text)
+  rows.push({ len: v.text.length, pct, anchors: v.anchors })
   console.log(
     q.padEnd(14) +
-      String(v.text.length).padStart(5) +
-      pa.toFixed(0).padStart(6) +
-      pe.toFixed(0).padStart(7) +
-      pp.toFixed(0).padStart(6) +
+      String(v.text.length).padStart(6) +
+      (pct.toFixed(0) + '%').padStart(8) +
       String(v.anchors).padStart(6) +
-      String(v.entryTopics).padStart(7) +
-      String(v.pathLines).padStart(6) +
-      String(v.demotedAnchors).padStart(5) +
-      String(v.otherRelated).padStart(6),
+      String(v.duplicateDropped).padStart(9) +
+      String(v.overBudget).padStart(7) +
+      (hasTail ? '有' : '无').padStart(11),
   )
 }
-const avg = (i) => ratios.reduce((a, x) => a + x[i], 0) / ratios.length
+const avg = (k) => rows.reduce((a, x) => a + x[k], 0) / rows.length
 console.log('')
 console.log(
-  '平均占比：锚 ' + avg(0).toFixed(1) + '%  入口 ' + avg(1).toFixed(1) + '%  路 ' + avg(2).toFixed(1) + '%',
+  '平均：总长 ' +
+    avg('len').toFixed(0) +
+    ' 字符（预算的 ' +
+    avg('pct').toFixed(0) +
+    '%），条数 ' +
+    avg('anchors').toFixed(1),
 )
 console.log(
-  '设计目标：锚 ' +
-    SEGMENT_RATIO.anchors * 100 +
-    '%  入口 ' +
-    SEGMENT_RATIO.entries * 100 +
-    '%  路 ' +
-    SEGMENT_RATIO.paths * 100 +
-    '%',
+  '条数区间：' + Math.min(...rows.map((x) => x.anchors)) + '–' + Math.max(...rows.map((x) => x.anchors)),
 )
 console.log('超预算次数:', overBudget, '（必须为 0）')
 console.log('')
 const sample = recall(db, '池化方式', await enc('池化方式'), {})
 const sv = assembleView(db, sample, { budget: 900 })
-console.log('=== 小预算样本（budget=900，触发裁剪）===')
-console.log('触发裁剪:', JSON.stringify(sv.trimmed))
-console.log('总长:', sv.text.length, '锚数:', sv.anchors)
+console.log('=== 小预算样本（budget=900）===')
+console.log('总长:', sv.text.length, '（上限 900）条数:', sv.anchors, '未列:', sv.overBudget)
+console.log('含「预算装不下了」:', sv.text.includes('预算装不下了'))
 console.log('')
 console.log(sv.text.slice(0, 420))
 db.close()

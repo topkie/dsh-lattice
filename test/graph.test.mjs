@@ -212,32 +212,25 @@ describe('注入组装：路段只认 atom 之间的边', () => {
       recallOf([hit(a, 1, '甲的摘要', 1)], [{ topicId: 1, label: 'T1', hits: 1 }]),
       {},
     )
-    assert.ok(!view.text.includes('【路】'), '不该把 topic 边的另一端当成邻居')
+    assert.ok(!view.text.includes('乙条记忆'), '不该把 topic 边的另一端当成邻居')
   })
 
-  it('路段邻居也按 scope 过滤：global 的锚不列别的域的邻居', () => {
+  it('图路把一跳邻居带进候选，注入层不再单列路段', () => {
     const a = seedAtom(1, '甲条记忆的正文', unit([1, 0.9]))
     const b = seedAtom(1, '乙条记忆的正文', unit([1, 0.85]), 'proj-x')
     insertEdge('atom', a, 'atom', b, 'near', 0.9, 'inferred')
-    const res = recallOf([hit(a, 1, '甲的摘要', 1)], [{ topicId: 1, label: 'T1', hits: 1 }])
-    assert.ok(assembleView(db, res, {}).text.includes('乙条记忆'), '不传 scope 时邻居照常出现')
-    assert.ok(
-      !assembleView(db, res, { scope: 'global' }).text.includes('乙条记忆'),
-      '传了 scope 就不该把别域的邻居写进注入文本',
-    )
-  })
-
-  it('atom 之间的 near 边会进路段', () => {
-    const a = seedAtom(1, '甲条记忆的正文', unit([1, 0.9]))
-    const b = seedAtom(1, '乙条记忆的正文', unit([1, 0.85]))
-    insertEdge('atom', a, 'atom', b, 'near', 0.9, 'inferred')
-    const view = assembleView(
-      db,
-      recallOf([hit(a, 1, '甲的摘要', 1)], [{ topicId: 1, label: 'T1', hits: 1 }]),
-      {},
-    )
-    assert.ok(view.text.includes('【路】'))
-    assert.ok(view.text.includes('乙条记忆'), '邻居的摘要该出现在路段里')
+    // 查询向量给 a 的方向：a 走向量路，b 只能经边到。
+    const res = recall(db, '甲条记忆的正文', unit([1, 0.9]), { topN: 8 })
+    const ids = res.hits.map((h) => h.id)
+    assert.ok(ids.includes(a), '种子本身在候选里')
+    assert.ok(ids.includes(b), '邻居经图路进候选：' + JSON.stringify(res.meta.counts))
+    // 旧形态把邻居渲染成【路】段；新形态只注入召回结果本身，进了候选的邻居按普通条目装。
+    const view = assembleView(db, res, {})
+    assert.ok(!view.text.includes('【路】'), '路段已经取消')
+    assert.ok(view.text.includes('乙条记忆'), '进了候选的邻居装进【入选】')
+    // scope 过滤发生在候选生成处：global 的召回不该经边把项目域的 atom 带进来。
+    const scoped = recall(db, '甲条记忆的正文', unit([1, 0.9]), { topN: 8, scope: 'global' })
+    assert.ok(!scoped.hits.map((h) => h.id).includes(b), '传了 scope 就不该把别域的邻居带进候选')
   })
 })
 

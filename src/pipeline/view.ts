@@ -1,22 +1,21 @@
 // 注入组装：把召回结果变成模型真正读到的那段文本。
 //
-// 三段式的分工，本质是把「信息本体」和「找到它的线索」分开计价：
-//   锚  记忆正文本身。占预算一半以上，**永不为其他段让路**
-//   入口  命中主题的别名与关键词，帮模型判断「这里还有别的说法」
-//   路  一跳关联的摘要，纯辅助，预算不足时最先砍
+// 两段式的分工：
+//   入选  按余弦序逐条装，每条带 id 与状态标记，装到预算的 95% 以上
+//   未入选  说清为什么：已被取代、与同源内容重复、预算装不下
 //
-// 预算比例（55/20/25）不是审美选择：锚决定回答质量，路只提供线索。
-// 裁剪顺序（路 → 入口 → 锚降级 → 路清零 → 锚减量）也来自同一条判断：
-// 宁可少给几条线索，也不能让信息本体被挤掉。
+// 为什么不再按比例给三段分配额：实测锚 / 入口 / 路各分 55% / 20% / 25% 时，预算只用到 76%
+// （三个库 4566 / 4587 / 4531 字符，预算 6000），约 1400 字符既没给正文也没被别的段用掉，
+// 而入口只用到 74%、路只用到 28%。让正文先装，剩下的额度不再另设段落。
 
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
 import { briefMinForDb } from './calibrate.js'
-import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
-import { FLAG_ARCHIVED, FLAG_SPLIT_PENDING } from '../db/flags.js'
-import { TERM_CHARS, TOPIC_LABEL_CHARS } from './write.js'
+import { coverageOf, DUP_TEXT, trigramsOf } from './search.js'
+import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 import { DEFAULT_MAX_EXTRACTED } from './entries.js'
+import { TERM_CHARS } from './write.js'
 
 /** 各段的字符配额占比。三段之和为 1。 */
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
@@ -81,70 +80,51 @@ export const SPLIT_SCENE_CHARS = 16 satisfies ThresholdValue<
 export interface ViewOptions {
   /** 总字符预算。 */
   budget?: number
-  /**
-   * 注入档位。省略时按召回结果的最高余弦自动判定（无向量时一律 full）。
-   * 显式传值只用于测试与对照，正常调用方不该覆盖它。
-   */
-  tier?: ViewTier
-  /** 锚段每条最多给多少字符（全文很长时截断，避免一条吃掉整段）。 */
+  /** 单条最多给多少字符（超长的按此截断，避免一条吃掉整段）。 */
   anchorMaxChars?: number
-  /** 每个主题最多给几条入口。 */
-  entriesPerTopic?: number
-  /** 单个主题的入口行字符上限（防止一行过长挤占锚段）。 */
-  entryLineMaxChars?: number
-  /** 路段的整体行数上限。 */
-  pathLines?: number
   /**
-   * 召回时用的 scope；给了就按同一语义过滤【路】段的邻居。
-   *
-   * 为什么必须传：锚是召回结果（已按 scope 过滤），而【路】段的邻居是从边里取的。
-   * 不传时邻居不受限 —— 别的域里的 atom 摘要会写进注入文本，hits 里却没有它。
-   */
-  scope?: string
-  /**
-   * 本地标定值（快照里的「精简档下界」）。**给了就用它，不再按库规模插值**。
-   *
-   * 为什么由调用方传：快照的读取发生在运行时（state.ts），而 pipeline 层不认识运行时 ——
-   * 依赖方向是 `tools → pipeline`，反向引用会把「谁读库」这件事弄乱。
-   */
-  briefMin?: number
-  /**
-   * 本次查询词，作为「使用场景」标在待拆分候选的锚行上。
+   * 本次查询词，作为「使用场景」标在待拆分候选的行上。
    *
    * 为什么由调用方传：查询词只存在于调用方（`lattice_recall` 的 q），注入层不读请求上下文。
-   * 搜索路由（`src/index.ts`）虽然也有 q，但它直接输出 JSON、**不调用本函数** ——
-   * 本函数在 src/ 里只有 tools/index.ts 一个调用点。省略时那句话不出现 ——
-   * 它只对待拆分候选有意义。
+   * 搜索路由（`src/index.ts`）虽然也有 q，但它直接输出 JSON、**不调用本函数**。
+   * 省略时那句话不出现 —— 它只对待拆分候选有意义。
    */
   scene?: string
+  /**
+   * 以下几项是旧形态（三段：锚 / 入口 / 路）的参数。新形态只有两段，
+   * 保留它们是**为了不打断调用方**，值会被忽略。
+   */
+  entriesPerTopic?: number
+  entryLineMaxChars?: number
+  pathLines?: number
+  scope?: string
+  /** 旧形态的档位与精简档下界。保留只为结果里的观测字段，不参与呈现。 */
+  tier?: ViewTier
+  briefMin?: number
 }
 
 export interface ViewResult {
-  /** 本次用的档位。写进结果是为了能观测，不是调用方需要读它。 */
+  /** 本次算出的档位。仅供观测，不参与呈现（收口阶段删）。 */
   tier: ViewTier
-  /** 本次生效的精简档下界（按库规模标定）。写进结果是为了能观测。 */
+  /** 本次生效的精简档下界。仅供观测（收口阶段删）。 */
   briefMin: number
-  /** 完整文本，直接注入。 */
+  /** 完整文本，直接注入。两段：【入选】与未入选说明。 */
   text: string
   /**
    * 本次真正展示的 atom id，按**展示顺序**。
    *
-   * 与 `anchors` 的区别：`anchors` 只是条数。给 id 是因为 `lattice_feedback` 的 `ref`
-   * 数的是模型看见的那几行（【锚】段），而预算裁剪后展示的条目是 `recalled.hits` 的前缀，
-   * 两者容易混淆 —— 把「展示的是哪几条」原样交出去，序号解析才有唯一的依据。
+   * 给 id 是因为 `lattice_feedback` 的 `ref` 数的是模型看见的那几行，
+   * 而装填后展示的条目不是 `recalled.hits` 的前缀（重复压制会跳过中间条目），
+   * 两者容易混淆 —— 把「展示的是哪几条」原样交出去，序号解析才有唯一依据。
    */
   anchorIds: readonly number[]
   anchors: number
-  entryTopics: number
-  pathLines: number
-  /** 因预算被降级为摘要的锚条数。 */
-  demotedAnchors: number
-  /** 同主题下未进锚的条数（汇总成一行提示）。 */
-  otherRelated: number
-  /** 本段实际用掉的字符。 */
-  used: { anchors: number; entries: number; paths: number; total: number }
-  /** 触发了哪些裁剪步骤。 */
-  trimmed: TrimStep[]
+  /** 同来源内因文本重复被压掉的条数。 */
+  duplicateDropped: number
+  /** 因为预算没装下的条数。 */
+  overBudget: number
+  /** 入选段实际用掉的字符与预算是否触顶（观测用）。 */
+  used: { anchors: number; budget: number }
 }
 
 export const DEFAULT_BUDGET = 6000 satisfies ThresholdValue<
@@ -284,9 +264,9 @@ export const TIER_BRIEF_MIN = 0.45 satisfies ThresholdValue<
     at: '2026-10-17'
     failsWhen: ['换编码模型', '库规模（生效值随规模变，本常量不再等于生效值）', '语料的领域混合度']
     guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs']
-    affects: '库小于锚点表下端时的**默认**精简档下界；库 >= 12 条时生效值由 calib 的锚点表按规模给出，本常量不再等于生效值。它同时仍是弱相关提示线 LOW_RELEVANCE_HINT 的取值来源'
-    diverges: '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。重标定已把生效值改成规模的函数（本次），但**弱相关提示线 LOW_RELEVANCE_HINT 仍是这个常数**（`src/tools/index.ts` 的 `LOW_RELEVANCE_HINT` 直接引用它）—— 工具层不在本次改动边界内，两处暂时分叉，见实现报告的未确定项。本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理'
-    refs: [{ file: 'src/tools/index.ts'; symbol: 'LOW_RELEVANCE_HINT' }]
+    affects: '库小于锚点表下端时的**默认**下界；库 >= 12 条时生效值由 calib 的锚点表按规模给出，本常量不再等于生效值。它已经不决定呈现内容：三档判定取消后，判定改用「最高余弦对固定问句集在本库实算的 90 分位」，这个值和 briefMinForDb 的读数只作为回执里的观测值带出来'
+    diverges: '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理'
+    refs: [{ file: 'src/pipeline/view.ts'; symbol: 'TIER_BRIEF_MIN' }]
   }
 >
 
@@ -302,19 +282,6 @@ export function tierOf(topCosine: number, briefMin: number = TIER_BRIEF_MIN): Vi
   return 'excerpt'
 }
 
-/** 各档的锚条数上限。full 不设上限，交给预算去管。 */
-const TIER_ANCHOR_CAP: Readonly<Record<ViewTier, number>> = {
-  full: Number.POSITIVE_INFINITY,
-  brief: 8,
-  excerpt: MIN_ANCHORS,
-}
-/** 各档每个主题给几条入口。低相关时入口段是主角，但也要收窄。 */
-const TIER_ENTRIES: Readonly<Record<ViewTier, number>> = {
-  full: DEFAULT_ENTRIES_PER_TOPIC,
-  brief: DEFAULT_ENTRIES_PER_TOPIC,
-  excerpt: 4,
-}
-
 /** 一条锚的正文，按需从库里取。 */
 function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
   const out = new Map<number, string>()
@@ -325,102 +292,6 @@ function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
     text: string
   }>
   for (const r of rows) out.set(Number(r.id), String(r.text))
-  return out
-}
-
-/**
- * 某个主题下命中的 atom 的入口词，按权重降序。
- *
- * 已归档的 atom 不进【入口】段：它的 entry 行还在库里，但默认不该被看见 ——
- * 漏了这一处，模型仍然能从入口词读出归档内容，而锚段看起来一切正常。
- */
-function topicEntries(db: DatabaseSync, topicId: number, limit: number): string[] {
-  const rows = db
-    .prepare(
-      'SELECT e.term AS term, MAX(e.weight) AS w FROM entry e' +
-        ' JOIN atom a ON a.id = e.atom_id WHERE a.topic_id = ?' +
-        ' AND (a.flags & ' +
-        FLAG_ARCHIVED +
-        ') = 0' +
-        ' GROUP BY e.term ORDER BY w DESC, e.term LIMIT ?',
-    )
-    .all(topicId, limit) as Array<{ term: string; w: number }>
-  return rows.map((r) => String(r.term))
-}
-
-/**
- * 一跳关联的摘要行。只走结构化边，且不重复锚里已有的条目。
- *
- * **两条限定是修 bug 加的，不是防御性写法**：改之前这里只检查「边的一端在锚里」，
- * 没检查「另一端也是 atom」。而写入路径产的边全是 `atom → topic`，它的 dst_id 是
- * **topic id** —— 在 id 空间重叠的库上，`JOIN atom ON atom.id = topic_id` 会命中一个
- * 完全无关的 atom，于是【路】段列出一批假邻居，还挂着那条 topic 边的 confidence。
- * 判据里的 graph 通道恒为 0，而这些假行照常出现，所以它长期没有被发现。
- *
- * kind 白名单与 search.ts 的图路共用同一个定义（GRAPH_KINDS），避免两处各写一份。
- */
-function pathLinesFor(
-  db: DatabaseSync,
-  anchors: number[],
-  exclude: Set<number>,
-  limit: number,
-  scope?: string,
-): string[] {
-  if (anchors.length === 0 || limit <= 0) return []
-  const ph = anchors.map(() => '?').join(', ')
-  const kinds = GRAPH_KINDS.map((x) => "'" + x + "'").join(', ')
-  // 邻居也要过 scope。锚是召回结果（已被 scope 过滤），邻居不是 —— 不过滤时【路】段会把
-  // 别的域里的 atom 摘要写进注入文本，虽然 hits 里没有它，模型照样看得见。
-  const scopeSql = scope === undefined ? '' : " AND (b.scope = ? OR b.scope = 'global')"
-  // 另一端：边的一端落进锚里时，邻居是另一端。两端都是 atom 已由 WHERE 保证。
-  const other = 'CASE WHEN e.src_id IN (' + ph + ') THEN e.dst_id ELSE e.src_id END'
-  const sql =
-    'SELECT e.kind AS kind, e.confidence AS conf, e.origin AS origin, b.id AS oid, b.summary AS summary FROM edge e' +
-    ' JOIN atom b ON b.id = ' +
-    other +
-    " WHERE e.src_type = 'atom' AND e.dst_type = 'atom'" +
-    '   AND e.kind IN (' +
-    kinds +
-    ')' +
-    '   AND (e.src_id IN (' +
-    ph +
-    ') OR e.dst_id IN (' +
-    ph +
-    '))' +
-    '   AND b.id NOT IN (' +
-    ph +
-    ')' +
-    scopeSql +
-    // 已归档的邻居不进【路】段：边还在（归档不删边），但默认不该被看见。
-    '   AND (b.flags & ' +
-    FLAG_ARCHIVED +
-    ') = 0' +
-    ' ORDER BY e.confidence DESC LIMIT ?'
-  const args: Array<string | number> =
-    scope === undefined
-      ? [...anchors, ...anchors, ...anchors, ...anchors, limit]
-      : [...anchors, ...anchors, ...anchors, ...anchors, scope, limit]
-  const rows = db.prepare(sql).all(...args) as Array<{
-    kind: string
-    conf: number
-    origin: string
-    oid: number | bigint
-    summary: string
-  }>
-  const seen = new Set<number>()
-  const out: string[] = []
-  for (const r of rows) {
-    const id = Number(r.oid)
-    if (exclude.has(id) || seen.has(id)) continue
-    seen.add(id)
-    // 声明边与推断边**分开标**：前者是模型说过的（真相源，重建后仍在），后者是向量近邻
-    // （派生物，重建会整批换掉）。两者在注入文本里长得一样时，模型无法判断这条线索
-    // 该不该信 —— 一句「·声明」把这件事说清，且不占置信度那格（declared 恒为 1.0，
-    // 显示出来只是噪声）。
-    // ORDER BY confidence DESC 因此也把声明边排在推断边前面：声明就是证据。
-    const mark = String(r.origin) === DECLARED_ORIGIN ? '·声明' : ' ' + Number(r.conf).toFixed(2)
-    out.push('[' + r.kind + mark + '] ' + clip(String(r.summary), PATH_SUMMARY_CHARS))
-  }
   return out
 }
 
@@ -511,188 +382,140 @@ function inferTier(
   return { tier: tierOf(recalled.meta.topCosine, briefMin), briefMin }
 }
 
+/**
+ * 把召回结果组装成两段式文本。
+ *
+ * 为什么是两段而不是三段：旧形态按 55/20/25 给锚、入口、路各分一份配额，实测预算只用到 76%
+ * （4566 / 4587 / 4531 字符），而入口用 74%、路用 28% —— 约 1400 字符既没给锚也没被别的段
+ * 用掉。新形态让入选条目先按余弦序逐条装，装到预算的 95% 以上，剩下的额度不再另设段落。
+ *
+ * 判「这次没有内容」不在这里做：那是 `recall()` 的 `meta.hasContent`，由调用方决定说不说那句话。
+ * 这里只负责「把有内容的那几条装进去」。
+ */
 export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: ViewOptions = {}): ViewResult {
   const budget = opts.budget ?? DEFAULT_BUDGET
   const anchorMax = opts.anchorMaxChars ?? DEFAULT_ANCHOR_MAX
-  const pathLimit = opts.pathLines ?? DEFAULT_PATH_LINES
-  const trimmed: TrimStep[] = []
-
-  // 裁剪状态机：每执行一步就重新渲染并检查，直到装得下。
-  // 逐步降级而不是一次算到位 —— 每一步的效果都要看真实字符数，预算是字符而非条数。
-  //
-  // 档位只改**初值**：超预算时仍然按 TRIM_ORDER 依次降级，「锚不为其他段让路」
-  // 那条行为契约不因分档而改变，只是起点不同。
+  // 档位与精简档下界只为结果里的观测字段保留，不参与装填（收口阶段一起删）。
   const inferred = inferTier(recalled, db, opts.briefMin)
   const tier = opts.tier ?? inferred.tier
-  const st = {
-    pathLimit,
-    perTopic: opts.entriesPerTopic ?? TIER_ENTRIES[tier],
-    anchorToSummary: tier === 'excerpt',
-    pathsOff: tier !== 'full',
-    anchorCap: TIER_ANCHOR_CAP[tier],
+
+  // 判空：库里没有针对这个问题的内容时，一条都不装。
+  //
+  // 这句话本来由工具层的回执说（「库里没有针对这个问题的内容。」），注入段不该同时端出
+  // 一堆凑数的条目 —— 实测同一批 24 条无关查询，旧形态下照样能装满 6000 字符，字符数与
+  // 真查询完全相同；只靠回执挡住，直接调 assembleView 的调用方（验证脚本、界面）拿到的
+  // 仍是满额文本，结论与文本自相矛盾。
+  if (recalled.meta.hasContent === false) {
+    return {
+      tier,
+      briefMin: inferred.briefMin,
+      text: '',
+      anchorIds: [],
+      anchors: 0,
+      duplicateDropped: 0,
+      overBudget: 0,
+      used: { anchors: 0, budget },
+    }
   }
 
   const fullTexts = loadTexts(
     db,
     recalled.hits.map((h) => h.id),
   )
-  // 确认清单只在这里转成 Set 一次：它在三段渲染里每次 build() 都要查，而 hits 最多几十条。
   const splitConfirmed = new Set(recalled.meta.splitConfirmed ?? [])
   const splitSegments = new Map(recalled.meta.splitPendingSegments ?? [])
-  // 被取代而没有出现在结果里的条数。锚段末尾给一句，读者才知道「少的那条」不是丢了。
   const supersededDropped = recalled.meta.suppressedSuperseded ?? 0
-  const anchorQuota = Math.floor(budget * SEGMENT_RATIO.anchors)
-  const entryQuota = Math.floor(budget * SEGMENT_RATIO.entries)
-  const pathQuota = Math.floor(budget * SEGMENT_RATIO.paths)
 
-  interface Built {
-    anchorLines: string[]
-    anchorsUsed: number
-    anchorIds: number[]
-    demoted: number
-    otherRelated: number
-    entryLines: string[]
-    entriesUsed: number
-    pathLines: string[]
-    pathsUsed: number
-    text: string
-  }
+  // 预算是**整段注入文本**的上限（模型看到的就是整段），标题也算在内。
+  // 尾巴三句的长度取决于压掉几条，装填时还不知道，所以按最坏情况（三句全出现、四位数）
+  // 预留 60 个字符，再让下面按实际句数回退一次兜底 —— 硬约束「任何预算下都不超预算」由
+  // test/view.test.mjs 的「硬约束」用例守，装填率由「预算紧时」用例守。
+  const HEADER = '【入选】'
+  const TAIL_MAX = 48
+  const available = Math.max(HEADER.length + 1, budget - HEADER.length - 1 - TAIL_MAX)
+  // 单条上限不能超过可用空间：预算 1000 而单条上限 1200 时，按上限截断会一条都装不进去。
+  const singleMax = Math.max(1, Math.min(anchorMax, available))
 
-  const build = (): Built => {
-    // ── 锚：全文优先；空间不够时后续条目降级为摘要 ──
-    const anchorLines: string[] = []
-    const anchorIds: number[] = []
-    let anchorsUsed = 0
-    let demoted = 0
-    const cap = Number.isFinite(st.anchorCap) ? Math.max(MIN_ANCHORS, Math.floor(st.anchorCap)) : Infinity
-    for (const h of recalled.hits) {
-      if (anchorLines.length >= cap) break
-      const full = st.anchorToSummary ? h.summary : (fullTexts.get(h.id) ?? h.summary)
-      const isSummary = st.anchorToSummary || full === h.summary
-      const body = clip(full, st.anchorToSummary ? ANCHOR_SUMMARY_CHARS : anchorMax)
-      // 带 atom id：它是 lattice_expand 的入参；id 自增，也就等于天然的写入顺序。
-      const line = '- [' + h.id + stateMark(h, opts.scene, splitConfirmed, splitSegments) + '] ' + body
-      const cost = line.length + 1
-      // 前 MIN_ANCHORS 条无论如何都要留下（保底），之后才看配额。
-      if (anchorLines.length < MIN_ANCHORS || anchorsUsed + cost <= anchorQuota) {
-        anchorLines.push(line)
-        anchorIds.push(h.id)
-        anchorsUsed += cost
-        if (isSummary) demoted++
-      } else if (!st.anchorToSummary) {
-        const short =
-          '- [' +
-          h.id +
-          stateMark(h, opts.scene, splitConfirmed, splitSegments) +
-          '] ' +
-          clip(h.summary, DEMOTED_ANCHOR_CHARS)
-        const sc = short.length + 1
-        if (anchorsUsed + sc <= anchorQuota) {
-          anchorLines.push(short)
-          anchorIds.push(h.id)
-          anchorsUsed += sc
-          demoted++
-        } else break
-      } else {
-        break
+  const lines: string[] = []
+  const ids: number[] = []
+  const buckets = new Map<string, Array<{ grams: Set<string> }>>()
+  let used = 0
+  let duplicateDropped = 0
+  let overBudget = 0
+  let full = false
+
+  for (const h of recalled.hits) {
+    const text = fullTexts.get(h.id) ?? h.summary
+    // 真重复压制：同来源桶内比文本重叠。来源为空时不比 —— 没有来源证明不了同源，
+    // 而整库一个桶会让「同句微改」互相压掉（实测同一句话改两个字的 3-gram 覆盖度是 0.800）。
+    if (h.source !== null && h.source !== undefined) {
+      const grams = trigramsOf(text)
+      const bucket = buckets.get(h.source) ?? []
+      let dup = false
+      for (const prev of bucket) {
+        if (coverageOf(grams, prev.grams) >= DUP_TEXT) {
+          dup = true
+          break
+        }
       }
+      if (dup) {
+        duplicateDropped++
+        continue
+      }
+      bucket.push({ grams })
+      buckets.set(h.source, bucket)
     }
-    const otherRelated = Math.max(0, recalled.hits.length - anchorIds.length)
-
-    // ── 入口：每个命中主题一行 ──
-    // 单行上限：入口词条数与主题数都可能很多，不设限会挤占锚段。
-    const entryLineMax = opts.entryLineMaxChars ?? DEFAULT_ENTRY_LINE_MAX
-    const entryLines: string[] = []
-    let entriesUsed = 0
-    for (const t of recalled.topics) {
-      const terms = topicEntries(db, t.topicId, st.perTopic)
-      if (terms.length === 0) continue
-      const line = clip('[' + clip(t.label, TOPIC_LABEL_CHARS) + '] ' + terms.join(' '), entryLineMax)
-      if (entriesUsed + line.length + 1 > entryQuota) break
-      entryLines.push(line)
-      entriesUsed += line.length + 1
+    if (full) {
+      overBudget++
+      continue
     }
-
-    // ── 路：一跳关联 ──
-    const pathLines = st.pathsOff
-      ? []
-      : pathLinesFor(db, anchorIds, new Set(anchorIds), st.pathLimit, opts.scope)
-    const kept: string[] = []
-    let pathsUsed = 0
-    for (const l of pathLines) {
-      if (pathsUsed + l.length + 1 > pathQuota) break
-      kept.push(l)
-      pathsUsed += l.length + 1
+    const mark = stateMark(h, opts.scene, splitConfirmed, splitSegments)
+    const prefix = '- [' + h.id + mark + '] '
+    const room = available - used
+    let body = clip(text, singleMax)
+    let line = prefix + body
+    if (line.length + 1 > room) {
+      // 装不下就按剩余额度截断这一条 —— 预算要装到 95% 以上，不能因为最后一条过长而空着。
+      // 截短后连 24 个字符都放不下就停：再装只剩一个省略号，读者看不出这是什么。
+      const keep = room - prefix.length - 2
+      if (keep < 24) {
+        full = true
+        overBudget++
+        continue
+      }
+      body = clip(text, keep)
+      line = prefix + body
     }
-
-    const parts: string[] = ['【锚】', ...anchorLines]
-    if (otherRelated > 0) parts.push('[该主题下另有 ' + otherRelated + ' 条相关记忆]')
-    if (supersededDropped > 0) parts.push('[另有 ' + supersededDropped + ' 条已被取代，未列出]')
-    if (entryLines.length > 0) parts.push('', '【入口】', ...entryLines)
-    if (kept.length > 0) parts.push('', '【路】', ...kept)
-    return {
-      anchorLines,
-      anchorsUsed,
-      anchorIds,
-      demoted,
-      otherRelated,
-      entryLines,
-      entriesUsed,
-      pathLines: kept,
-      pathsUsed,
-      text: parts.join('\n'),
-    }
+    lines.push(line)
+    ids.push(h.id)
+    used += line.length + 1
   }
 
-  let b = build()
-  // 按 TRIM_ORDER 依次降级，直到装得下。
-  if (b.text.length > budget) {
-    applyTrim(st, 'paths->5')
-    trimmed.push('paths->5')
-    b = build()
+  const tailOf = (over: number): string[] => {
+    const t: string[] = []
+    if (supersededDropped > 0) t.push('[另有 ' + supersededDropped + ' 条已被取代，未列出]')
+    if (duplicateDropped > 0) t.push('[另有 ' + duplicateDropped + ' 条与同源内容重复，未列出]')
+    if (over > 0) t.push('预算装不下了，还有 ' + over + ' 条未列。')
+    return t
   }
-  if (b.text.length > budget) {
-    st.perTopic = 4
-    trimmed.push('entries->4')
-    b = build()
-  }
-  if (b.text.length > budget) {
-    st.anchorToSummary = true
-    trimmed.push('anchors->summary')
-    b = build()
-  }
-  if (b.text.length > budget) {
-    st.pathsOff = true
-    trimmed.push('paths->0')
-    b = build()
-  }
-  if (b.text.length > budget) {
-    st.anchorCap = MIN_ANCHORS
-    trimmed.push('anchors->3')
-    b = build()
+  const textOf = (over: number): string => [HEADER, ...lines, ...tailOf(over)].join('\n')
+  // 装填时没算尾巴：尾巴的句数与位数在装完之后才确定（「还有 N 条未列」本身会随压掉几条变化）。
+  // 这里按最终尾巴长度回退，弹到最后一条为止 —— 一条都不给比超预算更糟。
+  while (ids.length > 1 && textOf(overBudget).length > budget) {
+    const last = lines.pop() as string
+    ids.pop()
+    used -= last.length + 1
+    overBudget++
   }
 
   return {
     tier,
     briefMin: inferred.briefMin,
-    text: b.text,
-    anchorIds: b.anchorIds,
-    anchors: b.anchorLines.length,
-    entryTopics: b.entryLines.length,
-    pathLines: b.pathLines.length,
-    demotedAnchors: b.demoted,
-    otherRelated: b.otherRelated,
-    used: {
-      anchors: b.anchorsUsed,
-      entries: b.entriesUsed,
-      paths: b.pathsUsed,
-      total: b.anchorsUsed + b.entriesUsed + b.pathsUsed,
-    },
-    trimmed,
+    text: textOf(overBudget),
+    anchorIds: ids,
+    anchors: lines.length,
+    duplicateDropped,
+    overBudget,
+    used: { anchors: used, budget },
   }
-}
-
-/** 应用一个裁剪步骤。集中在一处，便于对照 TRIM_ORDER 审查。 */
-function applyTrim(st: { pathLimit: number }, step: TrimStep): void {
-  if (step === 'paths->5') st.pathLimit = Math.min(st.pathLimit, TRIM_PATHS_LIMIT)
 }
