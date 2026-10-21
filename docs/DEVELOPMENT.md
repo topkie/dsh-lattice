@@ -487,6 +487,8 @@ export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
 
 ### 阈值登记：来历与评审
 
+阈值总览、四条查询的用法，以及「这套检查能查出什么、查不出什么」，见 docs/THRESHOLDS.md；本节只讲规则与字段。
+
 每个登记项要么是 `recheckable`，要么是 `chosen`。判法是「测量推不推得出这个值」，
 不是「现在有没有记录」：
 

@@ -85,6 +85,7 @@ dsh plugin --profile <profile> add dsh-lattice
 | [宿主接入契约](docs/INTEGRATION.md) | 第一次接入先读：什么时候该查记忆、一条记忆怎么写、六个工具各管到哪、失败与降级时看到什么 |
 | [架构](docs/ARCHITECTURE.md) | 记忆模型、存储布局、检索与写入流程 |
 | [开发指南](docs/DEVELOPMENT.md) | 环境、命令、模块划分、关键约束 |
+| [阈值登记](docs/THRESHOLDS.md) | 代码里那些数字为什么是这个值、什么条件该重标、这套检查查得出什么查不出什么 |
 | [迁移规范](docs/MIGRATION.md) | 从其他记忆库迁入时的组织、流程、验收与回滚 |
 | [贡献指南](CONTRIBUTING.md) | 提交流程与代码约定 |
 | [变更日志](CHANGELOG.md) | 版本历史 |
