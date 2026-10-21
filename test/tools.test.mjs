@@ -188,6 +188,34 @@ describe('lattice_write', () => {
     assert.ok(out.includes('#999'), '应当提示 hint 不存在，输出: ' + out)
   })
 
+  it('source 落库，同源高度重叠的两条在注入里只留一条', async () => {
+    // 来源是「同源重复」唯一能证明的东西：同一篇文档的两条才可能逐字重复。
+    // 不传 source 的条目 source 列为空，压制时不进任何桶。
+    const a = await tool('lattice_write').execute({
+      text: '系统代理必须走本地端口，否则访问境外源会超时。',
+      source: '网络约定.md',
+    })
+    const id1 = Number(/已写入记忆 #(\d+)/.exec(a)[1])
+    const b = await tool('lattice_write').execute({
+      text: '系统代理必须走本地端口，否则访问境外源就会超时。',
+      source: '网络约定.md',
+    })
+    const id2 = Number(/已写入记忆 #(\d+)/.exec(b)[1])
+    assert.notEqual(id1, id2, '两条应当各自写入：' + a + ' / ' + b)
+    const db = getRuntime({}).db
+    const row = db.prepare('SELECT source FROM atom WHERE id = ?').get(id1)
+    assert.equal(row.source, '网络约定.md', 'source 要落进 atom.source 列')
+    const out = await tool('lattice_recall').execute({ query: '系统代理 本地端口 境外源' })
+    assert.ok(out.includes('另有 1 条与同源内容重复'), '注入段应当说明压掉一条：' + out)
+  })
+
+  it('不传 source 时库里的来源列为空，压制不生效', async () => {
+    const a = await tool('lattice_write').execute({ text: '同源压制的反例：这条没有来源甲。' })
+    const id1 = Number(/已写入记忆 #(\d+)/.exec(a)[1])
+    const row = getRuntime({}).db.prepare('SELECT source FROM atom WHERE id = ?').get(id1)
+    assert.equal(row.source, null, '不传 source 就该是 NULL，不能自己编一个')
+  })
+
   it('写入的内容真的落库了（再过一遍召回）', async () => {
     await tool('lattice_write').execute({ text: '缓存击穿是热点 key 失效导致的。' })
     const out = await tool('lattice_recall').execute({ query: '缓存击穿' })

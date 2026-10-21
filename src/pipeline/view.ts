@@ -11,7 +11,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
 import type { RecallResult } from './search.js'
-import { coverageOf, DUP_TEXT, trigramsOf } from './search.js'
 import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 import { DEFAULT_MAX_EXTRACTED } from './entries.js'
 import { TERM_CHARS } from './write.js'
@@ -434,33 +433,16 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
 
   const lines: string[] = []
   const ids: number[] = []
-  const buckets = new Map<string, Array<{ grams: Set<string> }>>()
   let used = 0
-  let duplicateDropped = 0
+  // 真重复压制在候选层就做完了（search.ts 的 suppressDuplicates：同样按来源分桶、同样比
+  // 3-gram 覆盖度）。这里只把压掉的条数取出来告诉用户，不再比一遍 —— 同一件事两处实现，
+  // 两处的阈值迟早会漂，而「压掉了什么」是用户唯一能核对的东西。
+  const duplicateDropped = recalled.meta.suppressed ?? 0
   let overBudget = 0
   let full = false
 
   for (const h of recalled.hits) {
     const text = fullTexts.get(h.id) ?? h.summary
-    // 真重复压制：同来源桶内比文本重叠。来源为空时不比 —— 没有来源证明不了同源，
-    // 而整库一个桶会让「同句微改」互相压掉（实测同一句话改两个字的 3-gram 覆盖度是 0.800）。
-    if (h.source !== null && h.source !== undefined) {
-      const grams = trigramsOf(text)
-      const bucket = buckets.get(h.source) ?? []
-      let dup = false
-      for (const prev of bucket) {
-        if (coverageOf(grams, prev.grams) >= DUP_TEXT) {
-          dup = true
-          break
-        }
-      }
-      if (dup) {
-        duplicateDropped++
-        continue
-      }
-      bucket.push({ grams })
-      buckets.set(h.source, bucket)
-    }
     if (full) {
       overBudget++
       continue

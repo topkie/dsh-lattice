@@ -828,7 +828,7 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
   const ph = ids.map(() => '?').join(', ')
   const rows = db
     .prepare(
-      'SELECT id, topic_id, fit, summary, origin, superseded_by, flags, source_ref FROM atom WHERE id IN (' +
+      'SELECT id, topic_id, fit, summary, origin, superseded_by, flags, source, source_ref FROM atom WHERE id IN (' +
         ph +
         ')',
     )
@@ -840,6 +840,7 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
     origin: string
     superseded_by: number | bigint | null
     flags: number | bigint | null
+    source: string | null
     source_ref: string | null
   }>
   for (const r of rows) {
@@ -851,7 +852,14 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
       origin: String(r.origin),
       supersededBy: r.superseded_by === null ? null : Number(r.superseded_by),
       flags: r.flags === null ? 0 : Number(r.flags),
-      source: r.source_ref === null ? null : String(r.source_ref),
+      // 「来源」取两列里先有值的那一列：工具写入填 source，导入脚本填 source_ref（整篇的路径）。
+      // 压制只看「是不是同一来源」，两列语义相同，先到先得即可；空串按没填处理。
+      source:
+        r.source !== null && String(r.source) !== ''
+          ? String(r.source)
+          : r.source_ref === null || String(r.source_ref) === ''
+            ? null
+            : String(r.source_ref),
     })
   }
   return out

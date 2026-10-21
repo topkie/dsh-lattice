@@ -273,31 +273,34 @@ describe('注入组装：两段', () => {
     assert.ok(!v.text.includes('【路】'), '旧形态的【路】段已经取消')
   })
 
-  it('同源逐字重复只留一条，并单独说清压了几条', () => {
+  it('候选层压掉同源重复后，注入段说清压了几条', () => {
+    // 压制发生在候选层（search.ts 的 suppressDuplicates），assembleView 拿到的是已经压过的
+    // 命中集合。它不重复比一遍，只把「压掉几条」告诉用户 —— 同一件事两处实现，阈值迟早会漂。
     const text = '同一份材料被切成了两条一模一样的正文内容，用来验证同源重复压制。'
     const a = seedAnim(db, 1, '集中', text, ['甲'])
-    const b = seedAnim(db, 1, '集中', text, ['乙'])
-    const hits = [
-      { ...hit(a, 1, '摘要甲', 1), source: '同一篇.md' },
-      { ...hit(b, 1, '摘要乙', 0.9), source: '同一篇.md' },
-    ]
-    const v = assembleView(db, recallOf(hits, [{ topicId: 1, label: '集中', hits: 2 }]), {})
-    assert.equal(v.duplicateDropped, 1, '逐字重复的同源条目应当压掉一条')
+    const hits = [{ ...hit(a, 1, '摘要甲', 1), source: '同一篇.md' }]
+    const v = assembleView(
+      db,
+      recallOf(hits, [{ topicId: 1, label: '集中', hits: 2 }], { suppressed: 1 }),
+      {},
+    )
+    assert.equal(v.duplicateDropped, 1, '候选层压掉的条数要带出来')
     assert.equal(v.anchors, 1)
     assert.ok(v.text.includes('另有 1 条与同源内容重复，未列出'), '压了几条要单独说')
   })
 
-  it('不同来源的逐字重复不压：分桶单位是来源', () => {
-    const text = '两个不同来源里出现了一模一样的一段正文，用来验证分桶单位。'
+  it('候选层没压重复时不出这句话', () => {
+    const text = '两个条目各自独立，用来验证没有压制时不出现压制说明。'
     const a = seedAnim(db, 1, '集中', text, ['甲'])
-    const b = seedAnim(db, 1, '集中', text, ['乙'])
+    const b = seedAnim(db, 1, '集中', '另一条完全不同的正文内容，与上一条没有重叠。', ['乙'])
     const hits = [
       { ...hit(a, 1, '摘要甲', 1), source: '甲.md' },
       { ...hit(b, 1, '摘要乙', 0.9), source: '乙.md' },
     ]
     const v = assembleView(db, recallOf(hits, [{ topicId: 1, label: '集中', hits: 2 }]), {})
-    assert.equal(v.duplicateDropped, 0, '不同来源不参与同源比较')
+    assert.equal(v.duplicateDropped, 0)
     assert.equal(v.anchors, 2)
+    assert.equal(v.text.includes('与同源内容重复'), false, '没压就别说压了')
   })
 
   it('预算不足时把没装下的条数汇总成一行，不静默丢弃', () => {

@@ -179,6 +179,13 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       },
       topic_hint: { type: 'number', description: '已知归属主题 id 时直接指定' },
       scope: { type: 'string', description: 'global 或项目键，默认 global' },
+      source: {
+        type: 'string',
+        description:
+          '这条记忆来自哪里（同一篇文档、同一次会话、同一个导出文件）。' +
+          '只用于判断两条是否同源重复：来源相同且文本高度重叠时，注入段只留一条，并说明压掉了几条。' +
+          '不传就不做同源判断 —— 没有来源证明不了同源。',
+      },
       origin: {
         type: 'string',
         description:
@@ -249,6 +256,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           refs,
           topicHint: hint,
           origin: str(args?.origin, 'model'),
+          source:
+            typeof args?.source === 'string' && args.source.trim() !== '' ? args.source.trim() : undefined,
           edges,
         })
       } catch (e) {
