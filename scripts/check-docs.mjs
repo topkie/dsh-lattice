@@ -26,9 +26,15 @@ function docFiles() {
   }
   const docs = join(ROOT, 'docs')
   if (existsSync(docs)) {
-    for (const name of readdirSync(docs)) {
-      if (name.endsWith('.md')) out.push(join(docs, name))
+    // 递归：文档会分目录（例如 docs/design/），只扫一层会让子目录里的路径无人核对。
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name)
+        if (entry.isDirectory()) walk(p)
+        else if (entry.name.endsWith('.md')) out.push(p)
+      }
     }
+    walk(docs)
   }
   return out
 }
@@ -41,10 +47,20 @@ function realTables() {
   return names
 }
 
-/** 文档里出现的候选：反引号包起来的一小段、以及围栏代码块里的整行路径。 */
+/** 文档里出现的候选：反引号包起来的一小段、以及围栏代码块里的整行。 */
 function candidates(text) {
   const out = []
   for (const m of text.matchAll(/`([^`\n]{2,80})`/g)) out.push(m[1])
+  // 围栏代码块里的整行：路径常直接写在示例命令与目录树里，不带反引号。
+  // 这里不做判断，只把候选交出去，由 looksLikePath 收窄 —— 与反引号那条路同一个过滤器。
+  // 注释里那句话原先写着「围栏代码块里的整行路径」却只实现了反引号分支，
+  // 于是文档里整行写的路径从来没有被核对过（2026-10-21 审核发现）。
+  for (const block of text.matchAll(/^[ \t]*```[^\n]*\n([\s\S]*?)^[ \t]*```/gm)) {
+    for (const raw of block[1].split('\n')) {
+      const line = raw.trim()
+      if (line.length >= 2 && line.length <= 120 && !line.startsWith('#')) out.push(line)
+    }
+  }
   return out
 }
 

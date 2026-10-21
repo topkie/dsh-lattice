@@ -15,13 +15,16 @@ import { existsSync } from 'node:fs'
 const NODE = process.execPath
 
 /**
- * 参与格式检查的文件范围（与 CI 保持一致）。
+ * 参与格式检查的文件范围。
  *
- * 这里**没有 Markdown**：`.prettierignore` 排除了 `*.md`，把 md 通配符写进来只会得到空集 ——
- * 命令照样打印「All matched files use Prettier code style!」，但它一个文档都没看。
- * 判据恒真比没有判据更糟（它看起来在工作），所以宁可如实收窄范围。
+ * 这里**没有 Markdown**：`.prettierignore` 排除了 `*.md`，写进来也只会被忽略。
+ * 空集不会静默通过 —— prettier 对没有匹配的 glob 报 `No files matching the pattern` 并 exit 2
+ * （2026-10-21 实测），所以「通配符写错」会红，不会假绿。
+ *
+ * `scripts/**` 必须是双星：单星不跨目录，会漏掉 `scripts/lib/compare-db.mjs`。
+ * `lib/**` 是随包发布的界面代码（`package.json` 的 `files` 里有 lib），同样受格式约束。
  */
-const FORMAT_GLOBS = ['src/**/*.ts', 'test/**/*.mjs', 'scripts/*.mjs', '.github/**/*.yml']
+const FORMAT_GLOBS = ['src/**/*.ts', 'test/**/*.mjs', 'scripts/**/*.mjs', 'lib/**/*.js', '.github/**/*.yml']
 
 /**
  * 步骤定义：名称 + 命令 + 参数。顺序按「先静态后动态」—— 便宜的失败先暴露。

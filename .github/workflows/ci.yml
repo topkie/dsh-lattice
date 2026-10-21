@@ -23,12 +23,11 @@ jobs:
       # 直接跑脚本而不是 `pnpm <script>`：本机实测 `pnpm run` 会因 pnpm 自身的
       # 依赖预检查而失败，换成显式命令可以绕开这一类不确定性。
       # dist/ 被 .gitignore 忽略，而测试 import 的是它 —— 不先构建，干净检出上测试必报模块找不到。
-      - run: node node_modules/typescript/bin/tsc -p tsconfig.json
-      - run: node node_modules/typescript/bin/tsc --noEmit
-      - run: node node_modules/eslint/bin/eslint.js .
-      - run: node node_modules/prettier/bin/prettier.cjs --check "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" ".github/**/*.yml"
-      # 与本地门禁同一条入口，包括替身参数 —— 否则两边跑的降级路径不同。
-      - run: node --import ./test/stubs/register.mjs test/run.mjs
+      # 与本地门禁**同一条命令**（10 项），包括测试的替身参数 —— 否则两边跑的降级路径不同。
+      # 为什么不再逐条重列：2026-10-21 审核发现这里原本只跑了 5 步，阈值登记（thresholds）、
+      # 阈值来历评审（thresholds-review）、来历查询（thresholds-query）、文档一致性（docs）、
+      # 日志边界（log-boundary）五项从未在 CI 上跑过。逐条复制清单早晚会再漏一项。
+      - run: node scripts/check-all.mjs
 
       # 真实模型验证不进 CI：要下载模型、耗时数十秒，且必须是网络可用时才跑。
       # 它们由维护者在合并前手动执行（详见 docs/DEVELOPMENT.md）。

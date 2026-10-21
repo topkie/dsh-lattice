@@ -25,8 +25,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/*.mjs\" \".github/**/*.yml\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/*.mjs\" \".github/**/*.yml\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/**/*.mjs\" \"lib/**/*.js\" \".github/**/*.yml\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/**/*.mjs\" \"lib/**/*.js\" \".github/**/*.yml\"",
     "test": "node --import ./test/stubs/register.mjs test/run.mjs",
     "check": "node scripts/check-all.mjs"
   },

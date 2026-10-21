@@ -803,6 +803,12 @@ if (has('doc-keys')) {
 }
 
 const scanned = decls.filter((d) => d.value !== null)
+// 扫描结果为空时，「没有未登记项」也恒成立 —— 那是扫描器坏了，不是「都登记了」。
+// 这类恒真的通过比没有检查更糟：它看起来在工作。
+if (scanned.length === 0) {
+  console.error('覆盖核对扫到 0 个数值常量：扫描器或源码目录有问题，不是「已全部登记」。')
+  process.exit(1)
+}
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
 
