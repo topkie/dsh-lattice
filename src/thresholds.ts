@@ -2519,17 +2519,35 @@ export interface ReviewBaseline {
 }
 
 /**
+ * 冻结的存量名册（`thresholds-inventory.json`）：基线里允许出现的名字只能来自这里。
+ *
+ * 「只收存量」如果拿登记表当判据，新增条目也在登记表里，等于没判 —— 加一条新条目、
+ * 写进基线，红就消了。名册是一份不再自动增长的名单：新条目要进基线，得先把名字加进名册，
+ * 那一步在代码评审里看得见。
+ */
+export interface ReviewInventory {
+  names: readonly string[]
+}
+
+/**
  * 检查评审基线，返回问题清单（空数组 = 通过）。四条规则：
  *
- * 1. 基线里的名字必须是登记表里真实存在的条目 —— 「凭空加一个名字」与「条目删了、基线还在」
- *    都在这里报（后者就是「删除时留转到哪去了」的机器检查面：条目真删了，基线要一起删）；
+ * 1. 基线里的名字必须在**冻结名册**（`thresholds-inventory.json`）里 —— 「凭空加一个名字」
+ *    与「新增条目靠写进基线消红」都在这里报；名册里的名字也必须仍在登记表里，条目改名或
+ *    删除时两处一起改（后者就是「删除时留转到哪去了」的机器检查面）；
  * 2. 每条必须写理由，空字符串不算；
  * 3. 当前查询结果 ⊆ 基线 —— 代码里新出现一个待评审条目，不能靠把它塞进基线消掉；
  * 4. 基线里当前已不在结果中的项不报错，只算「已解决」，允许删 —— 基线只允许变短。
  */
-export function reviewBaselineProblems(baseline: ReviewBaseline): string[] {
-  const known = new Set(THRESHOLDS.map((e) => e.name))
+export function reviewBaselineProblems(baseline: ReviewBaseline, inventory: ReviewInventory): string[] {
+  const registered = new Set(THRESHOLDS.map((e) => e.name))
+  const frozen = new Set(inventory.names)
   const problems: string[] = []
+  for (const name of inventory.names) {
+    if (!registered.has(name)) {
+      problems.push('冻结名册里的 ' + name + ' 不在登记表里 —— 条目改了名或删了，名册要一起改')
+    }
+  }
   const queries: readonly (readonly [keyof ReviewBaseline, ThresholdEntry[]])[] = [
     ['needsReview', needsReviewEntries()],
     ['unguarded', unguardedEntries()],
@@ -2541,8 +2559,13 @@ export function reviewBaselineProblems(baseline: ReviewBaseline): string[] {
       continue
     }
     for (const [name, why] of Object.entries(list)) {
-      if (!known.has(name)) {
-        problems.push(key + '：基线里的 ' + name + ' 不在登记表里（条目改名或删了，基线要一起改/删）')
+      if (!frozen.has(name)) {
+        problems.push(
+          key +
+            '：基线里的 ' +
+            name +
+            ' 不在冻结名册里 —— 新增条目不能靠写进基线消掉；确属历史债务的，先把名字加进 thresholds-inventory.json',
+        )
       }
       if (typeof why !== 'string' || why.trim() === '') {
         problems.push(key + '：' + name + ' 没有写理由 —— 基线的每一项都要说明为什么现在补不了')

@@ -106,8 +106,22 @@ function checkReviewBaseline() {
     console.error('修法：修好 JSON 语法；去哪看：docs/DEVELOPMENT.md「阈值登记」。')
     process.exit(1)
   }
+  const INVENTORY = join(ROOT, 'thresholds-inventory.json')
+  if (!existsSync(INVENTORY)) {
+    console.error('冻结名册不存在：thresholds-inventory.json')
+    console.error('修法：它是存量的名字列表，不要凭空生成；从上一个版本恢复。')
+    console.error('去哪看：docs/DEVELOPMENT.md「阈值登记」一节。')
+    process.exit(1)
+  }
+  let inventory
+  try {
+    inventory = JSON.parse(readFileSync(INVENTORY, 'utf8'))
+  } catch (err) {
+    console.error('冻结名册不是合法 JSON：' + err.message)
+    process.exit(1)
+  }
   const current = { needsReview: QUERIES['needs-review'](), unguarded: QUERIES.unguarded() }
-  const problems = reviewBaselineProblems(baseline)
+  const problems = reviewBaselineProblems(baseline, inventory)
   // 「已解决」= 基线里当前不再出现的项：不报错，只提示可以删（基线只允许变短）。
   let resolved = 0
   for (const [key, rows] of [

@@ -4,7 +4,8 @@
 //   ① 构造器的类型约束：chosen 的第二参数传对象必须编译报错（用 TypeScript 编译器 API
 //      检查一个带 @ts-expect-error 的用例文件；删掉那行注释，本测试就会红）；
 //   ② 三个查询按判据列条目，且只处理迁移过的（有 origin 的）条目；
-//   ③ 评审基线的四条规则各构造一次：凭空加名、删理由、改名、删一条已解决的项。
+//   ③ 评审基线的规则各构造一次：凭空加名、已登记但不在冻结名册的条目写进基线、删理由、
+//      改名、删一条已解决的项。
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,6 +25,9 @@ import {
 
 const TYPES_FILE = fileURLToPath(new URL('./thresholds-origin.types.ts', import.meta.url))
 const BASELINE_FILE = fileURLToPath(new URL('../thresholds-review-baseline.json', import.meta.url))
+const INVENTORY = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../thresholds-inventory.json', import.meta.url)), 'utf8'),
+)
 
 describe('阈值来历：构造器的类型', () => {
   it('chosen 的第二参数传对象时编译报错（@ts-expect-error 用例，诊断数必须为 0）', () => {
@@ -211,17 +215,31 @@ describe('阈值来历：评审基线的四条规则', () => {
 
   it('规则 1：基线里凭空加一个名字 → 红', () => {
     const bad = { ...baseline, unguarded: { ...baseline.unguarded, NOT_A_THRESHOLD: '凑数' } }
-    const problems = reviewBaselineProblems(bad)
+    const problems = reviewBaselineProblems(bad, INVENTORY)
     assert.ok(
-      problems.some((p) => p.includes('NOT_A_THRESHOLD') && p.includes('不在登记表里')),
-      '应报「不在登记表里」：' + problems.join(' / '),
+      problems.some((p) => p.includes('NOT_A_THRESHOLD') && p.includes('不在冻结名册里')),
+      '应报「不在冻结名册里」：' + problems.join(' / '),
+    )
+  })
+
+  it('规则 1 补：已登记但不在冻结名册的条目写进基线 → 红（新增条目不能靠加基线消红）', () => {
+    const name = THRESHOLDS.map((e) => e.name).find(
+      (n) => !(n in baseline.unguarded) && !(n in baseline.needsReview),
+    )
+    assert.ok(name !== undefined, '需要至少一条当前不在基线里的已登记条目')
+    const thinned = { names: INVENTORY.names.filter((n) => n !== name) }
+    const bad = { ...baseline, unguarded: { ...baseline.unguarded, [name]: '刚加的新条目' } }
+    const problems = reviewBaselineProblems(bad, thinned)
+    assert.ok(
+      problems.some((p) => p.includes(name) && p.includes('不在冻结名册里')),
+      '应报「不在冻结名册里」：' + problems.join(' / '),
     )
   })
 
   it('规则 2：删掉某条理由 → 红', () => {
     const name = Object.keys(baseline.needsReview)[0]
     const bad = { ...baseline, needsReview: { ...baseline.needsReview, [name]: '' } }
-    const problems = reviewBaselineProblems(bad)
+    const problems = reviewBaselineProblems(bad, INVENTORY)
     assert.ok(
       problems.some((p) => p.includes(name) && p.includes('没有写理由')),
       '应报「没有写理由」：' + problems.join(' / '),
@@ -233,14 +251,14 @@ describe('阈值来历：评审基线的四条规则', () => {
     const list = { ...baseline.unguarded }
     delete list[name]
     list.NOT_A_THRESHOLD = baseline.unguarded[name]
-    const problems = reviewBaselineProblems({ ...baseline, unguarded: list })
+    const problems = reviewBaselineProblems({ ...baseline, unguarded: list }, INVENTORY)
     assert.ok(
       problems.some((p) => p.includes(name) && p.includes('新增的待评审条目')),
       '应报「新增的待评审条目」：' + problems.join(' / '),
     )
     assert.ok(
-      problems.some((p) => p.includes('NOT_A_THRESHOLD') && p.includes('不在登记表里')),
-      '应报「不在登记表里」：' + problems.join(' / '),
+      problems.some((p) => p.includes('NOT_A_THRESHOLD') && p.includes('不在冻结名册里')),
+      '应报「不在冻结名册里」：' + problems.join(' / '),
     )
   })
 
@@ -253,9 +271,9 @@ describe('阈值来历：评审基线的四条规则', () => {
       ...baseline,
       unguarded: { ...baseline.unguarded, [resolved.name]: '已解决，待删' },
     }
-    assert.deepEqual(reviewBaselineProblems(withExtra), [], '多余项不该让它变红')
+    assert.deepEqual(reviewBaselineProblems(withExtra, INVENTORY), [], '多余项不该让它变红')
     const removed = { ...withExtra, unguarded: { ...withExtra.unguarded } }
     delete removed.unguarded[resolved.name]
-    assert.deepEqual(reviewBaselineProblems(removed), [], '删掉「已解决」项后应仍通过')
+    assert.deepEqual(reviewBaselineProblems(removed, INVENTORY), [], '删掉「已解决」项后应仍通过')
   })
 })
