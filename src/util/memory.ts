@@ -9,6 +9,7 @@
 // 免得下一个人只看到一行算式而不知道它从哪来。
 
 import { totalmem } from 'node:os'
+import type { ThresholdValue } from '../threshold-types.js'
 
 /** 资源参数取值。 */
 export interface ResourceParams {
@@ -47,34 +48,131 @@ export interface ResourceOverrides {
 // 改的时候也知道改的是哪一条规则。
 
 /** mmap 窗口的固定上限。 */
-export const MMAP_LIMIT_BYTES = 256 * 1024 * 1024
+export const MMAP_LIMIT_BYTES = (256 * 1024 * 1024) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '本机推导规则的上限、不是标定值：256 MB 是写死的上限，与「内存的八分之一」取更小者；上限本身是容量选择'
+    failsWhen: ['机器内存', '库文件大小']
+    guardedBy: ['test/memory.test.mjs']
+    affects: 'mmap 窗口上限'
+    diverges: '**已从常量改成推导值**（M1 待办一第 2、3 项），但仍是一个写死的上限'
+    display: '{v} MB（上限，与「内存的八分之一」取更小者）'
+    unit: 'MB'
+  }
+>
 
 /** mmap 上限同时受「机器内存的几分之一」约束（取更小者）。 */
-export const MMAP_MEMORY_DIVISOR = 8
+export const MMAP_MEMORY_DIVISOR = 8 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '八分之一是经验取法（mmap 是虚拟地址占用，但被访问的页会驻留物理内存）；比例取值是选择，无记录'
+    failsWhen: ['机器内存', '库的访问局部性']
+    affects: 'mmap 上限的第二个约束：与固定 256 MB 取更小者'
+    display: '{v}（内存的八分之一）'
+  }
+>
 
 /** mmap 相对库文件的倍数：让整个库文件能落进窗口。 */
-export const MMAP_GROWTH = 1.5
+export const MMAP_GROWTH = 1.5 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '1.5 只为留一点余量让整个库文件进窗口，没有实测出处'
+    failsWhen: ['库文件大小']
+    affects: 'mmap 目标窗口相对库文件大小的倍数：让整个库文件能落进窗口'
+    display: '库文件的 {v} 倍'
+    unit: 'x'
+  }
+>
 
 /** mmap 下限，也是「还不知道库多大」时的默认窗口。 */
-export const MMAP_FLOOR_BYTES = 64 * 1024 * 1024
+export const MMAP_FLOOR_BYTES = (64 * 1024 * 1024) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '库很小时也至少给这么多的下限是容量选择；与上限同处的 1.5 倍 / 八分之一 / 64 MB 三个数都没有出处'
+    failsWhen: ['机器内存']
+    guardedBy: ['test/memory.test.mjs']
+    affects: 'mmap 窗口下限（库很小时也至少给这么多）'
+    display: '{v} MB（下限）'
+    unit: 'MB'
+  }
+>
 
 /** 页缓存占机器内存的比例。 */
-export const CACHE_RATIO = 0.05
+export const CACHE_RATIO = 0.05 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '页缓存占内存多少是取舍：SQLite 默认只有 2 MB，对万级 atom 偏小，也不能无上限；5% 没有实测依据'
+    failsWhen: ['机器内存', '库的访问模式']
+    affects: 'SQLite 页缓存目标大小（内存 × 5%）'
+    display: '内存的 {v}%'
+    unit: '%'
+  }
+>
 
 /** 页缓存下限（SQLite 默认只有 2 MB，对万级 atom 偏小）。 */
-export const CACHE_FLOOR_BYTES = 16 * 1024 * 1024
+export const CACHE_FLOOR_BYTES = (16 * 1024 * 1024) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '页缓存下限是容量选择，无记录（同 CACHE_RATIO）'
+    failsWhen: ['机器内存']
+    guardedBy: ['test/memory.test.mjs']
+    affects: '页缓存下限'
+    display: '{v} MB'
+    unit: 'MB'
+  }
+>
 
 /** 页缓存上限（大内存机器上按 5% 算会凭空多占几百 MB，而收益早已饱和）。 */
-export const CACHE_CEIL_BYTES = 128 * 1024 * 1024
+export const CACHE_CEIL_BYTES = (128 * 1024 * 1024) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '页缓存上限是容量选择，无记录（同 CACHE_RATIO）'
+    failsWhen: ['机器内存']
+    guardedBy: ['test/memory.test.mjs']
+    affects: '页缓存上限'
+    display: '{v} MB'
+    unit: 'MB'
+  }
+>
 
 /** 写锁等待的下限。 */
-export const BUSY_TIMEOUT_FLOOR_MS = 5000
+export const BUSY_TIMEOUT_FLOOR_MS = 5000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '写锁等待的下限本身是选择：实测的单条写入耗时只能说明「等这么久够排下很多次写入」，与该值之间没有算式（乘 200 也没有出处）'
+    failsWhen: ['磁盘延迟', '并发写入压力']
+    guardedBy: ['test/memory.test.mjs']
+    affects: '写锁等待下限：max(5000, 单条写入耗时 × 200)'
+    diverges: '**这个数同时是「本机实测」的产物**：3.5 ms × 200 里的 200 与 3.5 都没有文档出处'
+    display: '{v} ms'
+    unit: 'ms'
+  }
+>
 
 /** 实测的单条写入耗时（毫秒）：慢盘上按它放大等待时间，而不是拍一个更大的常数。 */
-export const WRITE_COST_MEASURED_MS = 3.5
+export const WRITE_COST_MEASURED_MS = 3.5 satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '无脚本（本机磁盘上写一条记录并计时）'
+    finding: '本机磁盘单条写入 3.5 ms，写锁等待时间以它为基数；换机器后这个数会变，届时等待时间自动跟着变'
+    failsWhen: ['磁盘延迟', '机器负载']
+    affects: '写锁等待时间的推导基数：慢盘上按它放大，而不是拍一个更大的常数'
+    display: '{v} ms（本机实测的单条写入耗时）'
+    unit: 'ms'
+  }
+>
 
 /** 等待时间相对单条写入耗时的倍数。 */
-export const BUSY_TIMEOUT_MULTIPLIER = 200
+export const BUSY_TIMEOUT_MULTIPLIER = 200 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '200 由「一次等待里最多排几次写入」这个取舍决定，没有实测出处'
+    failsWhen: ['并发写入压力']
+    affects: '等待时间 = 单条写入耗时 × 200（约能排下几百次写入）'
+    display: '{v} 倍'
+    unit: 'x'
+  }
+>
 
 /**
  * 推导资源参数。

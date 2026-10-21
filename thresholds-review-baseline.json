@@ -5,7 +5,6 @@
     "DEFAULT_THRESHOLDS.tauNew": "T52 记录：工具是从 tauJoin 那条推断的，数值与条件都没有记录。补要先确认这次测量是否覆盖 tauNew 的判据，再记条件。",
     "DEFAULT_THRESHOLDS.tauLexOnly": "原记录只有「已实测标定」一句，数值、脚本、模型与语料规模都没留下。补要重新做一次标定。",
     "DUP_LEX": "T52 记录：标定语料是构造的对照句对（「系统代理必须走本地端口……」对「系统代理配置本地端口……」），没有句对数，也没有模型名。补要拿一组真实改写句对重做一次，并记下句对与模型。",
-    "WRITE_COST_MEASURED_MS": "T52 记录：本机磁盘上的单条写入实测，没有记写入了多少条、也没有记是什么盘；模型与规模都没有。补要在同一台机器上重测并记下条数与磁盘类型。",
     "RECALIBRATE_DRIFT": "T52 记录：U9 噪声实测只记了「192 维」—— 那是向量维度，不是语料规模；采样伪查询条数与模型都没记。补要重跑一次噪声测量并记下伪查询条数与模型。"
   },
   "unguarded": {
@@ -66,11 +65,6 @@
     "REVIEW_MEMBER_SCAN_MS": "单条比对耗时是实测值，没有测试按常量名断言；随成员正文长度与向量维度变化。",
     "SPLIT_SEGMENTS_MAX": "meta 的段数映射上限没有测试按常量名断言；测试断言的是「段数未知时退回固定串」这条行为。",
     "SPLIT_SCENE_CHARS": "锚行的查询词截断没有测试按常量名断言；测试断言锚行含「用于：<查询词>」，未断言截断长度。",
-    "CACHE_RATIO": "页缓存比例没有测试按常量名断言（test/memory.test.mjs 只导入上下限三个常量）；5% 本身也没有实测依据。",
-    "MMAP_MEMORY_DIVISOR": "内存八分之一的除数没有测试按常量名断言；测试断言的是推导结果的数值。",
-    "MMAP_GROWTH": "库文件倍数没有测试按常量名断言；测试用显式库大小断言窗口被上限压住。",
-    "WRITE_COST_MEASURED_MS": "test/memory.test.mjs 覆盖 src/util/memory.ts，但没有出现该常量名；测量条件（条数与盘）也没记。",
-    "BUSY_TIMEOUT_MULTIPLIER": "倍数没有测试按常量名断言；测试只断言 busyTimeout 的下限常量。",
     "FORGOTTEN_SCAN_LIMIT": "test/forget.test.mjs 覆盖 src/pipeline/forget.ts，但没有出现该常量名；墓碑扫描上限是资源上限，正常库用不到这个规模。",
     "RECLUSTER_PLAN_DELAY_MS": "test/recluster-plan.test.mjs 覆盖 src/cluster/executor.ts，但未出现该常量名，也没有 delay / 3000 字样；它是产品口味，测试走的是行为路径。",
     "DEFAULT_KNN_K": "聚类质量只在 T16 探针里对照过；测试用默认值跑聚类行为，断言的是簇的形状，没有按常量名钉住 k=2。",

@@ -37,6 +37,7 @@ import {
   definitionSite,
   displayProblems,
   divergenceProblems,
+  inventoryProblems,
   needsReviewEntries,
   reviewBaselineProblems,
   subKeys,
@@ -121,7 +122,8 @@ function checkReviewBaseline() {
     process.exit(1)
   }
   const current = { needsReview: QUERIES['needs-review'](), unguarded: QUERIES.unguarded() }
-  const problems = reviewBaselineProblems(baseline, inventory)
+  const known = new Set([...THRESHOLDS.map((e) => e.name), ...typeEntries.map((e) => e.name)])
+  const problems = [...inventoryProblems(inventory, known), ...reviewBaselineProblems(baseline, inventory)]
   // 「已解决」= 基线里当前不再出现的项：不报错，只提示可以删（基线只允许变短）。
   let resolved = 0
   for (const [key, rows] of [
@@ -160,10 +162,7 @@ if (QUERY_MODE !== undefined) {
   renderQuery(QUERY_MODE)
   process.exit(0)
 }
-if (has('check-review')) {
-  checkReviewBaseline()
-  process.exit(0)
-}
+// `--check-review` 的分派在文件末尾：它需要扫描结果（双来源），这里还没有。
 
 // ─────────────────────────── ① 源码扫描：AST ───────────────────────────
 
@@ -263,6 +262,8 @@ const EXEMPT_NON_NUMERIC = {
  */
 function numericValue(node) {
   if (ts.isNumericLiteral(node)) return Number(node.text.replace(/_/g, ''))
+  // `X satisfies T` 的值就是 X —— 来历在类型参数里，值仍要能被扫描器求值（T65 阶段 2）。
+  if (ts.isSatisfiesExpression(node)) return numericValue(node.expression)
   if (ts.isParenthesizedExpression(node)) return numericValue(node.expression)
   if (ts.isPrefixUnaryExpression(node)) {
     const v = numericValue(node.operand)
@@ -544,6 +545,84 @@ function zodProblems() {
   return problems
 }
 
+// ── 类型参数来源（T65 阶段 2）──────────────────────────────────────────────
+//
+// 常量在定义处带 `satisfies ThresholdValue<…>` 的，来历就在这里，表里不再登记。
+// 这一层把两种来源拼成同一个形状，后面的打印、对照、断言都只认 ENTRIES。
+//
+// area 不在来历里：它是分类，不是「为什么取这个值」。用文件到 area 的映射补齐；
+// 未映射的文件落到「其他」—— 搬新 area 时在这里加一行。
+const FILE_AREA = {
+  'src/util/memory.ts': '资源',
+  'src/util/vec.ts': '资源',
+}
+
+/** 只收浮点尾巴，不取整（与 thresholds.ts 里 display 函数用的那份一致）。 */
+function displayNumber(x) {
+  return Number(Number(x).toPrecision(12))
+}
+
+/**
+ * 显示文本：`display` 是模板（`{v}` 是值），`unit` 决定值怎么换算成人读的单位。
+ *
+ * 为什么不是函数：函数进不了类型参数。模板 + 单位能表达全部现有形态（含「库文件的 {v} 倍」
+ * 这类前缀），而且值仍然活的 —— 模板里的 {v} 每次打印时按当前值替换。
+ */
+function displayFrom(meta, value) {
+  const unit = typeof meta.unit === 'string' ? meta.unit : null
+  const scaled =
+    unit === 'MB'
+      ? displayNumber(value / 1024 / 1024)
+      : unit === 'h'
+        ? displayNumber(value / 3600000)
+        : unit === '%'
+          ? displayNumber(value * 100)
+          : String(value)
+  const tpl = typeof meta.display === 'string' ? meta.display : null
+  if (tpl !== null) return tpl.split('{v}').join(scaled)
+  if (unit === 'ms') return scaled + ' ms'
+  if (unit === 'MB') return scaled + ' MB'
+  if (unit === 'h') return scaled + ' 小时'
+  if (unit === 'x') return scaled + ' 倍'
+  if (unit === '%') return '内存的 ' + scaled + '%'
+  return undefined
+}
+
+const typeEntries = decls
+  .filter((d) => d.origin !== null && d.value !== null)
+  .map((d) => {
+    const meta = d.origin.meta
+    const origin =
+      d.origin.kind === 'recheckable'
+        ? {
+            kind: 'recheckable',
+            tool: typeof meta.tool === 'string' ? meta.tool : '无脚本',
+            finding: typeof meta.finding === 'string' ? meta.finding : '',
+            ...(typeof meta.scale === 'string' ? { scale: meta.scale } : {}),
+            ...(typeof meta.at === 'string' ? { at: meta.at } : {}),
+            ...(meta.formula !== undefined ? { formula: true } : {}),
+          }
+        : { kind: 'chosen', why: typeof meta.why === 'string' ? meta.why : '' }
+    return {
+      name: d.name,
+      area: FILE_AREA[d.file] ?? '其他',
+      value: () => d.value,
+      definedBy: { file: d.file, name: d.name },
+      affects: typeof meta.affects === 'string' ? meta.affects : '',
+      variesWith: Array.isArray(meta.failsWhen) ? meta.failsWhen : [],
+      display: displayFrom(meta, d.value),
+      diverges: typeof meta.diverges === 'string' ? meta.diverges : undefined,
+      calibration: {
+        origin,
+        ...(Array.isArray(meta.guardedBy) ? { guardedBy: meta.guardedBy } : {}),
+      },
+      constName: d.name,
+    }
+  })
+
+/** 打印与对照的唯一入口：表里的条目 + 常量定义处的条目。 */
+const ENTRIES = [...THRESHOLDS, ...typeEntries]
+
 const scanned = decls.filter((d) => d.value !== null)
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
@@ -555,7 +634,21 @@ const exprCount = scanned.filter((d) => d.form === 'expression').length
 //   2. 声明了 divergence.docValue 的，分叉必须真的存在（相等 = 这条该删）；
 //      条目有 design 时，docValue 还必须等于 design.default（同一事实的两份记录）；
 //   3. refs 指向的文件存在、符号在文件里出现 —— 行号会漂，符号不会。
-const ORIGIN_FIELDS = new Set(['measured', 'decided', 'failsWhen', 'guardedBy', 'affects'])
+const ORIGIN_FIELDS = new Set([
+  'finding',
+  'why',
+  'tool',
+  'scale',
+  'at',
+  'formula',
+  'failsWhen',
+  'guardedBy',
+  'affects',
+  'diverges',
+  'unit',
+  'note',
+  'display',
+])
 const ORIGIN_KINDS = new Set(['recheckable', 'chosen'])
 
 /** 类型参数里的字段白名单与 kind 合法性（T65 阶段 1）：写错字段名不会编译报错，只能在这里抓。 */
@@ -575,7 +668,7 @@ function thresholdOriginProblems() {
           where +
           '）：类型参数里有不认识的字段 ' +
           key +
-          ' —— 只允许 measured / decided / failsWhen / guardedBy / affects',
+          ' —— 只允许 finding / why / tool / scale / at / formula / failsWhen / guardedBy / affects / diverges / unit / note / display',
       )
     }
   }
@@ -619,7 +712,7 @@ function originLabel(entry) {
 const missingAnchors = []
 const rows = []
 
-for (const entry of THRESHOLDS) {
+for (const entry of ENTRIES) {
   const line = locate(entry)
   const { file } = definitionSite(entry)
   if (line === null && entry.external === undefined) missingAnchors.push(entry.name + ' @ ' + file)
@@ -913,6 +1006,12 @@ if (QUIET) {
   console.log(keep.join('\n'))
 } else {
   console.log(out.join('\n'))
+}
+
+// `--check-review` 只查评审基线，与其他检查独立；放在覆盖核对之前，免得被它们的失败挡住。
+if (has('check-review')) {
+  checkReviewBaseline()
+  process.exit(0)
 }
 
 if (unregistered.length > 0 || missingAnchors.length > 0 || bypassed.length > 0) {

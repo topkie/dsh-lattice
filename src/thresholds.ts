@@ -106,18 +106,6 @@ import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } 
 import { SPLIT_CONFIRMED_MAX, SPLIT_SEGMENTS_MAX } from './pipeline/split.js'
 import { RECLUSTER_PLAN_DELAY_MS } from './cluster/executor.js'
 import {
-  BUSY_TIMEOUT_FLOOR_MS,
-  BUSY_TIMEOUT_MULTIPLIER,
-  CACHE_CEIL_BYTES,
-  CACHE_FLOOR_BYTES,
-  CACHE_RATIO,
-  MMAP_FLOOR_BYTES,
-  MMAP_GROWTH,
-  MMAP_LIMIT_BYTES,
-  MMAP_MEMORY_DIVISOR,
-  WRITE_COST_MEASURED_MS,
-} from './util/memory.js'
-import {
   RECALIBRATE_COOLDOWN_MS,
   RECALIBRATE_DRIFT,
   RECALIBRATE_MIN_ATOMS,
@@ -151,7 +139,6 @@ import {
   REVIEW_SEGMENT_MS,
   REVIEW_WRITE_BUDGET_MS,
 } from './pipeline/review.js'
-import { VEC_DIM } from './util/vec.js'
 import { DEFAULT_ALIGN_COS } from './cluster/align.js'
 import { DEFAULT_KNN_K } from './cluster/graph.js'
 import { DEFAULT_MIN_CLUSTER_SIZE } from './cluster/hierarchy.js'
@@ -1669,156 +1656,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['成员正文长度', '向量维度'],
   },
   // ──────────────────────── 资源参数（util/memory.ts）─────────────────────────
-  {
-    name: 'MMAP_LIMIT_BYTES',
-    area: '资源',
-    ...chosen(
-      () => MMAP_LIMIT_BYTES,
-      '本机推导规则的上限、不是标定值：256 MB 是写死的上限，与「内存的八分之一」取更小者；' +
-        '上限本身是容量选择',
-      { guardedBy: ['test/memory.test.mjs'] },
-    ),
-    display: () =>
-      `${displayNumber(MMAP_LIMIT_BYTES / 1024 / 1024)} MB（上限，与「内存的八分之一」取更小者）`,
-    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_LIMIT_BYTES' },
-    affects: 'mmap 窗口上限',
-    variesWith: ['机器内存', '库文件大小'],
-    diverges: '**已从常量改成推导值**（M1 待办一第 2、3 项），但仍是一个写死的上限',
-  },
-  {
-    name: 'MMAP_FLOOR_BYTES',
-    area: '资源',
-    ...chosen(
-      () => MMAP_FLOOR_BYTES,
-      '库很小时也至少给这么多的下限是容量选择；与上限同处的 1.5 倍 / 八分之一 / 64 MB 三个数都没有出处',
-      { guardedBy: ['test/memory.test.mjs'] },
-    ),
-    display: () => `${displayNumber(MMAP_FLOOR_BYTES / 1024 / 1024)} MB（下限）`,
-    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_FLOOR_BYTES' },
-    affects: 'mmap 窗口下限（库很小时也至少给这么多）',
-    variesWith: ['机器内存'],
-  },
-  {
-    name: 'CACHE_RATIO',
-    area: '资源',
-    ...chosen(
-      () => CACHE_RATIO,
-      '页缓存占内存多少是取舍：SQLite 默认只有 2 MB，对万级 atom 偏小，也不能无上限；5% 没有实测依据',
-    ),
-    display: () => `内存的 ${displayNumber(CACHE_RATIO * 100)}%`,
-    definedBy: { file: 'src/util/memory.ts', name: 'CACHE_RATIO' },
-    affects: 'SQLite 页缓存目标大小（内存 × 5%）',
-    variesWith: ['机器内存', '库的访问模式'],
-  },
-  {
-    name: 'CACHE_FLOOR_BYTES',
-    area: '资源',
-    ...chosen(() => CACHE_FLOOR_BYTES, '页缓存下限是容量选择，无记录（同 CACHE_RATIO）', {
-      guardedBy: ['test/memory.test.mjs'],
-    }),
-    display: () => `${displayNumber(CACHE_FLOOR_BYTES / 1024 / 1024)} MB`,
-    definedBy: { file: 'src/util/memory.ts', name: 'CACHE_FLOOR_BYTES' },
-    affects: '页缓存下限',
-    variesWith: ['机器内存'],
-  },
-  {
-    name: 'CACHE_CEIL_BYTES',
-    area: '资源',
-    ...chosen(() => CACHE_CEIL_BYTES, '页缓存上限是容量选择，无记录（同 CACHE_RATIO）', {
-      guardedBy: ['test/memory.test.mjs'],
-    }),
-    display: () => `${displayNumber(CACHE_CEIL_BYTES / 1024 / 1024)} MB`,
-    definedBy: { file: 'src/util/memory.ts', name: 'CACHE_CEIL_BYTES' },
-    affects: '页缓存上限',
-    variesWith: ['机器内存'],
-  },
-  {
-    name: 'BUSY_TIMEOUT_FLOOR_MS',
-    area: '资源',
-    ...chosen(
-      () => BUSY_TIMEOUT_FLOOR_MS,
-      '写锁等待的下限本身是选择：实测的单条写入耗时只能说明「等这么久够排下很多次写入」，' +
-        '与该值之间没有算式（乘 200 也没有出处）',
-      { guardedBy: ['test/memory.test.mjs'] },
-    ),
-    display: () => `${BUSY_TIMEOUT_FLOOR_MS} ms`,
-    definedBy: { file: 'src/util/memory.ts', name: 'BUSY_TIMEOUT_FLOOR_MS' },
-    affects: '写锁等待下限：max(5000, 单条写入耗时 × 200)',
-    variesWith: ['磁盘延迟', '并发写入压力'],
-    diverges: '**这个数同时是「本机实测」的产物**：3.5 ms × 200 里的 200 与 3.5 都没有文档出处',
-  },
-  {
-    name: 'MMAP_MEMORY_DIVISOR',
-    area: '资源',
-    ...chosen(
-      () => MMAP_MEMORY_DIVISOR,
-      '八分之一是经验取法（mmap 是虚拟地址占用，但被访问的页会驻留物理内存）；比例取值是选择，无记录',
-    ),
-    display: () => `${MMAP_MEMORY_DIVISOR}（内存的八分之一）`,
-    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_MEMORY_DIVISOR' },
-    affects: 'mmap 上限的第二个约束：与固定 256 MB 取更小者',
-    variesWith: ['机器内存', '库的访问局部性'],
-  },
-  {
-    name: 'MMAP_GROWTH',
-    area: '资源',
-    ...chosen(() => MMAP_GROWTH, '1.5 只为留一点余量让整个库文件进窗口，没有实测出处'),
-    display: () => `库文件的 ${MMAP_GROWTH} 倍`,
-    definedBy: { file: 'src/util/memory.ts', name: 'MMAP_GROWTH' },
-    affects: 'mmap 目标窗口相对库文件大小的倍数：让整个库文件能落进窗口',
-    variesWith: ['库文件大小'],
-  },
-  {
-    name: 'WRITE_COST_MEASURED_MS',
-    area: '资源',
-    ...recheckable(() => WRITE_COST_MEASURED_MS, {
-      tool: '无脚本（本机磁盘上写一条记录并计时）',
-      finding: '本机磁盘单条写入 3.5 ms，写锁等待时间以它为基数；换机器后这个数会变，届时等待时间自动跟着变',
-    }),
-    display: () => `${WRITE_COST_MEASURED_MS} ms（本机实测的单条写入耗时）`,
-    definedBy: { file: 'src/util/memory.ts', name: 'WRITE_COST_MEASURED_MS' },
-    affects: '写锁等待时间的推导基数：慢盘上按它放大，而不是拍一个更大的常数',
-    variesWith: ['磁盘延迟', '机器负载'],
-  },
-  {
-    name: 'BUSY_TIMEOUT_MULTIPLIER',
-    area: '资源',
-    ...chosen(() => BUSY_TIMEOUT_MULTIPLIER, '200 由「一次等待里最多排几次写入」这个取舍决定，没有实测出处'),
-    display: () => `${BUSY_TIMEOUT_MULTIPLIER} 倍`,
-    definedBy: { file: 'src/util/memory.ts', name: 'BUSY_TIMEOUT_MULTIPLIER' },
-    affects: '等待时间 = 单条写入耗时 × 200（约能排下几百次写入）',
-    variesWith: ['并发写入压力'],
-  },
-  {
-    name: 'VEC_DIM',
-    area: '资源',
-    ...chosen(
-      () => VEC_DIM,
-      '向量长度必须等于编码模型的输出维度（bge-small-zh-v1.5 的输出维度，模型事实）：' +
-        '这是接口约束，不是测出来或调出来的数',
-      {
-        guardedBy: [
-          'test/encoder.test.mjs',
-          'test/graph.test.mjs',
-          'test/declared-edges.test.mjs',
-          'test/util.test.mjs',
-          'test/search.test.mjs',
-          'test/write.test.mjs',
-          'test/flags.test.mjs',
-          'test/forget.test.mjs',
-          'test/audit.test.mjs',
-          'test/archive.test.mjs',
-          'test/review.test.mjs',
-          'test/split-pending.test.mjs',
-          'test/cache-usage.test.mjs',
-        ],
-      },
-    ),
-    definedBy: { file: 'src/util/vec.ts', name: 'VEC_DIM' },
-    affects: '向量维度与 BLOB 长度校验；维度不匹配的向量被跳过而不是硬算',
-    variesWith: ['换编码模型'],
-    diverges: '**结构性常量**，登记它是为了换模型时能被一条命令查出来',
-  },
   // ─────────────────── 显式删除（forget.ts，T20 / §44）───────────────────────
   {
     name: 'FORGOTTEN_MIN_BIGRAMS',
@@ -2569,14 +2406,8 @@ export interface ReviewInventory {
  * 4. 基线里当前已不在结果中的项不报错，只算「已解决」，允许删 —— 基线只允许变短。
  */
 export function reviewBaselineProblems(baseline: ReviewBaseline, inventory: ReviewInventory): string[] {
-  const registered = new Set(THRESHOLDS.map((e) => e.name))
   const frozen = new Set(inventory.names)
   const problems: string[] = []
-  for (const name of inventory.names) {
-    if (!registered.has(name)) {
-      problems.push('冻结名册里的 ' + name + ' 不在登记表里 —— 条目改了名或删了，名册要一起改')
-    }
-  }
   const queries: readonly (readonly [keyof ReviewBaseline, ThresholdEntry[]])[] = [
     ['needsReview', needsReviewEntries()],
     ['unguarded', unguardedEntries()],
@@ -2609,6 +2440,23 @@ export function reviewBaselineProblems(baseline: ReviewBaseline, inventory: Revi
             ' 是新增的待评审条目，不能靠加基线消掉 —— 先补条件（编码模型 / 语料规模）或改判来历',
         )
       }
+    }
+  }
+  return problems
+}
+
+/**
+ * 冻结名册与「已知名字」的一致性：名册里的每个名字都必须真实存在。
+ *
+ * 为什么单独一个函数：`knownNames` 来自「登记表 + 常量定义处的 satisfies」（T65 的双来源），
+ * 这一层由打印脚本提供；基线自身的四条规则不依赖它。分成两个函数之后，基线规则可以纯函数单测，
+ * 名册检查跟着数据来源走。
+ */
+export function inventoryProblems(inventory: ReviewInventory, knownNames: ReadonlySet<string>): string[] {
+  const problems: string[] = []
+  for (const name of inventory.names) {
+    if (!knownNames.has(name)) {
+      problems.push('冻结名册里的 ' + name + ' 不在登记表里 —— 条目改了名或删了，名册要一起改')
     }
   }
   return problems

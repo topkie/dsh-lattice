@@ -1,3 +1,4 @@
+import type { ThresholdValue } from '../threshold-types.js'
 // 向量工具：float32 BLOB 编解码、余弦、归一化。
 //
 // **关键陷阱**：SQLite 返回的 BLOB 不保证 4 字节对齐——`node:sqlite` 给回的
@@ -8,7 +9,30 @@
 // 跨架构迁移备份时需另行转换——当前设计不涉及。
 
 /** 记忆向量维度（bge-small-zh-v1.5 输出 512 维）。 */
-export const VEC_DIM = 512
+export const VEC_DIM = 512 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '向量长度必须等于编码模型的输出维度（bge-small-zh-v1.5 的输出维度，模型事实）：这是接口约束，不是测出来或调出来的数'
+    failsWhen: ['换编码模型']
+    guardedBy: [
+      'test/encoder.test.mjs',
+      'test/graph.test.mjs',
+      'test/declared-edges.test.mjs',
+      'test/util.test.mjs',
+      'test/search.test.mjs',
+      'test/write.test.mjs',
+      'test/flags.test.mjs',
+      'test/forget.test.mjs',
+      'test/audit.test.mjs',
+      'test/archive.test.mjs',
+      'test/review.test.mjs',
+      'test/split-pending.test.mjs',
+      'test/cache-usage.test.mjs',
+    ]
+    affects: '向量维度与 BLOB 长度校验；维度不匹配的向量被跳过而不是硬算'
+    diverges: '**结构性常量**，登记它是为了换模型时能被一条命令查出来'
+  }
+>
 
 /** 单个向量的字节数。 */
 export const VEC_BYTES = VEC_DIM * 4
