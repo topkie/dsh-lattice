@@ -424,6 +424,84 @@ for (const [name, entry] of registered) {
   else nonNumericRegistered.push(name + '（' + hit.file + ':' + hit.line + '，非数值或派生）')
 }
 
+// ── zod schema 的现读（表里只记指针，不抄值）────────────────────────────────
+//
+// 表里原先抄了 zod 的 default / min / max 三项。schema 改了而表里没改，对照表拿旧值去比，
+// 结论仍然是「一致」—— 改动本身看不见。现在改成：表里只记 `{ file, name }`，
+// 值在这里从 src/index.ts 的 Config schema 现读。
+//
+// 为什么不用 import：src/index.ts 是插件入口，import 会执行注册逻辑。用编译器 API 读语法树。
+function parseZodSchemas() {
+  const rel = 'src/index.ts'
+  const text = readFileSync(join(ROOT, rel), 'utf8')
+  const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  let obj = null
+  const visit = (node) => {
+    if (
+      obj === null &&
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(sf) === 'Config' &&
+      node.initializer !== undefined &&
+      ts.isCallExpression(node.initializer) &&
+      node.initializer.arguments.length > 0 &&
+      ts.isObjectLiteralExpression(node.initializer.arguments[0])
+    ) {
+      obj = node.initializer.arguments[0]
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  const out = new Map()
+  if (obj === null) return out
+  for (const prop of obj.properties) {
+    if (!ts.isPropertyAssignment(prop)) continue
+    const key = prop.name.getText(sf).replace(/^['"]|['"]$/g, '')
+    const rec = { min: null, max: null, defaultLiteral: null, defaultIsRef: false }
+    const chain = []
+    let e = prop.initializer
+    while (ts.isCallExpression(e)) {
+      const callee = e.expression
+      if (!ts.isPropertyAccessExpression(callee)) break
+      chain.push({ method: callee.name.getText(sf), arg: e.arguments[0] })
+      e = callee.expression
+    }
+    for (const { method, arg } of chain) {
+      if ((method === 'min' || method === 'max') && arg !== undefined) rec[method] = numericValue(arg)
+      if (method === 'default' && arg !== undefined) {
+        const v = numericValue(arg)
+        rec.defaultLiteral = v
+        rec.defaultIsRef = v === null
+      }
+    }
+    out.set(key, rec)
+  }
+  return out
+}
+const ZOD = parseZodSchemas()
+
+// zod 登记项的两个断言：名字必须在 schema 里；`.default()` 必须引用常量，不能写字面量 ——
+// 写字面量就是「同一个值两处各写一份」，常量改了 schema 不跟，两处各自漂移。
+function zodProblems() {
+  const problems = []
+  for (const e of THRESHOLDS) {
+    if (e.zod === undefined) continue
+    const z = ZOD.get(e.zod.name)
+    if (z === undefined) {
+      problems.push(
+        e.name + '：zod 字段 ' + e.zod.name + ' 不在 ' + e.zod.file + ' 的 Config schema 里（改名了？）',
+      )
+      continue
+    }
+    if (z.defaultIsRef !== true) {
+      problems.push(e.name + '：zod 的 .default() 写成了字面量 —— 应引用常量，否则两处各写一份')
+    }
+    if (z.min === null || z.max === null) {
+      problems.push(e.name + '：zod 的 .min()/.max() 不是可静态求值的数字，对照表会缺范围')
+    }
+  }
+  return problems
+}
+
 const scanned = decls.filter((d) => d.value !== null)
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
@@ -435,7 +513,7 @@ const exprCount = scanned.filter((d) => d.form === 'expression').length
 //   2. 声明了 divergence.docValue 的，分叉必须真的存在（相等 = 这条该删）；
 //      条目有 design 时，docValue 还必须等于 design.default（同一事实的两份记录）；
 //   3. refs 指向的文件存在、符号在文件里出现 —— 行号会漂，符号不会。
-const assertionProblems = [...displayProblems(), ...divergenceProblems()]
+const assertionProblems = [...displayProblems(), ...divergenceProblems(), ...zodProblems()]
 const refSites = [
   ...THRESHOLDS.map((e) => [e.name, e.refs ?? []]),
   ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
@@ -573,26 +651,35 @@ for (const entry of THRESHOLDS) {
   // 对象型阈值组取与设计同名的那个子键（docs 叫 wVec，代码叫 vec）。
   const raw = currentValue(entry)
   const primary = d.codeKeys?.[0]
+  const zs = entry.zod === undefined ? undefined : ZOD.get(entry.zod.name)
+  // zod 的默认值：schema 里写成引用（.default(DEFAULT_THRESHOLDS.X)）就取当前常量值；
+  // 写成字面量时用它自己的数 —— 后者由 zodProblems 判红，这里只为让对照表能显示。
+  const zodDefault =
+    zs === undefined
+      ? undefined
+      : zs.defaultIsRef
+        ? typeof raw === 'number'
+          ? raw
+          : undefined
+        : zs.defaultLiteral
   const codeDefault =
     entry.group !== undefined && primary !== undefined && typeof raw === 'object'
       ? raw[primary]
       : entry.zod !== undefined
-        ? entry.zod.default
+        ? zodDefault
         : typeof raw === 'number'
           ? raw
           : undefined
   const sameDefault = codeDefault !== undefined && Math.abs(codeDefault - designInCodeUnits) < 1e-9
   const zodRange =
-    entry.zod === undefined
+    entry.zod === undefined || zs === undefined
       ? '无'
       : '[' +
-        entry.zod.min +
+        zs.min +
         ', ' +
-        entry.zod.max +
+        zs.max +
         ']' +
-        (d.min !== undefined && (entry.zod.min !== d.min || entry.zod.max !== d.max)
-          ? ' ⚠ 与文档范围不同'
-          : '')
+        (d.min !== undefined && (zs.min !== d.min || zs.max !== d.max) ? ' ⚠ 与文档范围不同' : '')
   const verdict =
     entry.zod === undefined && codeDefault === undefined
       ? '无代码默认可对'
@@ -601,13 +688,12 @@ for (const entry of THRESHOLDS) {
         : '**不一致**：文档 ' + designInCodeUnits + ' ｜ 代码 ' + codeDefault
   if (
     entry.zod !== undefined &&
-    Math.abs(entry.zod.default - designInCodeUnits) > 1e-9 &&
+    zodDefault !== undefined &&
+    Math.abs(zodDefault - designInCodeUnits) > 1e-9 &&
     entry.diverges === undefined &&
     entry.divergence === undefined
   ) {
-    unexplainedDiverges.push(
-      entry.name + '（设计 ' + designInCodeUnits + ' ｜ zod ' + entry.zod.default + '）',
-    )
+    unexplainedDiverges.push(entry.name + '（设计 ' + designInCodeUnits + ' ｜ zod ' + zodDefault + '）')
   }
   designRows.push({ name: entry.name, verdict })
   const cells = [
@@ -615,7 +701,7 @@ for (const entry of THRESHOLDS) {
     String(d.default) + (d.scale === undefined ? '' : '（百分数）'),
     d.min === undefined ? '—' : '[' + d.min + ', ' + d.max + ']',
     codeDefault === undefined ? '—' : String(codeDefault),
-    entry.zod === undefined ? '无此项' : String(entry.zod.default),
+    entry.zod === undefined || zs === undefined ? '无此项' : String(zodDefault),
     zodRange,
     verdict,
   ]
