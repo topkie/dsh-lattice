@@ -12,6 +12,7 @@
 //   node scripts/print-thresholds.mjs --unguarded      没有测试按常量名断言默认值的条目
 //   node scripts/print-thresholds.mjs --undated        可复算、非公式、但没有记录测量时间的条目（只是信息）
 //   node scripts/print-thresholds.mjs --check-review   评审基线检查（门禁调用；失败即非零退出）
+//   node scripts/print-thresholds.mjs --doc-keys       设计文档键名 → 常量 → 文档默认值（文档改动后定位条目）
 //
 // 三个查询只读登记表，不写库、不改源码；T54 迁移完成后每条都有 origin。
 //
@@ -43,6 +44,7 @@ import {
   reviewBaselineProblems,
   subKeys,
   undatedEntries,
+  unmovableProblems,
   unguardedEntries,
 } from '../dist/thresholds.js'
 
@@ -762,6 +764,46 @@ const typeEntries = decls
 /** 打印与对照的唯一入口：表里的条目 + 常量定义处的条目。 */
 const ENTRIES = [...THRESHOLDS, ...typeEntries]
 
+// `--doc-keys`：设计文档改了一条之后，用它找出受影响的条目（T65 阶段 4）。
+//
+// 原先设想把设计对照做成一份独立的台账文件。否定的理由是同一条判据：台账会成为仓库内的
+// 第二个数据来源。清单现生成就没有这个问题 —— 它不是文件，改不动，也就不存在忘了同步。
+if (has('doc-keys')) {
+  const withDesign = ENTRIES.filter((e) => e.design !== undefined)
+  const byDoc = new Map()
+  for (const e of withDesign) {
+    // 表里的条目存的是全名，定义处的存的是短名；分组前统一成全名，否则同一份文档会分成两节。
+    const k = DESIGN_DOCS[e.design.doc] ?? e.design.doc
+    if (!byDoc.has(k)) byDoc.set(k, [])
+    byDoc.get(k).push(e)
+  }
+  console.log('# --doc-keys：文档键名 → 常量 → 文档默认值（' + withDesign.length + ' 条）')
+  if (withDesign.length === 0) console.log('（没有带 design 的条目）')
+  for (const [doc, list] of byDoc) {
+    console.log('')
+    console.log('## ' + doc)
+    const sorted = [...list].sort((a, b) => a.design.key.localeCompare(b.design.key, 'zh'))
+    for (const e of sorted) {
+      const v = currentValue(e)
+      const code = typeof v === 'number' ? String(v) : '（非数值）'
+      const same = typeof v === 'number' && Math.abs(v - e.design.default) < 1e-9
+      console.log(
+        '- ' +
+          e.design.key +
+          ' ｜ ' +
+          e.name +
+          ' ｜ 文档默认 ' +
+          e.design.default +
+          ' ｜ 代码 ' +
+          code +
+          ' ｜ ' +
+          (same ? '一致' : '分叉（见 divergence / diverges）'),
+      )
+    }
+  }
+  process.exit(0)
+}
+
 const scanned = decls.filter((d) => d.value !== null)
 const bareCount = scanned.filter((d) => d.form === 'literal').length
 const exprCount = scanned.filter((d) => d.form === 'expression').length
@@ -836,6 +878,7 @@ const assertionProblems = [
   ...divergenceProblems(),
   ...zodProblems(),
   ...thresholdOriginProblems(),
+  ...unmovableProblems(),
 ]
 const refSites = [
   ...ENTRIES.map((e) => [e.name, e.refs ?? []]),
@@ -949,6 +992,26 @@ say(
   '- 缺编码模型或语料规模的见 --needs-review；没有按常量名断言的测试见 --unguarded；' +
     '没有测量时间的见 --undated。补不上的条件记在 thresholds-review-baseline.json。',
 )
+
+// 表里只剩搬不动的条目（T65 阶段 4）。这一节解释每一条为什么没搬走 —— 按理由分组，
+// 因为「对象组」与「外部包」的处置方式不同：前者等对象组拆分，后者只能等上游包改。
+if (THRESHOLDS.length > 0) {
+  say('')
+  say('## 留在表里的条目（搬不到常量定义处）')
+  say('')
+  say('表里只剩这些：能挂 `satisfies ThresholdValue<…>` 的都在常量定义处。`unmovable` 一列是理由。')
+  const groups = new Map()
+  for (const e of THRESHOLDS) {
+    const k = e.unmovable ?? '未写理由'
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k).push(e)
+  }
+  for (const [k, list] of groups) {
+    say('')
+    say('### ' + k + '（' + list.length + ' 条）')
+    for (const e of list) say('- ' + e.name + '（' + e.area + '）｜' + e.variesWith.join('；'))
+  }
+}
 
 // 设计文档对照
 say('')

@@ -26,10 +26,14 @@
 // 三层之间不互相抄写：默认值不在本表复制，快照不写回代码，报告内容不抄进登记表。
 // 这条边界与 `docs/ARCHITECTURE.md` 第十节「运行时可变状态」是同一套说法。
 //
-// **本册只记三件**：定义位置、可变条件、第二个取值点。配置类阈值既有模块默认值
-// （write.ts 的 DEFAULT_THRESHOLDS），又有 zod schema 的默认与范围（index.ts 的 Config）；
-// 两处已经分叉过（tauJoin 与 tauLex 都和设计文档对不上），所以 `design` 与 `zod`
-// 是行的一部分，不是附注。
+// **本册只剩搬不动的条目**（T65）：能挂 `satisfies ThresholdValue<…>` 的都在常量定义处，
+// 值与来历在同一处，改值的人一定看得到。这里收的是「一个条目对应不到一个模块级常量 + 一个
+// 数字」的那些 —— 值在函数调用里、在外部包里，或一个条目代表对象组的多个子键。
+// 每条都要写 `unmovable` 说明理由：往表里加一条，先得回答它为什么搬不动。
+//
+// 留下的是什么：定义位置与可变条件；`design` / `zod` 对照（能挂到定义处的用类型参数里的
+// `doc*` 与 `zod` 字段，搬不走时留在这里）；第二个取值点（`otherSites`）。
+// 两处已经分叉过（tauJoin 与 tauLex 都和设计文档对不上），所以设计对照是行的一部分，不是附注。
 //
 // **值的真相源留在原处**：这里不写数字，只写 `() => CONST` —— 打印时现取。把值搬进来
 // 会让「为什么是这个值」的注释与值分家，那正是本次要治的病；用函数而不是直接引用，
@@ -164,6 +168,9 @@ export interface ZodSite {
   name: string
 }
 
+/** 留在表里的理由（见 ThresholdEntry 的 unmovable）。 */
+export type ThresholdUnmovable = '内联' | '非数值' | '静态读不出' | '外部包' | '派生自外部包' | '对象组'
+
 /** 一条登记项。 */
 export interface ThresholdEntry {
   /** 与源码里的常量名一致（内联量写形如 `X（内联）`，见 inline）。 */
@@ -194,6 +201,14 @@ export interface ThresholdEntry {
   inline?: { file: string; source: string }
   /** 对象型阈值组：每个子键各算一行。 */
   group?: readonly string[]
+  /**
+   * 为什么这条**没搬到常量定义处**（T65 阶段 4）。
+   *
+   * 能搬到定义处的前提是「有一个模块级常量、值是数字」—— 下面的五类都不满足。这个字段
+   * 与其说是分类，不如说是一个必须回答的问题：往表里加一条，就得说清它为什么搬不动；
+   * 说得清就该写在那里，而不是写在这里。
+   */
+  unmovable?: ThresholdUnmovable
   /** 设计文档的对应项（能在文档里找到名字的才有）。 */
   design?: DesignSite
   /** zod schema 里的默认值与范围。 */
@@ -321,6 +336,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // ────────────────────────────── 落位（write.ts）──────────────────────────────
   {
     name: 'DEFAULT_THRESHOLDS.tauJoin',
+    unmovable: '对象组',
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauJoin, {
       tool: 'scripts/probe-threshold.mjs（真实编码模型）',
@@ -340,6 +356,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'DEFAULT_THRESHOLDS.tauLex',
+    unmovable: '对象组',
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauLex, {
       tool: 'scripts/probe-threshold.mjs',
@@ -358,6 +375,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'DEFAULT_THRESHOLDS.tauNew',
+    unmovable: '对象组',
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauNew, {
       tool: 'scripts/probe-threshold.mjs（推断：原条目只引设计报告判定表，脚本路径是从 tauJoin 那一条推来的）',
@@ -373,6 +391,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'DEFAULT_THRESHOLDS.tauLexOnly',
+    unmovable: '对象组',
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauLexOnly, {
       tool: '无脚本（原记录只写「已实测标定」，数值与脚本都没留下）',
@@ -390,6 +409,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // ────────────────────────────── 入口（entries.ts）──────────────────────────────
   {
     name: 'EXTRACT_WEIGHT_CEIL',
+    unmovable: '对象组',
     area: '入口',
     ...recheckable(() => ENTRY_WEIGHT.extracted, {
       tool: '无脚本，按字段读出',
@@ -405,6 +425,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'IDF_FREQUENCY_FACTOR（内联）',
+    unmovable: '内联',
     area: '入口',
     ...recheckable(() => 'log2(1 + tf)', {
       tool: '无脚本（2026-10-17 实现报告里的对比测量，未点名脚本路径）',
@@ -425,6 +446,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'BOUNDARY_FREEDOM（判据线，非数值常量）',
+    unmovable: '非数值',
     area: '入口',
     ...recheckable(() => '是否「边界自由度为零」，无阈值数字', {
       tool: '无脚本（2026-10-17 实现报告与 T45 批三的等价探针，均未点名脚本路径）',
@@ -448,6 +470,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'ENTRY_WEIGHT',
+    unmovable: '对象组',
     area: '入口',
     ...chosen(
       () => ENTRY_WEIGHT,
@@ -471,6 +494,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // ──────────────────────────── 召回融合（search.ts）────────────────────────────
   {
     name: 'CHANNEL_WEIGHT',
+    unmovable: '对象组',
     area: '召回融合',
     ...chosen(
       () => CHANNEL_WEIGHT,
@@ -494,6 +518,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'AFFILIATION',
+    unmovable: '对象组',
     area: '召回融合',
     ...chosen(
       () => AFFILIATION,
@@ -511,6 +536,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // ────────────────────────────── 注入（view.ts）───────────────────────────────
   {
     name: 'SEGMENT_RATIO',
+    unmovable: '对象组',
     area: '注入',
     ...chosen(
       () => SEGMENT_RATIO,
@@ -534,6 +560,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'TRIM_ORDER',
+    unmovable: '非数值',
     area: '注入',
     ...chosen(
       () => TRIM_ORDER.join(' -> '),
@@ -549,6 +576,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'TIER_SCALE_MIN_ATOMS',
+    unmovable: '外部包',
     area: '注入',
     ...chosen(
       () => TIER_SCALE_MIN_ATOMS,
@@ -561,6 +589,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'TIER_SCALE_STABLE_ATOMS',
+    unmovable: '外部包',
     area: '注入',
     ...recheckable(() => TIER_SCALE_STABLE_ATOMS, {
       tool: '无脚本（calib@0.1.0 重标定，未点名脚本路径）',
@@ -575,6 +604,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'TIER_SCALE_ANCHORS',
+    unmovable: '外部包',
     area: '注入',
     ...recheckable(() => TIER_SCALE_ANCHORS.map((a) => a.atoms + '→' + a.briefMin).join(' / '), {
       tool: '无脚本（calib@0.1.0 重标定，未点名脚本路径）',
@@ -594,6 +624,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'TIER_ANCHOR_CAP',
+    unmovable: '对象组',
     area: '注入',
     ...chosen(
       () => ({ full: Number.POSITIVE_INFINITY, brief: 8, excerpt: MIN_ANCHORS }),
@@ -607,6 +638,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'TIER_ENTRIES',
+    unmovable: '对象组',
     area: '注入',
     ...chosen(
       () => ({ full: 8, brief: 8, excerpt: 4 }),
@@ -643,6 +675,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // ──────────────────────── 重标触发（calibration/trigger.ts）────────────────────────
   {
     name: 'RECALIBRATE_MIN_ATOMS',
+    unmovable: '派生自外部包',
     area: '校准样本',
     // 值直接取 TIER_SCALE_STABLE_ATOMS（`src/calibration/trigger.ts` 的 `RECALIBRATE_MIN_ATOMS` 就是引用），不是自己的数。
     ...recheckable(() => RECALIBRATE_MIN_ATOMS, {
@@ -662,6 +695,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'MIN_VOCAB_FOR_DF',
+    unmovable: '静态读不出',
     area: '入口',
     ...recheckable(() => MIN_VOCAB_FOR_DF, {
       tool: '无脚本，按公式复算',
@@ -678,6 +712,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   },
   {
     name: 'LEARNED_PROMOTE_MAX_WEIGHT',
+    unmovable: '静态读不出',
     area: '入口',
     ...recheckable(() => LEARNED_PROMOTE_MAX_WEIGHT, {
       tool: '无脚本，按字段读出',
@@ -796,6 +831,39 @@ export function undatedEntries(entries: readonly ThresholdEntry[] = THRESHOLDS):
  * 等式写死在字符串里，常量一改它就与代码脱钩 —— 打印出来最像「已经核对过」的那一行，
  * 恰恰是唯一没人核对的。判据只认字面量：函数形式的 display 是打印时现算的，等号随值变。
  */
+/**
+ * 留在表里的条目必须说明为什么没搬走（T65 阶段 4）。
+ *
+ * 表里只剩搬不动的条目：能挂 `satisfies ThresholdValue<…>` 的都在常量定义处。这条断言把
+ * 「往表里加一条」变成一个要回答问题的动作 —— 而绝大多数时候，答得出来就意味着该搬到定义处。
+ */
+export function unmovableProblems(entries: readonly ThresholdEntry[] = THRESHOLDS): string[] {
+  const allowed = new Set<ThresholdUnmovable>([
+    '内联',
+    '非数值',
+    '静态读不出',
+    '外部包',
+    '派生自外部包',
+    '对象组',
+  ])
+  const problems: string[] = []
+  for (const e of entries) {
+    if (e.unmovable === undefined) {
+      problems.push(
+        e.name +
+          '：留在表里，但没写 unmovable —— 说明它为什么搬不到常量定义处（' +
+          [...allowed].join(' / ') +
+          '）',
+      )
+      continue
+    }
+    if (!allowed.has(e.unmovable)) {
+      problems.push(e.name + '：unmovable 的值不认识 ' + e.unmovable)
+    }
+  }
+  return problems
+}
+
 export function displayProblems(entries: readonly ThresholdEntry[] = THRESHOLDS): string[] {
   return entries
     .filter((e) => typeof e.display === 'string' && e.display.includes('='))

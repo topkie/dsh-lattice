@@ -453,7 +453,7 @@ src/
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 | `scripts/snapshot-baseline.mjs` | 另存对照库快照到 `.probe/snap/<标签>/`（改规则**之前**跑） |
 | `scripts/build-baseline.mjs` | 重建基准库（`--source <cards.json>`），自带三条自检 |
-| `scripts/print-thresholds.mjs` | 阈值登记表：打印名称/值/来历/可变条件 + 与设计文档对照 + 覆盖核对（AST，含表达式型常量）+ 三个来历查询与评审基线检查（不需模型，可随时跑） |
+| `scripts/print-thresholds.mjs` | 阈值总览：打印名称/值/来历/可变条件 + 与设计文档对照 + 覆盖核对（AST，两种来源）+ 三个来历查询 + `--doc-keys` + 评审基线检查（不需模型，可随时跑） |
 
 基准库由 `scripts/build-baseline.mjs` 生成、快照由 `scripts/snapshot-baseline.mjs` 另存
 （见上「标准验证库」）。**改入口规则类的验证脚本不再自带默认库路径**：要对比就显式给
@@ -464,13 +464,26 @@ src/
 并把新的数字写进那段注释——**阈值必须带着它的标定依据一起存在**，否则下一个人
 无从判断它是怎么来的、能不能动。
 
-**阈值登记表**（`src/thresholds.ts`）是这条约束的载体：每个经验取值在那里有一行，
-写明定义位置、可变条件、第二个取值点，并引用源码里的真值而不是复制一份数字。
-来历写在条目的 `origin` 里（`tool` / `finding` / `why` / `scale`），标定报告只在
-`tool` 或 `finding` 里指名，不复制语料规模与来源分布 —— 那些属于 calib 重标报告。
-`print-thresholds.mjs` 负责打印、用 TypeScript 编译器 API 核对覆盖（源码里的模块级数值常量，
-含表达式型；既没登记也没进豁免清单就非零退出），并跑三个来历查询与评审基线检查。
-新增或改动阈值时，**先跑它**看缺口。
+**来历写在常量定义处**（T65）：模块级数值常量后面挂一个 `satisfies ThresholdValue<…>`，
+值与来历在同一处，改值的人一定看得到。写成：
+
+```ts
+export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
+  area: '召回融合',
+  why: '60 是 RRF 的常用取值：压低头部排名的垄断，让多路共识浮现',
+  failsWhen: ['各路精度的比较结果变了'],
+  affects: '融合时每一路的排序贡献',
+  display: '{v}（常用取值）',
+}>
+```
+
+字段清单见下节。**登记表只剩搬不动的条目**（`src/thresholds.ts`，当前 20 条）：
+一个条目对应不到「一个模块级常量 + 一个数字」时（值在函数调用里、在外部包里、是对象组的子键……），
+它才留在表里，并写明 `unmovable` 理由。往表里加一条会被断言要求回答「为什么搬不动」——
+答得出来，通常就意味着该搬到定义处。
+
+`print-thresholds.mjs` 负责打印、用 TypeScript 编译器 API 核对覆盖（两种来源都收）、
+跑三个来历查询、`--doc-keys`、评审基线检查与设计对照。新增或改动阈值时，**先跑它**看缺口。
 
 ### 阈值登记：来历与评审
 
@@ -478,9 +491,9 @@ src/
 不是「现在有没有记录」：
 
 - `recheckable`：测过，而且测量与该值之间有可复算的关系 —— 测量结果变了，这个值要跟着改。
-  写成 `...recheckable(() => 常量, { tool, finding })`。
+  写成 `satisfies ThresholdValue<'recheckable', { tool, finding, … }>`。
 - `chosen`：没有任何测量能给出它（设计判断、算法惯例、容量取舍、接口约束）。
-  写成 `...chosen(() => 常量, '为什么取这个值')`。**`why` 里不许出现测量数字**：
+  写成 `satisfies ThresholdValue<'chosen', { why, … }>`。**`why` 里不许出现测量数字**：
   写了数字就说明该判 `recheckable`，那个数字该进 `finding`。
 
 曾有测量、但数值与条件都没留下的，判 `recheckable` 并把缺的字段留空 —— 判 `chosen`
@@ -495,34 +508,45 @@ src/
 | `encoderModel` / `scale` / `at` | 测量用的编码模型、语料条数、日期；原记录没有就留空，不猜 |
 | `formula: true` | 值由代码里的算式算出：`--needs-review` 跳过它 |
 | `guardedBy` | 按常量名断言默认值的测试文件（`chosen` 也有这个字段） |
+| `area` | 落在哪个领域（`段` 那一列）：写文件横跨多个领域时靠它，不靠文件路径推 |
+| `failsWhen` | 什么变了它就该重标（原先叫 `variesWith`） |
+| `affects` | 影响管线里的哪一段 |
+| `display` / `unit` | 显示模板与单位换算：`{v}` 是当前值，`{NAME}` 是别的常量 |
+| `doc` / `docKey` / `docDefault` | 设计文档对照：短名（`t7` / `t17` / `t18fail`）、文档键名、文档给的默认值 |
+| `docRange` / `docScale` / `docKeys` | 文档给的范围、单位换算倍数、文档把一组键写成一行时各子键在代码里的名字 |
+| `zod` | zod 的指针：`{ file, name }`，值现读，不抄 |
+| `divergence` | 与设计文档分叉的原因。**只写原因**，文档值从 `docDefault` 读 |
+| `refs` / `otherSites` / `diverges` | 引用的源码位置、第二个取值点、没法用一个数字表达的分叉 |
 
-**显示值与分叉记录也是断言。** `display` 里含数字时必须写成函数，数字从常量插值
-（单位换算见 `src/thresholds.ts` 的 `displayNumber`）—— 打印时现取，常量改了它跟着变；
-写成字符串的数字迟早与常量脱钩，`print-thresholds.mjs` 会让门禁变红。只有不含数字的纯文字
-说明可以保留字符串。声明了 `divergence` 的条目若同时有 `design`，`docValue` 必须等于
-`design.default`：两者记的是同一件事实（设计文档给的默认值），只改一处就是漂移，同样会红。
+**显示值与分叉记录也是断言。** `display` 里的数字写成模板：`{v}` 是当前值、`{NAME}` 是别的
+常量、`unit` 决定换算（`ms` / `MB` / `h` / `x` / `%`）—— 打印时现取，常量改了它跟着变。
+写成字符串的数字迟早与常量脱钩，`print-thresholds.mjs` 会让门禁变红；只有不含数字的纯文字说明
+可以保留字符串。`divergence` **只写原因**：文档值就是 `docDefault`，再抄一份就是同一事实两处
+记录，改一处漏一处。写了 `divergence` 却没写 `docDefault` 会红（没有可比的文档值）。
 
 T54 迁移完成后，旧的 `evidence`（解释）与 `source`（来源指针）已删除：解释进
 `finding` / `why`，来源指针进 `tool` / `at`，不保留第二份。
 
-**三个查询**（都只读登记表；136 条全部已有 `origin`）：
+**三个查询与一条定位命令**（前三个读「表 + 定义处」两种来源）：
 
 - `node scripts/print-thresholds.mjs --needs-review`：声明可复算、但缺编码模型与语料规模的条目。
   条件补不上的，才写进评审基线。
 - `node scripts/print-thresholds.mjs --unguarded`：没有测试按常量名断言默认值的条目。
 - `node scripts/print-thresholds.mjs --undated`：可复算、但没有记录测量时间的条目。只是信息，不要求动作。
+- `node scripts/print-thresholds.mjs --doc-keys`：设计文档键名 → 常量 → 文档默认值。
+  文档改了一条之后，用它定位受影响的条目。
 
 **评审基线**（`thresholds-review-baseline.json`）是临时清单，只允许变短：
 
 1. 基线里的名字必须在**冻结名册**（`thresholds-inventory.json`）里 —— 凭空加一个名字会红；
-2. 名册里的名字也必须仍在登记表里 —— 条目改名或删了，名册与基线要一起改、删；
+2. 名册里的名字也必须仍是真实条目 —— 条目改名或删了，名册与基线要一起改、删；
 3. 每条必须写理由：为什么现在补不了；
 4. 当前查询结果必须都在基线里 —— 新增的待评审条目不能靠把它加进基线消掉；
 5. 基线里已经不在查询结果中的项不报错，删掉即可。
 
-**冻结名册**是一份不再自动增长的名单：它记的是「迁移完成时已有的 136 条」。新写的阈值条目默认不在里面 ——
-要进基线，得先把名字加进名册，那一步在代码评审里看得见。拿登记表当「存量」判据没用：新增条目也在登记表里，
-加进基线红就消了。
+**冻结名册**是一份不再自动增长的名单：它记的是「T65 迁移完成时已有的条目」。新写的阈值默认不在里面 ——
+要进基线，得先把名字加进名册，那一步在代码评审里看得见。拿「当前全部条目」当存量判据没用：
+新增条目也在里面，加进基线红就消了。
 
 门禁里的 `thresholds-review` 步骤跑这项检查。两个集合都空了，就删掉这个文件。
 

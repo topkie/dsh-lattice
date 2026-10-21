@@ -21,6 +21,7 @@ import {
   reviewBaselineProblems,
   undatedEntries,
   unguardedEntries,
+  unmovableProblems,
 } from '../dist/thresholds.js'
 
 const TYPES_FILE = fileURLToPath(new URL('./thresholds-origin.types.ts', import.meta.url))
@@ -291,5 +292,28 @@ describe('阈值来历：评审基线的四条规则', () => {
     const removed = { ...withExtra, unguarded: { ...withExtra.unguarded } }
     delete removed.unguarded[resolved.name]
     assert.deepEqual(reviewBaselineProblems(removed, INVENTORY), [], '删掉「已解决」项后应仍通过')
+  })
+})
+
+describe('阈值来历：留在表里的条目要说明为什么搬不动（T65 阶段 4）', () => {
+  it('表里每条都写了 unmovable，且值在允许的集合里', () => {
+    assert.deepEqual(unmovableProblems(), [])
+    for (const e of THRESHOLDS) assert.ok(e.unmovable !== undefined, e.name + ' 没写 unmovable')
+  })
+
+  it('缺 unmovable → 报一条，点名是哪条', () => {
+    const entry = { ...THRESHOLDS[0], name: 'FAKE_NO_REASON' }
+    delete entry.unmovable
+    const problems = unmovableProblems([entry])
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /FAKE_NO_REASON/)
+    assert.match(problems[0], /unmovable/)
+  })
+
+  it('unmovable 写了不认识的值 → 报', () => {
+    const entry = { ...THRESHOLDS[0], name: 'FAKE_BAD_REASON', unmovable: '搬到别处' }
+    const problems = unmovableProblems([entry])
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /不认识/)
   })
 })
