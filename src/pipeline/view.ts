@@ -10,7 +10,6 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
-import { briefMinForDb } from './calibrate.js'
 import type { RecallResult } from './search.js'
 import { coverageOf, DUP_TEXT, trigramsOf } from './search.js'
 import { FLAG_SPLIT_PENDING } from '../db/flags.js'
@@ -232,10 +231,10 @@ export const DEMOTED_ANCHOR_CHARS = (15 * TERM_CHARS) satisfies ThresholdValue<
  *   相关 top1  min 0.524 / p50 0.683 ｜ 无关 top1  max 0.398
  * 两者之间是空的，所以取值本身不敏感；取空隙中间是为了容错，不是为了拟合。
  *
- * 精简档的线**不再是常数**：它是库规模的函数，见 calibrate.ts。原因是那次标定用的 0.45
- * 依赖「无关 top1 上界 0.398」这个前提，而该上界随库长大单调上移（1374 条库上已是 0.515），
- * 于是 0.45 会落进无关分布内部、提示线静默失效。TIER_BRIEF_MIN 保留为**库小到没法标定
- * 时的默认值**，不再等于生效值。
+ * 精简档的线曾经是库规模的函数（发生在标定包还在的时候）：那次标定用的 0.45 依赖
+ * 「无关 top1 上界 0.398」这个前提，而该上界随库长大单调上移（1374 条库上已是 0.515），
+ * 于是 0.45 会落进无关分布内部。标定包退役后这条路整条消失 —— 判定改用相对分位
+ * （refdist.ts），档位只作观测值，不再决定呈现内容。
  */
 export type ViewTier = 'full' | 'brief' | 'excerpt'
 
@@ -248,12 +247,12 @@ export const TIER_FULL_MIN = 0.55 satisfies ThresholdValue<
     finding: '相关 top1 min 0.524 / p50 0.683，无关 top1 max 0.398，两类之间是空的；取空隙中间只为容错，不是为了拟合'
     scale: '20 条 gold 查询 + 4 条无关查询'
     failsWhen: ['换编码模型（余弦尺度直接变）', '库规模与来源分布', '语料的领域混合度']
-    guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs']
-    affects: 'tierOf：最高余弦 >= 此值走完整档（三段全给）'
+    guardedBy: ['test/view.test.mjs']
+    affects: 'tierOf：最高余弦 >= 此值走完整档（只作观测值，不再决定呈现内容）'
     diverges: '**标定语料与运行库不一致**：标定在基准库上，而插件跑在宿主库上（评审指出的同一类问题）。本表不再记语料规模与来源分布 —— 是否仍适用，看对应重标报告；没有报告时按「无记录」处理，不猜'
   }
 >
-/** 精简档下界的**默认值**（库小于锚点表下端时用它）；生效值见 calib 的锚点表。 */
+/** 精简档下界的值。标定包退役后它不再按库规模变，也不决定呈现内容（见 tierOf 的说明）。 */
 export const TIER_BRIEF_MIN = 0.45 satisfies ThresholdValue<
   'recheckable',
   {
@@ -262,9 +261,9 @@ export const TIER_BRIEF_MIN = 0.45 satisfies ThresholdValue<
     finding: '两段来历：① 原标定无关上界 0.398、相关下界 0.524，0.45 夹在中间；② 2026-10-17 重标定在扩容后的基准库上，无关 top1 上界升到 0.515、相关下界 0.525，0.45 落进无关分布内部，故降级为默认值（生效值改由 calib 锚点表按规模给出），扫描读数 0.466 / 0.470 / 0.492 / 0.514 / 0.514 / 0.514 / 0.514 / 0.525；2026-10-18 复核：24 条无关查询、1 次误通过时 conformal 可认证上限 (1+1)/(24+1)=8.0%，Clopper-Pearson 95% 区间 [0.11%, 21.12%]'
     scale: '原标定 20 gold + 4 无关；重标定 8 个规模点各 30 次降采样、20 gold + 20 无关'
     at: '2026-10-17'
-    failsWhen: ['换编码模型', '库规模（生效值随规模变，本常量不再等于生效值）', '语料的领域混合度']
-    guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs']
-    affects: '库小于锚点表下端时的**默认**下界；库 >= 12 条时生效值由 calib 的锚点表按规模给出，本常量不再等于生效值。它已经不决定呈现内容：三档判定取消后，判定改用「最高余弦对固定问句集在本库实算的 90 分位」，这个值和 briefMinForDb 的读数只作为回执里的观测值带出来'
+    failsWhen: ['换编码模型', '库规模（历史依据里的上界随库长大上移）', '语料的领域混合度']
+    guardedBy: ['test/view.test.mjs']
+    affects: 'tierOf 的第二个分界。标定包退役后它不再按库规模变，也不决定呈现内容：判定改用「最高余弦对固定问句集在本库实算的 90 分位」，本常量只作为回执里的观测值带出来'
     diverges: '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理'
     refs: [{ file: 'src/pipeline/view.ts'; symbol: 'TIER_BRIEF_MIN' }]
   }
@@ -368,16 +367,13 @@ function sceneText(scene: string | undefined): string {
  * 纯词面模式（无查询向量）没有余弦可依，**不降档** —— 宁可多给几条，也不要因为
  * 「测不出来」而少给：降档是真的丢信息，多给只是多花一点预算。
  */
-function inferTier(
-  recalled: RecallResult,
-  db: DatabaseSync,
-  override?: number,
-): { tier: ViewTier; briefMin: number } {
-  // 纯词面模式没有余弦可依，档位用不到精简档的线；这里仍把标定值算出来，
-  // 是为了让结果里的 briefMin 始终是「本库当前生效的那条线」，不至于两种情形下语义不同。
+function inferTier(recalled: RecallResult, override?: number): { tier: ViewTier; briefMin: number } {
+  // 纯词面模式没有余弦可依，档位用不到精简档的线；这里仍把值填出来，是为了让结果里的
+  // briefMin 始终有值，不至于两种情形下语义不同。
   //
-  // override（本地标定值）优先：它是用本库样本重算出来的，比发布方锚点表的插值更贴近本库。
-  const briefMin = override ?? briefMinForDb(db, TIER_BRIEF_MIN)
+  // 标定包退役后这里只剩常量：原先按库规模插值的那条线已经不决定呈现内容，判定改用
+  // 「最高余弦对固定问句集在本库实算的 90 分位」（见 refdist.ts），briefMin 只作观测值带出。
+  const briefMin = override ?? TIER_BRIEF_MIN
   if (recalled.meta.vectorMissing) return { tier: 'full', briefMin }
   return { tier: tierOf(recalled.meta.topCosine, briefMin), briefMin }
 }
@@ -396,7 +392,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   const budget = opts.budget ?? DEFAULT_BUDGET
   const anchorMax = opts.anchorMaxChars ?? DEFAULT_ANCHOR_MAX
   // 档位与精简档下界只为结果里的观测字段保留，不参与装填（收口阶段一起删）。
-  const inferred = inferTier(recalled, db, opts.briefMin)
+  const inferred = inferTier(recalled, opts.briefMin)
   const tier = opts.tier ?? inferred.tier
 
   // 判空：库里没有针对这个问题的内容时，一条都不装。

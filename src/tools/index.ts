@@ -33,7 +33,6 @@ import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { referenceFor } from '../pipeline/refdist.js'
 import {
   getRuntime,
-  maybeRecalibrate,
   noteRecallDegradations,
   runtimeEncode,
   type Runtime,
@@ -343,10 +342,6 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         }
       }
 
-      // 写入侧重标尝试（判据 7）：**异步、不 await** —— 写入的返回不该等一次标定。
-      // 失败只写日志与 meta，参数一个字都不动（判据 8）。
-      void maybeRecalibrate()
-
       // 取代关系只落在这里：写入侧的事务内固定 O(1) 行数，多一条 UPDATE 就多一份
       // 写锁持有时间，而这不是热路径。
       // 切分后「本条」是多条 atom，取代关系只能落在一条上 —— 落在第一条，并把落在
@@ -414,10 +409,6 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const rt = getRuntime(cfg)
       const q = str(args?.query).trim()
       if (q === '') return '查询为空。'
-      // 标定参数在**第一处等待点之前**取一次，这次召回整段只用这一代。
-      // 重标由写入侧异步触发，会在两次等待之间整体替换 rt.calibration —— 若等到编码返回
-      // 之后才读，同一次召回就会「按旧参数召回、按新参数注入」，中间隔了一次换代。
-      const calibParams = rt.calibration.params ?? null
       const vq = await runtimeEncode(cfg, q)
       // 参考线：一个与库无关的问题在本库最高能拿到多少余弦。首次要把 48 条内置问句各
       // 编码一次（约 1 秒），之后按 atom 行数缓存，稳态零成本。编码器不可用时它返回
@@ -431,8 +422,6 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       noteRecallDegradations(recalled.meta)
       const view = assembleView(rt.db, recalled, {
         budget: num(args?.budget, cfg.viewBudget),
-        // 本地标定值（快照）优先于按规模插值；未标定时为 undefined，pipeline 自己会回落。
-        briefMin: calibParams?.briefMin,
         // 本次查询词，只用于待拆分候选的「使用场景」：设计要的就是「把这条疑似
         // 该拆的记忆连同它被用来解决什么一起给出来」。其他锚行不受影响。
         scene: q,

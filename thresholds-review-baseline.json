@@ -5,7 +5,6 @@
     "DEFAULT_THRESHOLDS.tauNew": "T52 记录：工具是从 tauJoin 那条推断的，数值与条件都没有记录。补要先确认这次测量是否覆盖 tauNew 的判据，再记条件。",
     "DEFAULT_THRESHOLDS.tauLexOnly": "原记录只有「已实测标定」一句，数值、脚本、模型与语料规模都没留下。补要重新做一次标定。",
     "DUP_LEX": "T52 记录：标定语料是构造的对照句对（「系统代理必须走本地端口……」对「系统代理配置本地端口……」），没有句对数，也没有模型名。补要拿一组真实改写句对重做一次，并记下句对与模型。",
-    "RECALIBRATE_DRIFT": "T52 记录：U9 噪声实测只记了「192 维」—— 那是向量维度，不是语料规模；采样伪查询条数与模型都没记。补要重跑一次噪声测量并记下伪查询条数与模型。",
     "WRITE_COST_MEASURED_MS": "测量记录里没有编码模型与语料规模 —— 本机单次写入耗时不是「在某种语料上测出来的」那种量，补要说明测量条件能不能补、补成什么。"
   },
   "unguarded": {
@@ -46,7 +45,6 @@
     "LEARNED_PROMOTE_RECENT_DAYS": "时间窗没有测试按常量名断言；代码只实现了「最近一次命中在窗口内」这半边。",
     "TERM_CHARS": "折算单位与 entries.ts 的 MAX_HAN_TERM 同源但刻意不复用；没有测试按常量名断言这个折算值。",
     "SEGMENT_RATIO": "配比没有测试按常量名断言；测试用显式预算与档位覆盖注入行为。",
-    "TIER_SCALE_STABLE_ATOMS": "外部包 lattice-calib 的锚点表常量，没有测试按常量名断言；它只用于可观测（调用方据此区分标定值与插值值）。",
     "DEFAULT_BUDGET": "默认预算没有测试按常量名断言；测试用显式 budget 参数覆盖。",
     "DEFAULT_ANCHOR_MAX": "单锚字符上限没有测试按常量名断言；运行时不可配置。",
     "DEFAULT_ENTRIES_PER_TOPIC": "公式派生值没有测试按常量名断言；测试用显式配额覆盖入口条数。",
@@ -88,12 +86,6 @@
     "SAMPLE_MAX_ROWS": "test/samples.test.mjs 以显式 maxRows: 10000 构造，未引用常量名。",
     "SAMPLE_NEG_OBVIOUS_MAX": "test/samples.test.mjs 以显式 negObviousMax: 2 构造（断言的是淘汰机制），未引用常量名。",
     "SAMPLE_QUEUE_MAX": "test/samples.test.mjs 覆盖 src/samples/index.ts，但没有 queueMax 字样；队列满时丢最旧，测试走不到这个上限。",
-    "RECALIBRATE_COOLDOWN_MS": "test/recalibrate.test.mjs 断言 maybeRecalibrate() 返回 'cooldown'（行为路径），未引用常量名。",
-    "RECALIBRATE_MIN_ATOMS": "test/recalibrate.test.mjs 断言库小于 192 条不重标（理由是 small_db），走的是行为路径；没有按常量名断言这个别名。",
-    "RECALIBRATE_MIN_POSITIVE": "test/recalibrate.test.mjs 断言 maybeRecalibrate() 返回 'no_positive'，走行为路径，未引用常量名。",
-    "RECALIBRATE_DRIFT": "没有测试断言这条漂移线（no_drift 分支没有用例按常量名或行为路径命中）；源码注释只记「192 维下噪声 sd 约 0.0063」，测量条件（伪查询条数）也没记。",
-    "RECALIBRATE_SAMPLE_LIMIT": "公式派生值（SAMPLE_MAX_ROWS ÷ 5），没有测试按常量名断言；取值只影响一次重标取多少条样本。",
-    "RECALIBRATE_OBVIOUS_LIMIT": "「明显无关」档的取样上限没有测试按常量名断言；它只影响重标的样本构成，不改变判据口径。",
     "MMAP_MEMORY_DIVISOR": "T65 阶段 2 搬到常量定义处之后，--unguarded 只查登记表，漏掉了这一条；批 2 让查询覆盖两种来源，它才出现。补要按常量名写断言（现在的测试按行为覆盖，不钉默认值）。",
     "MMAP_GROWTH": "同上：查询以前只覆盖登记表，这条在定义处，漏了。补要按常量名写断言。",
     "CACHE_RATIO": "同上：查询以前只覆盖登记表，这条在定义处，漏了。补要按常量名写断言。",

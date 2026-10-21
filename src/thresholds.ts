@@ -5,26 +5,26 @@
 // 没有任何地方记着它是在什么语料上标定的。缺的不是某次修正，而是「阈值必须带标定依据」
 // 这条流程约束。本模块是那条约束的载体。
 //
-// **三层边界：每一层只有一个真相源**
+// **两层边界：每一层只有一个真相源**（原先是三层，运行时覆盖值那一层随标定包退役一起消失，
+// 见本节末的说明）
 //
 // 1. **模块默认值 —— 代码里的常量**。分发时自带的那一套值，定义在被引用的模块里
-//    （write.ts、view.ts …；锚点表在 calib 包里，插件只转发）。本表只登记它在哪、
+//    （write.ts、view.ts …）。本表只登记它在哪、
 //    什么会改变它、还有没有第二个取值点，
 //    不复制数字。`scripts/print-thresholds.mjs` 用 TypeScript 编译器 API 遍历
 //    `src/**/*.ts` 的模块级变量声明：初始化式能静态求值成数字的，必须在表里或在豁免
 //    清单里 —— 表达式型也扫（`12 * 3600 * 1000` 不再隐身）。
-// 2. **运行时覆盖值 —— calib 快照的 params**。重标成功后，`lattice-calib` 把一整套参数写进
-//    库内 meta 快照（params / sBaseline / calibVersion / at / encoderModel）；启动时读入，
-//    版本与编码模型相符才生效。没有可用快照时用第 1 层。生效值只以快照为准，不写回代码
-//    （读入与失效见 `src/state.ts` 的 readCalibration）。
-// 3. **标定依据 —— calib 报告**。一个数为什么取这个值，唯一依据是产生这组值的重标报告
-//    （`lattice-calib` 的发布，或重标定记录）。本表只放指针，不放语料规模与
-//    来源分布 —— 那些属于报告。指针只允许三种形状：`无记录`（默认）/
-//    `calib@<semver>` / `calib@<semver> <报告名>`；指不到真实报告的写「无记录」，
-//    不编版本号。
+// 2. **标定依据 —— 报告**。一个数为什么取这个值，唯一依据是产生这组值的重标报告。
+//    本表只放指针，不放语料规模与来源分布 —— 那些属于报告。指针只允许两种形状：
+//    `无记录`（默认）/ `<报告名>`；指不到真实报告的写「无记录」，不编版本号。
 //
-// 三层之间不互相抄写：默认值不在本表复制，快照不写回代码，报告内容不抄进登记表。
+// 两层之间不互相抄写：默认值不在本表复制，报告内容不抄进登记表。
 // 这条边界与 `docs/ARCHITECTURE.md` 第十节「运行时可变状态」是同一套说法。
+//
+// **被删掉的那一层**：原先还有第 2 层「运行时覆盖值 —— 标定包快照的 params」。标定包
+// （`lattice-calib`）在 0.5.0 退役，它服务的「按库规模插值精简档下界」那条线也一起消失，
+// 库内不再有第二套参数可以覆盖常量。判定的相对分位是运行时按本库现算的派生量，不是
+// 参数（见 `src/pipeline/refdist.ts`），所以它不属于本表。
 //
 // **本册只剩搬不动的条目**：能挂 `satisfies ThresholdValue<…>` 的都在常量定义处，
 // 值与来历在同一处，改值的人一定看得到。这里收的是「一个条目对应不到一个模块级常量 + 一个
@@ -58,8 +58,6 @@ import {
 } from './pipeline/entries.js'
 import { AFFILIATION, CHANNEL_WEIGHT } from './pipeline/search.js'
 import { SEGMENT_RATIO, TRIM_ORDER } from './pipeline/view.js'
-import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
-import { RECALIBRATE_MIN_ATOMS } from './calibration/trigger.js'
 import { DEFAULT_THRESHOLDS } from './pipeline/write.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
@@ -580,54 +578,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     diverges:
       '**zod schema 里也没有**。它按字符串而非数值登记：' + '列在此处的目的是让「行为契约级常量」不被漏掉',
   },
-  {
-    name: 'TIER_SCALE_MIN_ATOMS',
-    unmovable: '外部包',
-    area: '注入',
-    ...chosen(
-      () => TIER_SCALE_MIN_ATOMS,
-      '锚点表最下端取 12 条：它是降采样实验的最小规模点，不是标定出来的最优规模；比它更小的库没有任何测量，按项目约定退回旧值 —— 这个数来自实验设计与样本下限，不是测量结果',
-      { guardedBy: ['test/calibrate.test.mjs'] },
-    ),
-    external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
-    affects: 'briefMinFor：库小于此规模时不做按规模标定，退回 TIER_BRIEF_MIN（= 0.45）',
-    variesWith: ['锚点表下端的规模点变化时'],
-  },
-  {
-    name: 'TIER_SCALE_STABLE_ATOMS',
-    unmovable: '外部包',
-    area: '注入',
-    ...recheckable(() => TIER_SCALE_STABLE_ATOMS, {
-      tool: '无脚本（calib@0.1.0 重标定，未点名脚本路径）',
-      finding:
-        '判据是相关查询 p10 与无关查询 p95 的距离 ≥ 0.05，且在按 replicate 聚类的 1000 次重抽样里至少 80% 满足，得 192；这是本次那个查询集上的结论，不是语料无关的常数',
-      scale: '20 条相关 + 20 条无关查询',
-      at: '2026-10-17',
-    }),
-    external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
-    affects: '只用于可观测：低于此规模时，按规模插值出的阈值不可信（调用方据此区分标定值与插值值）',
-    variesWith: ['查询集（20 相关 + 20 无关是人工挑的）', '语料构成'],
-  },
-  {
-    name: 'TIER_SCALE_ANCHORS',
-    unmovable: '外部包',
-    area: '注入',
-    ...recheckable(() => TIER_SCALE_ANCHORS.map((a) => a.atoms + '→' + a.briefMin).join(' / '), {
-      tool: '无脚本（calib@0.1.0 重标定，未点名脚本路径）',
-      finding:
-        '每个规模点 30 次独立降采样，相关与无关样本各自合成池后扫「相关通过率 − 无关通过率」最大的切点，表里每个数都是该点实测到的切点、不是拟合值；' +
-        '2026-10-18 复核：30 次重复的 95% 区间宽在 12 / 24 / 48 / 96 为 0.070 / 0.061 / 0.043 / 0.023，表内 7 个点在噪声内彼此不可区分',
-      scale: '20 条 gold + 20 条人工无关查询；7 个规模点各 30 次独立降采样',
-      at: '2026-10-17',
-      guardedBy: ['test/calibrate.test.mjs'],
-    }),
-    external: { pkg: 'lattice-calib', file: 'src/anchors.ts' },
-    affects: 'briefMinFor：按库规模给出精简档下界；点与点在 log2(atom 数) 尺度上线性插值，两端夹紧（不外推）',
-    variesWith: ['查询集（人工挑的 20 + 20）', '换编码模型', '语料的领域混合度'],
-    diverges:
-      '**上端是夹紧，不是外推**：比 1374 条更大的库本次没有测量（实现报告未确定项 5 记的同一件事），' +
-      '故 > 1374 条时取 0.525 不再上移。下端同理，< 12 条退回默认值 0.45',
-  },
   // ENTRY_LABEL_CHARS 已并入 TOPIC_LABEL_CHARS（同一个量：主题标签的宽度），
   // 见「落位」一节的 TOPIC_LABEL_CHARS 行。
   // ────────────────────────────── 目录（list.ts）───────────────────────────────
@@ -647,27 +597,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // 这一组的取值由用户决定，不是语料标定：样本库的容量与
   // 负样本分档取决于「一次会话里模型会反馈几次」，本仓库还没有这份实测。
   // 按本表纪律，如实写「未标定」，而不是编一个看起来有依据的场景。
-  // ──────────────────────── 重标触发（calibration/trigger.ts）────────────────────────
-  {
-    name: 'RECALIBRATE_MIN_ATOMS',
-    unmovable: '派生自外部包',
-    area: '校准样本',
-    // 值直接取 TIER_SCALE_STABLE_ATOMS（`src/calibration/trigger.ts` 的 `RECALIBRATE_MIN_ATOMS` 就是引用），不是自己的数。
-    ...recheckable(() => RECALIBRATE_MIN_ATOMS, {
-      tool: '源码表达式（src/calibration/trigger.ts 直接引用 TIER_SCALE_STABLE_ATOMS）',
-      finding:
-        '值就是 TIER_SCALE_STABLE_ATOMS（192）：来自 calib@0.1.0 阈值重标定（2026-10-17）的' +
-        '降采样实验结论 —— 阈值稳定所需的最小 atom 数；改 TIER_SCALE_STABLE_ATOMS 后重新构建，' +
-        '派生值跟着变',
-      at: '2026-10-17',
-      formula: true,
-    }),
-    display: () => `${RECALIBRATE_MIN_ATOMS}（= TIER_SCALE_STABLE_ATOMS）`,
-    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_ATOMS' },
-    refs: [{ file: 'src/calibration/trigger.ts', symbol: 'RECALIBRATE_MIN_ATOMS' }],
-    affects: '闸①：库小于 192 条不重标（S 的抽样波动在这个规模下与漂移同量级）',
-    variesWith: ['查询集', '语料构成'],
-  },
   {
     name: 'MIN_VOCAB_FOR_DF',
     unmovable: '静态读不出',
