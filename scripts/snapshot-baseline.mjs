@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openVault } from '../dist/db/open.js'
-import { META_BUILDER, META_ENTRY_RULE, META_SOURCE, META_BUILT_AT } from '../dist/db/meta.js'
+import { readBuildInfo } from '../dist/db/build-info.js'
 
 const SNAP_ROOT = join('.probe', 'snap')
 const BUILDER = 'scripts/snapshot-baseline.mjs'
@@ -59,7 +59,16 @@ const countOf = (db, table) => {
     return null
   }
 }
-const rule = metaOf(src, META_ENTRY_RULE) || 'no-entry-rule'
+/** v5 起自描述进了 build_info 表；更老的库（v4 及以前）仍在 meta 里。 */
+const infoOf = (db) => {
+  try {
+    return readBuildInfo(db)
+  } catch {
+    return null
+  }
+}
+const info = infoOf(src)
+const rule = info?.entryRule || metaOf(src, 'entry_rule') || 'no-entry-rule'
 const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
 const LABEL = arg('label', rule + '-' + stamp)
 const DEST_DIR = join(SNAP_ROOT, LABEL)
@@ -78,10 +87,10 @@ const facts = {
     Number(src.prepare('PRAGMA page_count').get().page_count) *
     Number(src.prepare('PRAGMA page_size').get().page_size),
   entryRule: rule,
-  schemaVersion: metaOf(src, 'schema_version'),
-  builtAt: metaOf(src, META_BUILT_AT),
-  builtBy: metaOf(src, META_BUILDER),
-  sourceLabel: metaOf(src, META_SOURCE),
+  schemaVersion: Number(src.prepare('PRAGMA user_version').get().user_version),
+  builtAt: info?.builtAt ?? metaOf(src, 'built_at'),
+  builtBy: info?.builder ?? metaOf(src, 'builder'),
+  sourceLabel: info?.source ?? metaOf(src, 'source'),
   atoms: countOf(src, 'atom'),
   topics: countOf(src, 'topic'),
   entries: countOf(src, 'entry'),
@@ -106,7 +115,7 @@ const copied = {
   atoms: countOf(copy, 'atom'),
   topics: countOf(copy, 'topic'),
   entries: countOf(copy, 'entry'),
-  entryRule: metaOf(copy, META_ENTRY_RULE),
+  entryRule: infoOf(copy)?.entryRule ?? metaOf(copy, 'entry_rule'),
 }
 copy.close()
 

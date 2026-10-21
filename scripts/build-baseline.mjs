@@ -39,15 +39,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import {
-  META_BUILDER,
-  META_BUILT_AT,
-  META_ENTRY_RULE,
-  META_SCHEMA_VERSION,
-  META_SOURCE,
-  checkEntryRule,
-  setMeta,
-} from '../dist/db/meta.js'
+import { checkEntryRule, setBuildInfo } from '../dist/db/build-info.js'
 import { listObjects, openVault } from '../dist/db/open.js'
 import { SCHEMA_VERSION } from '../dist/db/schema.js'
 import { draftAtoms, stripFrontmatter } from '../dist/migrate/split.js'
@@ -64,7 +56,7 @@ const DEFAULT_SCOPE = 'global'
 const ENCODE_CHUNK = 32
 
 /** 建库期望的 schema 对象下限；少于这个数说明 DDL 没跑全。 */
-const MIN_OBJECTS = { table: 12, index: 8, trigger: 6 }
+const MIN_OBJECTS = { table: 14, index: 10, trigger: 6 }
 
 function parseArgs(argv) {
   const out = { out: join('.probe', 'baseline'), mock: false, label: '', source: '' }
@@ -170,12 +162,9 @@ async function main() {
   console.log('  落库完成 ' + drafts.length + ' 条，' + (Date.now() - t1) + ' ms')
 
   // ── 写自描述 ──
+  // 版本号不写：唯一真相源是 PRAGMA user_version（旧实现把它复制进 meta，真实库里漂成 4 与 3）。
   const now = Date.now()
-  setMeta(db, META_SCHEMA_VERSION, String(SCHEMA_VERSION), now)
-  setMeta(db, META_ENTRY_RULE, ENTRY_RULE_ID, now)
-  setMeta(db, META_BUILT_AT, String(now), now)
-  setMeta(db, META_SOURCE, label, now)
-  setMeta(db, META_BUILDER, BUILDER, now)
+  setBuildInfo(db, { entryRule: ENTRY_RULE_ID, builder: BUILDER, builtAt: now, source: label })
 
   // ── 自检 ──
   const counts = {}

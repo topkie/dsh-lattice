@@ -3,7 +3,7 @@ import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { META_ENTRY_RULE, checkEntryRule, ensureMeta, getMeta, readMeta, setMeta } from '../dist/db/meta.js'
+import { checkEntryRule, ensureBuildInfo, readBuildInfo, setBuildInfo } from '../dist/db/build-info.js'
 import { listObjects, migrate, openDb, openVault, schemaVersion } from '../dist/db/open.js'
 import { MIGRATIONS, SCHEMA_VERSION, normalizeOrigin } from '../dist/db/schema.js'
 import { ENTRY_RULE_ID } from '../dist/pipeline/entries.js'
@@ -32,6 +32,14 @@ describe('建库与迁移', () => {
     assert.ok(objs.filter((o) => o.type === 'table').length >= 12, '表数不足')
     assert.ok(objs.filter((o) => o.type === 'index').length >= 8, '索引数不足')
     assert.ok(objs.filter((o) => o.type === 'trigger').length >= 6, '触发器数不足')
+    for (const name of ['build_info', 'recluster_state', 'calib_state', 'split_queue']) {
+      assert.ok(
+        objs.some((o) => o.type === 'table' && o.name === name),
+        '缺少 v5 的表：' + name,
+      )
+    }
+    // 版本号是声明；上面缺对象就抛的那一步（missingObjects）是证据。
+    assert.equal(schemaVersion(db), SCHEMA_VERSION)
     db.close()
   })
 
@@ -122,56 +130,95 @@ describe('两层检索索引', () => {
 })
 
 describe('schema 迁移', () => {
-  it('v1 的库只跑增量就能升到最新版', () => {
-    const db = openDb(dbFile)
-    // 手工造一个 v1 的库：只执行 v1 那一步，并把版本号停在那里。
-    db.exec('BEGIN')
-    for (const stmt of MIGRATIONS[0]) db.exec(stmt)
-    db.exec('PRAGMA user_version = 1')
-    db.exec('COMMIT')
-    assert.equal(schemaVersion(db), 1)
-    assert.throws(() => db.prepare('SELECT * FROM meta').get(), '升级前不该有 meta 表')
+  it('v4 的库（未发布的内部版本）打开即报错，且版本号不动', () => {
+    const seed = openDb(dbFile)
+    // 造一个「结构是新的、版本号是旧」的库：它等价于改过 schema 但没重建的内部库。
+    seed.exec('BEGIN')
+    for (const stmt of MIGRATIONS[0]) seed.exec(stmt)
+    seed.exec('PRAGMA user_version = 4')
+    seed.exec('COMMIT')
+    seed.close()
 
-    const r = migrate(db)
-    assert.equal(r.from, 1)
-    assert.equal(r.to, SCHEMA_VERSION)
-    assert.ok(r.applied > 0, '只跑增量也必须真的执行了语句')
-    assert.equal(schemaVersion(db), SCHEMA_VERSION)
-    assert.doesNotThrow(() => db.prepare('SELECT * FROM meta').get())
+    assert.throws(() => openVault(dbFile), /来自未发布的内部构建/)
+
+    // 判据③的另一半：报错不能顺手写库。版本号仍是 4。
+    const after = openDb(dbFile)
+    assert.equal(schemaVersion(after), 4)
+    after.close()
+  })
+
+  it('版本号是 5 但结构不符：打开即报错，并列出缺的对象', () => {
+    const seed = openDb(dbFile)
+    seed.exec('BEGIN')
+    for (const stmt of MIGRATIONS[0]) seed.exec(stmt)
+    seed.exec('COMMIT')
+    // 手工制造「声明是 v5、结构不是」：删掉一张 v5 才有的表（它的索引一起没了）。
+    seed.exec('DROP TABLE split_queue')
+    seed.exec('PRAGMA user_version = 5')
+    seed.close()
+
+    assert.throws(() => openVault(dbFile), /结构不符[\s\S]*split_queue/)
+  })
+
+  it('建表中途失败：回滚到空库，不留下半截结构', () => {
+    const db = openDb(dbFile)
+    // 预先占住一个快照里要建的表名，让它在中途撞车（atom 之前已经有表建出来了）。
+    db.exec('CREATE TABLE atom (x INTEGER)')
+    assert.throws(() => migrate(db))
+    assert.equal(schemaVersion(db), 0, '失败不能把版本号留在 5')
+    assert.throws(() => db.prepare('SELECT 1 FROM topic').get(), '半截建出来的表要一起回滚')
     db.close()
   })
 
-  it('迁移步骤表覆盖每一个版本跨度', () => {
-    assert.equal(MIGRATIONS.length, SCHEMA_VERSION)
+  it('迁移表只有一份快照，没有历史增量链', () => {
+    // 0.9 是首个对外版本：没有外部库需要升级，所以只保留「空库直建 v5」。
+    assert.equal(MIGRATIONS.length, 1)
   })
 })
 
 describe('库自描述', () => {
-  it('setMeta 覆盖，ensureMeta 保持原值', () => {
+  it('运行时给库补一份自描述，已存在的一律不动', () => {
     const { db } = openVault(dbFile)
-    setMeta(db, META_ENTRY_RULE, 'a')
-    assert.equal(getMeta(db, META_ENTRY_RULE), 'a')
-    setMeta(db, META_ENTRY_RULE, 'b')
-    assert.equal(getMeta(db, META_ENTRY_RULE), 'b')
-    assert.equal(ensureMeta(db, META_ENTRY_RULE, 'c'), false)
-    assert.equal(getMeta(db, META_ENTRY_RULE), 'b')
-    assert.equal(ensureMeta(db, 'fresh', 'x'), true)
-    assert.equal(getMeta(db, 'fresh'), 'x')
-    assert.equal(getMeta(db, 'never-written'), undefined)
+    // openVault 只建结构；写自描述是运行时启动那一步的事（state.ts 的 stampVault）。
+    assert.equal(readBuildInfo(db), null)
+    assert.equal(ensureBuildInfo(db, { entryRule: ENTRY_RULE_ID, builder: 'runtime' }), true)
+    const first = readBuildInfo(db)
+    assert.equal(first.entryRule, ENTRY_RULE_ID)
+    assert.equal(first.builder, 'runtime')
+    assert.equal(
+      ensureBuildInfo(db, { entryRule: 'other', builder: 'probe' }),
+      false,
+      '已有自描述时一个字都不改',
+    )
+    assert.equal(readBuildInfo(db).entryRule, ENTRY_RULE_ID)
     db.close()
   })
 
-  it('readMeta 按键排序返回全部', () => {
+  it('setBuildInfo 覆盖四项', () => {
     const { db } = openVault(dbFile)
-    setMeta(db, 'b', '2')
-    setMeta(db, 'a', '1')
-    assert.deepEqual(Object.keys(readMeta(db)), ['a', 'b'])
+    setBuildInfo(db, { entryRule: 'other', builder: 'probe', builtAt: 123, source: 'dir/name' })
+    assert.deepEqual(readBuildInfo(db), {
+      entryRule: 'other',
+      builder: 'probe',
+      builtAt: 123,
+      source: 'dir/name',
+    })
+    db.close()
+  })
+
+  it('没有自描述的库：读到 null，ensure 说它写了', () => {
+    const db = openDb(dbFile)
+    migrate(db)
+    assert.equal(readBuildInfo(db), null)
+    assert.equal(ensureBuildInfo(db, { entryRule: 'r', builder: 'b' }), true)
+    assert.equal(readBuildInfo(db).builder, 'b')
     db.close()
   })
 
   it('规则比对：一致才算 ok，缺自描述与不一致都不算', () => {
     const { db } = openVault(dbFile)
-    setMeta(db, META_ENTRY_RULE, ENTRY_RULE_ID)
+    // 写自描述是运行时的事（state.ts 的 stampVault），openVault 只建结构 —— 这里显式补一份。
+    ensureBuildInfo(db, { entryRule: ENTRY_RULE_ID, builder: 'runtime' })
     assert.deepEqual(checkEntryRule(db, ENTRY_RULE_ID), {
       ok: true,
       stored: ENTRY_RULE_ID,
@@ -182,8 +229,8 @@ describe('库自描述', () => {
     assert.equal(other.ok, false)
     assert.equal(other.stored, ENTRY_RULE_ID)
 
-    // 没有自描述的库（v1 建的）必须报「不可比」，不能静默当作一致。
-    db.exec("DELETE FROM meta WHERE key = '" + META_ENTRY_RULE + "'")
+    // 没有自描述的库必须报「不可比」，不能静默当作一致。
+    db.exec('DELETE FROM build_info')
     const none = checkEntryRule(db, ENTRY_RULE_ID)
     assert.equal(none.ok, false)
     assert.equal(none.stored, null)
@@ -200,25 +247,14 @@ describe('所有权与生命周期状态', () => {
     assert.equal(normalizeOrigin('nonsense', 'import'), 'import')
   })
 
-  it('v1 的库升级后带 origin 列，导入行按 source 推断出来', () => {
+  it('atom 的 origin 列有默认值：没给就是 model', () => {
     const db = openDb(dbFile)
-    db.exec('BEGIN')
-    for (const stmt of MIGRATIONS[0]) db.exec(stmt)
-    db.exec('PRAGMA user_version = 1')
-    db.exec('COMMIT')
-    // 一条导入的（带 source）与一条运行时写的（不带）—— 迁移要能分开它们。
-    db.exec(
-      `INSERT INTO atom(id, kind, text, summary, embedding, scope, flags, source, created_at, updated_at)
-       VALUES (1, 'k', 't', 's', zeroblob(2048), 'global', 0, 'migrate', 0, 0)`,
-    )
-    db.exec(
-      `INSERT INTO atom(id, kind, text, summary, embedding, scope, flags, created_at, updated_at)
-       VALUES (2, 'k', 't', 's', zeroblob(2048), 'global', 0, 0, 0)`,
-    )
     migrate(db)
-    const rows = db.prepare('SELECT id, origin FROM atom ORDER BY id').all()
-    assert.equal(String(rows[0].origin), 'import')
-    assert.equal(String(rows[1].origin), 'model')
+    db.exec(
+      `INSERT INTO atom(kind, text, summary, embedding, scope, flags, created_at, updated_at)
+       VALUES ('k', 't', 's', zeroblob(2048), 'global', 0, 0, 0)`,
+    )
+    assert.equal(String(db.prepare('SELECT origin FROM atom').get().origin), 'model')
     db.close()
   })
 

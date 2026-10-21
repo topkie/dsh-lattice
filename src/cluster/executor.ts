@@ -11,13 +11,12 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
 import {
-  META_RECLUSTER_AT,
-  META_RECLUSTER_PLANNED_AT,
-  META_RECLUSTER_STARTED_AT,
-  deleteMeta,
-  getMeta,
-  setMeta,
-} from '../db/meta.js'
+  clearReclusterPlanned,
+  clearReclusterStarted,
+  readReclusterTimes,
+  setReclusterPlanned,
+  setReclusterStarted,
+} from '../db/recluster-state.js'
 import { reasonCodeOf } from '../log/policy.js'
 import { runRecluster, type ReclusterResult } from './index.js'
 
@@ -57,17 +56,9 @@ let executing = false
 /** 挂着的延迟句柄。取消与关停都要清掉它。 */
 let timer: ReturnType<typeof setTimeout> | null = null
 
-function stampOf(raw: string | undefined): number | null {
-  if (raw === undefined) return null
-  const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : null
-}
-
 /** 读四态。纯读，不写库。 */
 export function readReclusterState(db: DatabaseSync): ReclusterState {
-  const plannedAt = stampOf(getMeta(db, META_RECLUSTER_PLANNED_AT))
-  const startedAt = stampOf(getMeta(db, META_RECLUSTER_STARTED_AT))
-  const lastAt = stampOf(getMeta(db, META_RECLUSTER_AT))
+  const { plannedAt, startedAt, completedAt: lastAt } = readReclusterTimes(db)
   let phase: ReclusterPhase = 'idle'
   if (executing) phase = 'running'
   else if (plannedAt !== null && startedAt !== null) phase = 'failed'
@@ -95,8 +86,8 @@ export function planRecluster(
   run: () => void,
   delayMs = RECLUSTER_PLAN_DELAY_MS,
 ): ReclusterState {
-  setMeta(db, META_RECLUSTER_PLANNED_AT, String(Date.now()))
-  deleteMeta(db, META_RECLUSTER_STARTED_AT)
+  setReclusterPlanned(db, Date.now())
+  clearReclusterStarted(db)
   clearPlanTimer()
   const handle = setTimeout(() => {
     timer = null
@@ -127,10 +118,10 @@ export type ExecuteOutcome = {
  */
 export function cancelRecluster(db: DatabaseSync): CancelResult {
   if (executing) return { ok: false, reason: 'running' }
-  if (getMeta(db, META_RECLUSTER_PLANNED_AT) === undefined) return { ok: false, reason: 'not-planned' }
+  if (readReclusterTimes(db).plannedAt === null) return { ok: false, reason: 'not-planned' }
   clearPlanTimer()
-  deleteMeta(db, META_RECLUSTER_PLANNED_AT)
-  deleteMeta(db, META_RECLUSTER_STARTED_AT)
+  clearReclusterPlanned(db)
+  clearReclusterStarted(db)
   return { ok: true, state: readReclusterState(db) }
 }
 
@@ -142,9 +133,9 @@ export function cancelRecluster(db: DatabaseSync): CancelResult {
  */
 export async function executePlannedRecluster(db: DatabaseSync): Promise<ExecuteOutcome> {
   if (executing) return { ok: false, skipped: true }
-  if (getMeta(db, META_RECLUSTER_PLANNED_AT) === undefined) return { ok: true, skipped: true }
+  if (readReclusterTimes(db).plannedAt === null) return { ok: true, skipped: true }
   executing = true
-  setMeta(db, META_RECLUSTER_STARTED_AT, String(Date.now()))
+  setReclusterStarted(db, Date.now())
   // 让出一次事件循环（**在事务外，安全**）：界面点刷新时要能读到「正在整理」。
   // 不留这个空隙的话，整段执行是同步的 —— 请求会被挡住一秒多，用户看到的是「点了没反应，
   // 然后突然变好」，四态里的「正在整理」形同不存在。
@@ -154,8 +145,8 @@ export async function executePlannedRecluster(db: DatabaseSync): Promise<Execute
   try {
     const result = await runRecluster(db, {
       onCommit: () => {
-        deleteMeta(db, META_RECLUSTER_PLANNED_AT)
-        deleteMeta(db, META_RECLUSTER_STARTED_AT)
+        clearReclusterPlanned(db)
+        clearReclusterStarted(db)
       },
     })
     return { ok: true, skipped: false, result }
@@ -168,7 +159,7 @@ export async function executePlannedRecluster(db: DatabaseSync): Promise<Execute
 
 /** 有没有待执行的计划。启动补跑先问这一句，避免为一个「没有」去开户。 */
 export function hasPendingPlan(db: DatabaseSync): boolean {
-  return getMeta(db, META_RECLUSTER_PLANNED_AT) !== undefined
+  return readReclusterTimes(db).plannedAt !== null
 }
 
 /**

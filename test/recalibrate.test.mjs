@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { CALIB_VERSION, readSnapshotState, writeSnapshot } from 'lattice-calib'
-import { getMeta, setMeta, META_CALIB_LAST_CHECK, META_CALIB_LAST_ERROR } from '../dist/db/meta.js'
+import { readCalibState, setCalibLastCheck } from '../dist/db/calib-state.js'
 import { closeSamples, recordSample, sampleStats } from '../dist/samples/index.js'
 import { closeRuntime, getRuntime, maybeRecalibrate } from '../dist/state.js'
 import { encodeVec } from '../dist/util/vec.js'
@@ -165,7 +165,7 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     await addPositives(10)
     assert.equal(await maybeRecalibrate(), 'no_negative')
     assert.equal(rt.calibration.state, 'uncalibrated')
-    assert.ok(!getMeta(rt.db, META_CALIB_LAST_ERROR), '跳过不是失败，不该留错误记录')
+    assert.equal(readCalibState(rt.db).lastError, null, '跳过不是失败，不该留错误记录')
   })
 
   it('冷却期内不判 S 也不重标', async () => {
@@ -173,7 +173,7 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     seedAtoms(rt.db, 192)
     await addPositives(10)
     await addNegatives(6)
-    setMeta(rt.db, META_CALIB_LAST_CHECK, String(Date.now()))
+    setCalibLastCheck(rt.db, Date.now())
     assert.equal(await maybeRecalibrate(), 'cooldown')
     assert.equal(rt.calibration.state, 'uncalibrated')
   })
@@ -202,18 +202,19 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
 
     const first = await maybeRecalibrate()
     assert.equal(first, 'no_vectors', '零向量库算不出 S')
-    assert.ok(
-      !getMeta(rt.db, META_CALIB_LAST_CHECK),
+    assert.equal(
+      readCalibState(rt.db).lastCheckAt,
+      null,
       '算 S 失败**不能**写 calib_last_check_at —— 否则一次失败换来 12 小时冷却',
     )
-    assert.ok(getMeta(rt.db, META_CALIB_LAST_ERROR), '失败要留原因码')
+    assert.notEqual(readCalibState(rt.db).lastError, null, '失败要留原因码')
 
     // 条件恢复：把向量修好，**立刻**再调一次 —— 不能被冷却挡住。
     repairVectors(rt.db, 192)
     const second = await maybeRecalibrate()
     assert.notEqual(second, 'cooldown', '上一次算 S 失败不该产生冷却')
     assert.equal(second, 'recalibrated')
-    assert.ok(getMeta(rt.db, META_CALIB_LAST_CHECK), '算成功后才记时间')
+    assert.notEqual(readCalibState(rt.db).lastCheckAt, null, '算成功后才记时间')
   })
 
   it('判据 7：S 漂移超过 0.01 → 重标成功，参数整体替换', async () => {
@@ -247,7 +248,7 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     }
   })
 
-  it('判据 8：重标中途失败 → 参数一个字不动，错误进 meta', async () => {
+  it('判据 8：重标中途失败 → 参数一个字不动，错误落库', async () => {
     const rt = getRuntime(cfgOf())
     seedAtoms(rt.db, 192)
     await addPositives(10)
@@ -262,7 +263,7 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     closeRuntime()
 
     const rt2 = getRuntime(cfgOf())
-    // 让写快照在最后一个键上失败：事务回滚，meta 里不留半份。
+    // 让写快照在最后一个键上失败：事务回滚，快照里不留半份。
     rt2.db.exec(
       "CREATE TRIGGER fail_calib_at BEFORE INSERT ON meta WHEN NEW.key = 'calib_at' " +
         "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
@@ -270,7 +271,7 @@ describe('重标触发：四道闸与失败不半改（T44 判据 5/7/8）', () 
     const outcome = await maybeRecalibrate()
     assert.equal(outcome, 'failed')
     assert.equal(rt2.calibration.params?.briefMin, 0.123456, '失败后必须还是旧参数')
-    assert.ok(getMeta(rt2.db, META_CALIB_LAST_ERROR) !== null, '失败要有记录，而且不能只活在日志里')
+    assert.notEqual(readCalibState(rt2.db).lastError, null, '失败要有记录，而且不能只活在日志里')
     rt2.db.exec('DROP TRIGGER fail_calib_at')
   })
 })

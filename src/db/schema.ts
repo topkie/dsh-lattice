@@ -10,17 +10,25 @@
 //   3. **主题不落库中心向量**：topic 只存 sum_vec 与 n_atoms，归一化中心在查询时现算。
 //      这样增量加减与全量重算逐位等价，不会被浮点漂移破坏上面第 1 条不变量。
 //   4. **墓碑与活着的记忆分表**：显式删除（§44）的凭证进 `forgotten`，不进 `atom`。
-//      理由见 DDL_V4 —— 一句话：「活着的记忆」这条不变量不该靠每处查询都记得加过滤。
+//      一句话：「活着的记忆」这条不变量不该靠每处查询都记得加过滤。
+//   5. **状态各占一张单行表**：库自描述、整理进度、重标进度、拆分队列四件事各自成表，
+//      理由见 SNAPSHOT_V5 的注释 —— 一句话：同一件事的几个字段必须一起变或一起不变。
+//      库里因此只剩一张 key-value 表 `meta`，它由外部包 `lattice-calib` 的校准快照占用。
 
 import type { ResourceParams } from '../util/memory.js'
 
 /**
  * schema 版本；用 PRAGMA user_version 持久化。
  *
- * 结构变更必须 +1，并在 MIGRATIONS 末尾追加「把上一版升到这一版」的语句。
- * **历史步骤不可修改、不可删除**——已经发出去的库要靠它一路升上来。
+ * **0.9 起版本链只有一步**：MIGRATIONS 的第 0 步直接建出最新结构（SNAPSHOT_V5），
+ * 不再重放 v1→v4 的历史增量。理由：0.9 是第一次公开发布，不存在外部持有的旧库；
+ * 而保留历史链意味着 v1 的建表语句要永久冻结在代码里（改一处它就再也升不上来），
+ * 新建库的路径也永远带着 35 条语句的历史包袱。
+ *
+ * **1.0 之后要重新累积增量**：一旦有外部库在外面，就不能再「只发布快照」——
+ * 那时起每一次结构变更都要加一步 MIGRATIONS，并保证旧库能一路升上来。
  */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 /**
  * 连接建立时按序执行的 PRAGMA（不能放在事务里）。
@@ -43,13 +51,14 @@ export function pragmas(res: ResourceParams): readonly string[] {
 }
 
 /**
- * v1 建库语句，按依赖顺序排列。
+ * v5 快照：库的全部结构，一次建出。
  *
- * 之所以保留成独立的一份而不直接改这个数组：新建的库要从 v0 一路走到最新版，
- * 而已经存在的 v1 库只需要跑增量。两件事共用一份语句会互相牵制。
+ * 顺序即依赖顺序（被引用的表在前），所以它能从空文件直接执行。
+ * FTS5 的影子表（entry_fts_data / atom_fts_idx …）不写在这里 —— 建虚表时由 SQLite
+ * 自动创建，显式再建一次会冲突。
  */
-const DDL_V1: readonly string[] = [
-  // ── 域：派生，topic 的上层聚类 ─────────────────────────────
+const SNAPSHOT_V5: readonly string[] = [
+  // ── 域与主题：派生，可由 atom 重算 ─────────────────────────
   `CREATE TABLE domain (
     id          INTEGER PRIMARY KEY,
     label       TEXT    NOT NULL,
@@ -57,8 +66,6 @@ const DDL_V1: readonly string[] = [
     topic_count INTEGER NOT NULL DEFAULT 0,
     built_at    INTEGER NOT NULL
   )`,
-
-  // ── 主题：派生，可全量重算 ────────────────────────────────
   `CREATE TABLE topic (
     id           INTEGER PRIMARY KEY,
     domain_id    INTEGER REFERENCES domain(id) ON DELETE SET NULL,
@@ -71,31 +78,33 @@ const DDL_V1: readonly string[] = [
   )`,
   `CREATE INDEX idx_topic_domain ON topic(domain_id)`,
 
-  // ── 原子：唯一真相源 ─────────────────────────────────────
+  // ── 记忆本体：真相源 ───────────────────────────────────────
   `CREATE TABLE atom (
-    id            INTEGER PRIMARY KEY,
-    kind          TEXT    NOT NULL,
-    text          TEXT    NOT NULL,
-    summary       TEXT    NOT NULL,
-    embedding     BLOB    NOT NULL,
-    topic_id      INTEGER REFERENCES topic(id) ON DELETE SET NULL,
-    fit           REAL    NOT NULL DEFAULT 0,
-    scope         TEXT    NOT NULL DEFAULT 'global',
-    project_key   TEXT,
-    source        TEXT,
-    source_ref    TEXT,
-    polarity      INTEGER,
-    flags         INTEGER NOT NULL DEFAULT 0,
-    superseded_by INTEGER REFERENCES atom(id) ON DELETE SET NULL,
-    created_at    INTEGER NOT NULL,
-    updated_at    INTEGER NOT NULL
+    id               INTEGER PRIMARY KEY,
+    kind             TEXT    NOT NULL,
+    text             TEXT    NOT NULL,
+    summary          TEXT    NOT NULL,
+    embedding        BLOB    NOT NULL,
+    topic_id         INTEGER REFERENCES topic(id) ON DELETE SET NULL,
+    fit              REAL    NOT NULL DEFAULT 0,
+    scope            TEXT    NOT NULL DEFAULT 'global',
+    project_key      TEXT,
+    source           TEXT,
+    source_ref       TEXT,
+    polarity         INTEGER,
+    flags            INTEGER NOT NULL DEFAULT 0,
+    superseded_by    INTEGER REFERENCES atom(id) ON DELETE SET NULL,
+    origin           TEXT    NOT NULL DEFAULT 'model',
+    recall_hits      INTEGER NOT NULL DEFAULT 0,
+    last_recalled_at INTEGER,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL
   )`,
   `CREATE INDEX idx_atom_topic   ON atom(topic_id)`,
   `CREATE INDEX idx_atom_created ON atom(created_at DESC)`,
   `CREATE INDEX idx_atom_scope   ON atom(scope, project_key)`,
+  `CREATE INDEX idx_atom_origin  ON atom(origin)`,
   `CREATE INDEX idx_atom_flags   ON atom(flags) WHERE flags <> 0`,
-
-  // ── 主属/次属：主属唯一，次属多元 ─────────────────────────
   `CREATE TABLE atom_topic (
     atom_id  INTEGER NOT NULL REFERENCES atom(id)  ON DELETE CASCADE,
     topic_id INTEGER NOT NULL REFERENCES topic(id) ON DELETE CASCADE,
@@ -105,7 +114,7 @@ const DDL_V1: readonly string[] = [
   ) WITHOUT ROWID`,
   `CREATE INDEX idx_atom_topic_topic ON atom_topic(topic_id)`,
 
-  // ── 边：declared 是真相源，其余可重算 ─────────────────────
+  // ── 边：declared 与 inferred 共用一张表，origin 区分 ──────
   `CREATE TABLE edge (
     id         INTEGER PRIMARY KEY,
     src_type   TEXT NOT NULL,
@@ -121,7 +130,7 @@ const DDL_V1: readonly string[] = [
   `CREATE INDEX idx_edge_src ON edge(src_type, src_id, kind)`,
   `CREATE INDEX idx_edge_dst ON edge(dst_type, dst_id, kind)`,
 
-  // ── 入口：declared/learned 是真相源，extracted 可重算 ─────
+  // ── 入口：词面层，lemma 与 bigram 两套检索口径 ────────────
   `CREATE TABLE entry (
     id         INTEGER PRIMARY KEY,
     atom_id    INTEGER NOT NULL REFERENCES atom(id) ON DELETE CASCADE,
@@ -136,7 +145,7 @@ const DDL_V1: readonly string[] = [
   )`,
   `CREATE INDEX idx_entry_term ON entry(term)`,
   `CREATE INDEX idx_entry_atom ON entry(atom_id)`,
-  // Entry 层 bigram 索引：兜底 trigram 对 ≤2 字中文查询失效
+  // 两字词靠 bigram 兜底：trigram 分词器对长度 ≤2 的查询返回 0 命中。
   `CREATE VIRTUAL TABLE entry_fts USING fts5(bigram, content='entry', content_rowid='id', tokenize='unicode61')`,
   `CREATE TRIGGER trg_entry_ai AFTER INSERT ON entry BEGIN
     INSERT INTO entry_fts(rowid, bigram) VALUES (new.id, new.bigram);
@@ -149,7 +158,7 @@ const DDL_V1: readonly string[] = [
     INSERT INTO entry_fts(rowid, bigram) VALUES (new.id, new.bigram);
   END`,
 
-  // ── 高相似原子对：派生，重算时全量重建 ────────────────────
+  // ── 近邻对与正文索引：整份可重算 ──────────────────────────
   `CREATE TABLE atom_pair (
     a_id    INTEGER NOT NULL,
     b_id    INTEGER NOT NULL,
@@ -157,8 +166,6 @@ const DDL_V1: readonly string[] = [
     lexical REAL NOT NULL,
     PRIMARY KEY (a_id, b_id)
   ) WITHOUT ROWID`,
-
-  // ── 检索侧物化表 + FTS5（trigram）────────────────────────
   `CREATE TABLE atom_search (
     id   INTEGER PRIMARY KEY,
     body TEXT NOT NULL
@@ -174,44 +181,81 @@ const DDL_V1: readonly string[] = [
     INSERT INTO atom_fts(atom_fts, rowid, body) VALUES ('delete', old.id, old.body);
     INSERT INTO atom_fts(rowid, body) VALUES (new.id, new.body);
   END`,
-]
 
-/**
- * v2 新增：库自描述元数据。
- *
- * 为什么要有这张表：标准验证库必须能自己说清「我是用哪套规则生成的」。
- * 入口抽取规则一改，旧库与新代码产出的库就不是同一套规则，跨规则比较会得出错误结论；
- * 而库文件会被复制、移动、归档，随附一份说明文件最先丢。放进库里最可靠。
- */
-const DDL_V2: readonly string[] = [
+  // ── 显式删除的墓碑（§44）──
+  `CREATE TABLE forgotten (
+    id          INTEGER PRIMARY KEY,
+    atom_id     INTEGER NOT NULL,
+    fingerprint TEXT    NOT NULL,
+    embedding   BLOB    NOT NULL,
+    kind        TEXT    NOT NULL,
+    scope       TEXT    NOT NULL DEFAULT 'global',
+    project_key TEXT,
+    origin      TEXT    NOT NULL DEFAULT 'model',
+    summary     TEXT    NOT NULL DEFAULT '',
+    deleted_at  INTEGER NOT NULL
+  )`,
+  `CREATE INDEX idx_forgotten_deleted ON forgotten(deleted_at DESC)`,
+  `CREATE INDEX idx_forgotten_scope ON forgotten(scope, project_key)`,
+
+  // ── 状态：四件事各一张单行/队列表（v5 新增，取代原来的 meta 键值表）──
+  //
+  // **为什么不是一张 key-value 表**：原来的 meta 把所有状态压成字符串键值对，
+  // 于是「同一件事的几个字段」在库里没有共同边界 —— 整理的三态是三个键，写一个
+  // 键失败时另外两个已经是新值；拆分清单是一整份 JSON，每次读写都要整份读改写。
+  // 分成四张表之后，同一行的一次 UPDATE 要么全成功要么全失败，而清单类状态按行增删。
+  //
+  // **为什么每张状态表都有 id = 1 的 CHECK**：它们在语义上都是「一个实例」，
+  // 有第二行就说明有代码写错了。约束写进表里，比在每个调用点记得加 WHERE 可靠。
+  `CREATE TABLE build_info (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    entry_rule TEXT    NOT NULL,
+    builder    TEXT    NOT NULL,
+    built_at   INTEGER NOT NULL,
+    source     TEXT
+  )`,
+  `CREATE TABLE recluster_state (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    planned_at   INTEGER,
+    started_at   INTEGER,
+    completed_at INTEGER
+  )`,
+  `CREATE TABLE calib_state (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    last_check_at INTEGER,
+    last_error    TEXT
+  )`,
+  // 拆分队列：一行一条候选。
+  //
+  // `segments` 是「按长度切时切了几段」，`confirmed` 是「用户确认过应当拆分」。
+  // 两者放同一行是因为它们描述同一条候选的两个阶段，而淘汰都按 `added_at` 的最早优先：
+  // 分两张表就要维护两份上限，且「确认」这一步要跨表搬数据。
+  //
+  // **外键 ON DELETE CASCADE**：库里已经没有这条记忆时，它的队列行必须跟着消失。
+  // 否则 `split_queue` 会留下指向不存在 id 的行，而那句提示会在别的地方被读到。
+  `CREATE TABLE split_queue (
+    atom_id   INTEGER PRIMARY KEY REFERENCES atom(id) ON DELETE CASCADE,
+    segments  INTEGER,
+    confirmed INTEGER NOT NULL DEFAULT 0,
+    added_at  INTEGER NOT NULL
+  )`,
+  `CREATE INDEX idx_split_queue_confirmed ON split_queue(confirmed, added_at)`,
+
+  // ── 校准快照：库里唯一一张 key-value 表，且不由本插件写 ──
+  //
+  // 占用者是外部包 `lattice-calib` 0.1.0 的 `recalibrateAndWrite()`：它在同一个事务里写
+  // 5 个键（calib_params / calib_s_baseline / calib_version / calib_at /
+  // calib_encoder_model），并在写之前要求这张表已经存在（包的约定是「只加键、不改库结构」）。
+  //
+  // **为什么它没跟着旧 meta 一起消失**：本插件自己的状态键已经搬进上面四张表，但这 5 个键
+  // 的写入方在另一个包里，删表会让重标定在写快照那一步直接抛错。
+  // 跨包契约不能由本仓库单方面改 —— 要让它也搬走，得先改 `lattice-calib` 的存储。
+  // 在那之前，这张表只服务校准快照；本插件不再往里写任何状态。
   `CREATE TABLE meta (
     key        TEXT PRIMARY KEY,
     value      TEXT    NOT NULL,
     updated_at INTEGER NOT NULL
   ) WITHOUT ROWID`,
-]
-
-/**
- * 迁移步骤表：MIGRATIONS[i] 把库从版本 i 升到版本 i+1。
- *
- * 顺序即语义，不得重排 —— 旧库缺哪几步就跑哪几步（见 open.ts 的 migrate）。
- */
-/**
- * v3 新增：所有权与生命周期状态。
- *
- * `origin` 记「这条记忆是谁写的」，是**所有权维度**：用户说的、模型推断的、从别处导入的，
- * 在「该不该信、该不该删」上不是一回事。原 schema 里只有 entry 与 atom_topic 有 origin，
- * 那说的是「入口 / 归属是怎么来的」，atom 自己没有。
- *
- * 迁移时按 source 推断已有行：v1/v2 期间只有导入路径会带 source，运行时写入不带。
- * 追溯不到的一律留在默认值 model —— 猜错所有权比留空更糟。
- */
-const DDL_V3: readonly string[] = [
-  `ALTER TABLE atom ADD COLUMN origin TEXT NOT NULL DEFAULT 'model'`,
-  `UPDATE atom SET origin = 'import' WHERE source IS NOT NULL`,
-  `ALTER TABLE atom ADD COLUMN recall_hits INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE atom ADD COLUMN last_recalled_at INTEGER`,
-  `CREATE INDEX idx_atom_origin ON atom(origin)`,
 ]
 
 /**
@@ -277,42 +321,12 @@ export function normalizeOrigin(v: unknown, fallback: AtomOrigin = 'model'): Ato
 }
 
 /**
- * v4 新增：显式删除的墓碑（§44）。
+ * 迁移步骤表：MIGRATIONS[i] 把库从版本 i 升到版本 i+1。
  *
- * **为什么单独一张表、不给 atom 加 deleted_at 列**：`atom` 每一行的语义是「一条活着的
- * 记忆」。把墓碑混进去会污染**所有**对它的查询 —— 召回、目录、计数、健康指标 —— 而
- * 「每处都要记得加过滤」正是本项目反复吃亏的形态。单独成表之后，「活着的记忆」这条
- * 不变量继续由 `atom` 自己保证，一条 SQL 就能看出它成立。
- *
- * **墓碑是凭证，不是被隐藏的数据**：删完那条 atom 就真的不在了。这张表只记「它曾经
- * 存在过」，用来在做不到「删了就再不出现」的地方把写回拦下来 —— 真删之后，写回本身
- * 就不可检测了。
- *
- * **`embedding` 为什么也要留下来**：这条判据是「词面 + 余弦」两票，而余弦要拿被删那条的
- *   - 与落位判据同粒度（§3/§20 的「是不是一件事」用的就是 bigram 集合 + Jaccard），
- *     所以它不是一个新判据；
- *   - 存文本而不是存哈希，是为了让一条 `SELECT fingerprint FROM forgotten` 就能看出
- *     「拦的是哪几句话」—— 调试一个只在删除后才出现的判据，可读性比几十字节重要。
- *     代价是每行比哈希大一个数量级，而它与「用户删除过的条数」同阶，远小于库本身。
+ * 0.9 起只有第 0 步（快照）。第 1.0 版起，这一数组只允许**追加**，不允许修改或删除
+ * 已有的步骤 —— 外面的库要靠它一路升上来。
  */
-const DDL_V4: readonly string[] = [
-  `CREATE TABLE forgotten (
-    id          INTEGER PRIMARY KEY,
-    atom_id     INTEGER NOT NULL,
-    fingerprint TEXT    NOT NULL,
-    embedding   BLOB    NOT NULL,
-    kind        TEXT    NOT NULL,
-    scope       TEXT    NOT NULL DEFAULT 'global',
-    project_key TEXT,
-    origin      TEXT    NOT NULL DEFAULT 'model',
-    summary     TEXT    NOT NULL DEFAULT '',
-    deleted_at  INTEGER NOT NULL
-  )`,
-  `CREATE INDEX idx_forgotten_deleted ON forgotten(deleted_at DESC)`,
-  `CREATE INDEX idx_forgotten_scope ON forgotten(scope, project_key)`,
-]
-
-export const MIGRATIONS: readonly (readonly string[])[] = [DDL_V1, DDL_V2, DDL_V3, DDL_V4]
+export const MIGRATIONS: readonly (readonly string[])[] = [SNAPSHOT_V5]
 
 /** 全部 DDL 的扁平视图，供建库校验比对 schema 对象是否齐全。 */
 export const DDL: readonly string[] = MIGRATIONS.flat()

@@ -122,15 +122,12 @@ describe('atom.flags 落地（T36）', () => {
     for (const row of listed.rows) assert.notEqual(row.flags & FLAG_UNCLASSIFIED, 0)
   })
 
-  it('判据 5：迁移不回溯猜 —— 旧行保持 0', async () => {
-    // 造一行「旧写入」：flags 显式 0，然后跑一次迁移入口（幂等，schema 已是 4）。
+  it('判据 5：重开库不回溯猜 —— 旧行保持 0', async () => {
+    // 造一行「旧写入」：flags 显式 0，然后重新打开库（打开路径会跑一遍幂等的建库校验）。
     db.prepare(
       'INSERT INTO atom (kind, text, summary, embedding, created_at, updated_at, flags) VALUES (?, ?, ?, ?, ?, ?, 0)',
     ).run('知识', '旧行', '旧行', new Uint8Array(VEC_DIM * 4), Date.now(), Date.now())
     const before = Number(db.prepare('SELECT COUNT(*) AS n FROM atom WHERE flags <> 0').get().n)
-    // 造一个真正的 v3 库：v4 才加的 forgotten 表删掉，再把版本号退回去。
-    db.exec('DROP TABLE IF EXISTS forgotten')
-    db.exec('PRAGMA user_version = 3')
     db.close()
     db = openVault(join(dir, 'lattice.db')).db
     const after = Number(db.prepare('SELECT COUNT(*) AS n FROM atom WHERE flags <> 0').get().n)

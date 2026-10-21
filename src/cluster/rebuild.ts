@@ -19,7 +19,7 @@ import type { ThresholdValue } from '../threshold-types.js'
 import { decodeVec, encodeVec, isValidVecBlob, normalizeInPlace, dot, VEC_DIM } from '../util/vec.js'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { DUP_COS, DUP_LEX } from '../pipeline/search.js'
-import { setMeta, META_RECLUSTER_AT } from '../db/meta.js'
+import { setReclusterCompleted } from '../db/recluster-state.js'
 
 /**
  * 分批回填的每批 atom 数。
@@ -457,8 +457,8 @@ export function rebuildAtomPairs(
   const written = persistAtomPairs(db, computed, opts)
   // 留痕：体检要靠它区分「没建过」与「建过但没有」—— 空表本身没有这两种含义。
   // 由本函数写（而不是 persistAtomPairs）是因为 persist 只管表、不管状态；
-  // 整次重聚类走 runRecluster 时，三个 meta 键由它在同一个事务里一起写。
-  if (opts.inTransaction !== true) setMeta(db, META_RECLUSTER_AT, String(Date.now()))
+  // 整次重聚类走 runRecluster 时，状态行由它在同一个事务里一起写。
+  if (opts.inTransaction !== true) setReclusterCompleted(db, Date.now())
   return {
     rows: written.rows,
     scanned: computed.scanned,

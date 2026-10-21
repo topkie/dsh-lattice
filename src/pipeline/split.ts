@@ -5,24 +5,32 @@
 // 不是「这条一定该拆」—— 一条 601 字、只讲一件事的文本同样会被标上。
 //
 // 两个动作都清 bit0、都写一条日志（log.info），差别在有没有状态：
-//   确认 → 另记一条状态（meta 的 split_confirmed），下次召回命中这条时锚行提示
+//   确认 → 另记一条状态（split_queue 里一行，confirmed = 1），下次召回命中这条时锚行提示
 //          「用户已确认应拆分」，并说明下一步（按内容重写、声明 supersedes）。
 //   忽略 → 没有状态、没有待办、不改变任何召回行为。
 //
-// **为什么两个动作都要日志**：日志回答「发生过」，meta 回答「当前状态」。而那张 meta
-// 清单是 FIFO 的 —— 被挤出去的那一条在状态里不留任何痕迹，「它被确认过」这句话就只剩
-// 日志能回答。「留痕（日志）」说的是这件事，meta 只是顺带有了状态。
+// **为什么两个动作都要日志**：日志回答「发生过」，表回答「当前状态」。而清单
+// 是 FIFO 的 —— 被挤出去的那一条在状态里不留任何痕迹，「它被确认过」这句话就只剩
+// 日志能回答。「留痕（日志）」说的是这件事，表只是顺带有了状态。
 //
 // **两者都不执行拆分**：不改正文、不改条数、不迁移入口与边。执行拆分要动
 // 入口 / 边 / topic 归属，设计里没有定义，留给后续任务。
 //
-// 为什么确认状态放在 meta 表而不是新表：它是一份「人做过的决定」的清单，没有查询维度、
-// 不需要索引，也不需要与 atom 行同生命周期；加一张表就要一次迁移，而本任务的硬约束是
-// 不升 user_version（现为 4）。上限与 FIFO 淘汰见 SPLIT_CONFIRMED_MAX。
+// 状态存在 split_queue 表（一条记忆一行，键是 atom_id）：它是外键，删记忆时队列行跟着
+// 消失，不必在读的时候过滤脏 id。两份清单（确认结论、段数）共用一行 —— 键与生命周期
+// 都一致。上限与 FIFO 淘汰见 SPLIT_CONFIRMED_MAX / SPLIT_SEGMENTS_MAX。
 
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
-import { META_SPLIT_CONFIRMED, META_SPLIT_SEGMENTS, getMeta, setMeta } from '../db/meta.js'
+import {
+  clearSegments,
+  markConfirmed,
+  pruneConfirmed,
+  pruneSegments,
+  readConfirmedSplits,
+  readPendingSegments,
+  upsertSegments,
+} from '../db/split-queue.js'
 import { log } from '../log/index.js'
 import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 
@@ -37,10 +45,10 @@ export const SPLIT_CONFIRMED_MAX = 32 satisfies ThresholdValue<
   'chosen',
   {
     area: '写入'
-    why: '未标定，是护栏：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长'
+    why: '未标定，是护栏：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让这张表无限增长'
     failsWhen: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度']
     guardedBy: ['test/split-pending.test.mjs']
-    affects: '「用户已确认应拆分」清单的条数上限（meta 的 split_confirmed，FIFO 淘汰最早的一条）。满了只影响更早的确认还能不能出现在锚行提示里，不改变任何召回与写入行为'
+    affects: '「用户已确认应拆分」清单的条数上限（split_queue 里 confirmed = 1 的行，FIFO 淘汰最早的一条）。满了只影响更早的确认还能不能出现在锚行提示里，不改变任何召回与写入行为'
   }
 >
 
@@ -48,15 +56,15 @@ export const SPLIT_CONFIRMED_MAX = 32 satisfies ThresholdValue<
  * 「切分时共几段」这张表的条数上限（FIFO，与 SPLIT_CONFIRMED_MAX 同口径）。
  *
  * 一次写入最多切 REVIEW_MAX_SEGMENTS 段（8），所以这个上限容得下四次切分写入；
- * 超出的部分对任何一次召回都没有影响（一次最多展示二十几条锚），留着只让 meta 值涨。
+ * 超出的部分对任何一次召回都没有影响（一次最多展示二十几条锚），留着只让这张表涨。
  */
 export const SPLIT_SEGMENTS_MAX = 32 satisfies ThresholdValue<
   'chosen',
   {
     area: '写入'
-    why: '未标定，是护栏：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对召回没有影响，设它是为了让 meta 的值不无限增长'
+    why: '未标定，是护栏：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对召回没有影响，设它是为了让这张表不无限增长'
     failsWhen: ['一次写入的切分段数上限（REVIEW_MAX_SEGMENTS）', '锚段条数（topN 与实际预算）']
-    affects: '「切分时共几段」映射的条数上限（meta 的 split_pending_segments，FIFO）。满了只影响更早的候选还能不能显示段数，段数未知时锚行退回不带段数的固定串'
+    affects: '「切分时共几段」映射的条数上限（split_queue 里 segments 有值的行，FIFO）。满了只影响更早的候选还能不能显示段数，段数未知时锚行退回不带段数的固定串'
   }
 >
 
@@ -72,63 +80,20 @@ export interface SplitDecision {
 }
 
 /**
- * 读确认清单。
+ * 读「用户已确认应拆分」的清单（按确认先后升序）与「切分时共几段」的映射。
  *
- * 值坏了（不是 JSON、不是数组、元素不是正整数）时按空清单处理：这份清单只影响一句
- * 提示，为它抛错会让整次召回失败 —— 那比少一句提示重得多。
+ * 实现在 db/split-queue.ts；这里只做转发，因为读取入口一直是 pipeline/split.ts ——
+ * search.ts 与测试都从这里取，改动它们没有好处。
+ *
+ * 旧实现的坏值容错（不是 JSON、元素形状不对就整份按空处理）不再需要：值不再是一整份
+ * 可损坏的 JSON，坏行只影响它自己那一行。
  */
-export function readConfirmedSplits(db: DatabaseSync): number[] {
-  const raw = getMeta(db, META_SPLIT_CONFIRMED)
-  if (raw === undefined) return []
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return []
-  }
-  if (!Array.isArray(parsed)) return []
-  const out: number[] = []
-  for (const v of parsed) {
-    const id = Number(v)
-    if (Number.isInteger(id) && id > 0) out.push(id)
-  }
-  return out
-}
-
+export { readConfirmedSplits, readPendingSegments }
 /**
- * 读「切分时共几段」的映射。
+ * 记下这次切分的段数：**每一段各记一行**，值都是同一个数。
  *
- * 值坏了（不是 JSON、不是数组、元素形状不对）时跳过坏项、按空处理，理由同
- * readConfirmedSplits：它只影响锚行一句提示的措辞，为它抛错会让整次召回失败。
- * 段数 ≤ 1 的项也丢掉 —— 那表示「没切」，不是一份可展示的信息。
- */
-export function readPendingSegments(db: DatabaseSync): Map<number, number> {
-  const out = new Map<number, number>()
-  const raw = getMeta(db, META_SPLIT_SEGMENTS)
-  if (raw === undefined) return out
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return out
-  }
-  if (!Array.isArray(parsed)) return out
-  for (const item of parsed) {
-    if (!Array.isArray(item) || item.length !== 2) continue
-    const id = Number(item[0])
-    const n = Number(item[1])
-    if (!Number.isInteger(id) || id <= 0) continue
-    if (!Number.isInteger(n) || n <= 1) continue
-    out.set(id, n)
-  }
-  return out
-}
-
-/**
- * 记下这次切分的段数：**每一段各记一条，值都是同一个数**。
- *
- * 同一个 id 再次被记时先删旧项再追加（等于盖掉旧值、排到最后）：这条记忆后来又被切过
- * 一次的话，新的段数才是它现在的样子；排在最后也意味着它离淘汰最远。
+ * 同一个 id 再次被记时盖掉旧值并排到最后：这条记忆后来又被切过一次的话，新的段数才是
+ * 它现在的样子；排在最后也意味着它离淘汰最远。
  *
  * 不加事务：几段正文已经各自落库，段数只影响一句提示。丢了这个数，锚行退回不带段数的
  * 固定串 —— 少一句信息，但召回不失败。
@@ -141,26 +106,18 @@ export function recordPendingSegments(
 ): void {
   if (!Number.isInteger(segments) || segments <= 1) return
   if (atomIds.length === 0) return
-  const entries: Array<[number, number]> = []
-  const fresh = new Set(atomIds)
-  for (const [id, n] of readPendingSegments(db)) {
-    if (!fresh.has(id)) entries.push([id, n])
-  }
-  for (const id of atomIds) entries.push([id, segments])
-  while (entries.length > SPLIT_SEGMENTS_MAX) entries.shift()
-  setMeta(db, META_SPLIT_SEGMENTS, JSON.stringify(entries), now)
+  for (const id of atomIds) upsertSegments(db, id, segments, now)
+  pruneSegments(db, SPLIT_SEGMENTS_MAX)
 }
 
 /**
- * 这条已经有了人的结论（确认或忽略），段数提示不会再出现，把它的项删掉。
+ * 这条已经有了人的结论（确认或忽略），段数提示不会再出现，把这个值清掉。
  *
- * 不删也能跑（FIFO 迟早挤掉它），但那是死数据：它占着同一个上限，却没有人会再读它。
+ * 清完若这一行既没结论也没段数，整行就删掉 —— 留着是死数据，占着同一个上限，
+ * 却没有任何人再读它。
  */
-function dropPendingSegments(db: DatabaseSync, atomId: number, now: number): void {
-  const segments = readPendingSegments(db)
-  if (!segments.has(atomId)) return
-  segments.delete(atomId)
-  setMeta(db, META_SPLIT_SEGMENTS, JSON.stringify([...segments]), now)
+function dropPendingSegments(db: DatabaseSync, atomId: number): void {
+  clearSegments(db, atomId)
 }
 
 interface ClearResult {
@@ -187,9 +144,9 @@ function clearSplitPending(db: DatabaseSync, atomId: number): ClearResult | null
 }
 
 /**
- * 确认「这一条应当拆分」：清 bit0，并把这条记进 meta 的确认清单。
+ * 确认「这一条应当拆分」：清 bit0，并把这条记进 split_queue 的确认清单。
  *
- * 两步（flags 与 meta）放在同一个事务里：只清位不记账，用户确认过这件事就丢了；
+ * 两步（flags 与队列行）放在同一个事务里：只清位不记账，用户确认过这件事就丢了；
  * 只记账不清位，界面会一直显示同一条候选。两者都是**没有报错**的失败形态。
  *
  * 幂等：重复确认不重复记账、不重复写库，只把 `changed` 说成 false。
@@ -202,8 +159,6 @@ export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now())
   const exists = db.prepare('SELECT 1 AS ok FROM atom WHERE id = ?').get(atomId)
   if (exists === undefined) return null
 
-  const confirmed = readConfirmedSplits(db)
-  const already = confirmed.includes(atomId)
   let flags = 0
   let changed = false
   /** 这一条是否**新进了**清单。与 `changed`（位有没有变）是两件事，留痕取两者的并集。 */
@@ -215,16 +170,10 @@ export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now())
     const cleared = clearSplitPending(db, atomId)!
     flags = cleared.flags
     changed = cleared.changed
-    if (!already) {
-      recorded = true
-      confirmed.push(atomId)
-      while (confirmed.length > SPLIT_CONFIRMED_MAX) {
-        confirmed.shift()
-        evicted += 1
-      }
-      setMeta(db, META_SPLIT_CONFIRMED, JSON.stringify(confirmed), now)
-    }
-    dropPendingSegments(db, atomId, now)
+    // 一行 UPSERT 同时做两件事：进清单、清段数。旧实现要把整份 JSON 读出来、改、再写回，
+    // 于是「清单」与「段数」这两份状态各有一次整份覆写的机会互相踩。
+    recorded = markConfirmed(db, atomId, now)
+    evicted = pruneConfirmed(db, SPLIT_CONFIRMED_MAX)
     db.exec('COMMIT')
   } catch (err) {
     try {
@@ -237,7 +186,7 @@ export function confirmSplit(db: DatabaseSync, atomId: number, now = Date.now())
   // 位被清掉、或新进了清单，都算「用户确认过一次」；两者都没有（重复点）就不写。
   if (changed || recorded) log.info('split.confirmed')
   if (evicted > 0) log.info('split.evicted', { evicted })
-  return { atomId, flags, changed: changed || !already, confirmed }
+  return { atomId, flags, changed: changed || recorded, confirmed: readConfirmedSplits(db) }
 }
 
 /**
@@ -253,6 +202,6 @@ export function ignoreSplit(db: DatabaseSync, atomId: number): SplitDecision | n
   if (cleared === null) return null
   if (cleared.changed) log.info('split.ignored')
   // 不包事务：位已经清了，这一步只是删一条不会再被读到的提示数据。
-  dropPendingSegments(db, atomId, Date.now())
+  dropPendingSegments(db, atomId)
   return { atomId, flags: cleared.flags, changed: cleared.changed }
 }

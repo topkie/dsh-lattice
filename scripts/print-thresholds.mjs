@@ -218,6 +218,7 @@ const EXEMPT = {
     '协议性：聚类标签里「未归类」的哨兵值（-1）。它不是一条线而是一个约定，改它只是把' +
     '同一个语义换个写法（同时要改读取侧对 -1 的判读），没有「取多少合适」可言',
   MIN_K: '结构性上界：k 近邻图的 k 至少要取最近的那个邻居，不是可调区间',
+  SEGMENTS_MIN: '结构性下限：段数 ≤ 1 表示「没切」，不是可展示的信息，也不是可调的量',
   LOG_SCHEMA_VERSION:
     '协议性：日志库的 PRAGMA user_version，改它等于换日志库格式（实现上是**重建**，不迁移），不是调参',
   DETAIL_MAX_CHARS:
@@ -236,17 +237,9 @@ const EXEMPT = {
  */
 const EXEMPT_NON_NUMERIC = {
   VEC_BYTES: '由 VEC_DIM 派生（VEC_DIM x 4）；AST 扫描不解析同名引用，改它等于改 VEC_DIM',
+  SNAPSHOT_V5: 'SQL 文本：v5 的全部建表语句，MIGRATIONS 由它构成',
   DDL: 'SQL 文本',
-  DDL_V1: 'SQL 文本',
-  DDL_V2: 'SQL 文本',
-  DDL_V3: 'SQL 文本',
   MIGRATIONS: '迁移语句列表',
-  META_SCHEMA_VERSION: 'meta 表的键名（协议字面量）',
-  META_ENTRY_RULE: 'meta 表的键名',
-  META_BUILT_AT: 'meta 表的键名',
-  META_SOURCE: 'meta 表的键名',
-  META_BUILDER: 'meta 表的键名',
-  META_SPLIT_CONFIRMED: 'meta 表的键名',
   ATOM_ORIGINS: '类型枚举的取值表',
   ENTRY_RULE_ID: '规则标识：不是取值阈值，但**改入口规则必须改它**（见 docs/DEVELOPMENT.md）',
   EMPTY_VOCAB: '空词表实现，不是阈值',

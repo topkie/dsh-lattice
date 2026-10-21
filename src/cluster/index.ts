@@ -30,7 +30,7 @@ import {
   resolveOldToNewTopics,
 } from './rebuild.js'
 import type { TopicWrite, RebuildStats, AtomPairsComputed } from './rebuild.js'
-import { META_RECLUSTER_AT, setMeta } from '../db/meta.js'
+import { setReclusterCompleted } from '../db/recluster-state.js'
 
 /** 分步耗时（毫秒）。 */
 export interface StepTiming {
@@ -449,7 +449,7 @@ export async function runRecluster(db: DatabaseSync, opts: ReclusterOptions = {}
       persistAtomPairs(db, computedPairs, { batchPairs: opts.batchAtoms, inTransaction: true }),
     )
     // 重聚类时间与主数据同一事务：它和 topic / atom_pair 说的是同一件事。
-    setMeta(db, META_RECLUSTER_AT, String(Date.now()))
+    setReclusterCompleted(db, Date.now())
     opts.onCommit?.()
     db.exec('COMMIT')
   } catch (err) {

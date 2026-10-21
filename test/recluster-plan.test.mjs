@@ -22,13 +22,7 @@ import {
   readReclusterState,
   resumeIfPending,
 } from '../dist/cluster/executor.js'
-import {
-  META_RECLUSTER_AT,
-  META_RECLUSTER_PLANNED_AT,
-  META_RECLUSTER_STARTED_AT,
-  getMeta,
-  setMeta,
-} from '../dist/db/meta.js'
+import { readReclusterTimes, setReclusterPlanned, setReclusterStarted } from '../dist/db/recluster-state.js'
 
 let dbFile = ''
 
@@ -83,14 +77,14 @@ function snapshot(db) {
 }
 
 describe('T47 判据 1：规划不改数据', () => {
-  it('规划只写 meta：记忆 / 主题 / atom_pair / 入口的行数与主题向量都不动', () => {
+  it('规划只写状态行：记忆 / 主题 / atom_pair / 入口的行数与主题向量都不动', () => {
     const { db } = openVault(dbFile)
     seed(db, 6)
     const before = snapshot(db)
     const state = planRecluster(db, () => {}, 60_000)
     assert.equal(state.phase, 'planned')
     assert.deepEqual(snapshot(db), before, '规划不得改任何数据行')
-    assert.notEqual(getMeta(db, META_RECLUSTER_PLANNED_AT), undefined, 'planned 要落库')
+    assert.notEqual(readReclusterTimes(db).plannedAt, null, 'planned 要落库')
     clearPlanTimer()
     db.close()
   })
@@ -107,7 +101,7 @@ describe('T47 判据 2：四态可区分', () => {
     clearPlanTimer()
 
     // failed：planned 与 started 同时有值，但进程里没在跑 —— 那就是上次没跑完。
-    setMeta(db, META_RECLUSTER_STARTED_AT, String(Date.now()))
+    setReclusterStarted(db, Date.now())
     assert.equal(readReclusterState(db).phase, 'failed')
 
     // running：执行器在开跑前让出一次事件循环，这一刻可以观测到。
@@ -135,7 +129,7 @@ describe('T47 判据 3：取消幂等，执行中拒收', () => {
     planRecluster(db, () => {}, 60_000)
     const first = cancelRecluster(db)
     assert.equal(first.ok, true)
-    assert.equal(getMeta(db, META_RECLUSTER_PLANNED_AT), undefined, '取消要删 planned')
+    assert.equal(readReclusterTimes(db).plannedAt, null, '取消要删 planned')
 
     const again = cancelRecluster(db)
     assert.equal(again.ok, false, '重复取消不是错误')
@@ -147,7 +141,7 @@ describe('T47 判据 3：取消幂等，执行中拒收', () => {
     const rejected = cancelRecluster(db)
     assert.equal(rejected.ok, false)
     assert.equal(rejected.reason, 'running', '执行中一律拒绝')
-    assert.equal(getMeta(db, META_RECLUSTER_STARTED_AT) !== undefined, true, '状态一个字不动')
+    assert.equal(readReclusterTimes(db).startedAt !== null, true, '状态一个字不动')
     await pending
     db.close()
   })
@@ -168,9 +162,10 @@ describe('T47 判据 4：延迟只跑一次', () => {
     )
     await new Promise((resolve) => setTimeout(resolve, 150))
     assert.equal(runs, 1, '延迟只能触发一次')
-    assert.equal(getMeta(db, META_RECLUSTER_PLANNED_AT), undefined)
-    assert.equal(getMeta(db, META_RECLUSTER_STARTED_AT), undefined)
-    assert.notEqual(getMeta(db, META_RECLUSTER_AT), undefined, '成功一次要留下时间戳')
+    const times = readReclusterTimes(db)
+    assert.equal(times.plannedAt, null)
+    assert.equal(times.startedAt, null)
+    assert.notEqual(times.completedAt, null, '成功一次要留下时间戳')
     assert.equal(readReclusterState(db).phase, 'idle')
     db.close()
   })
@@ -182,7 +177,7 @@ describe('T47 判据 4：延迟只跑一次', () => {
     assert.equal(skipped.skipped, true, '没有计划时不该跑')
 
     // 模拟「规划过、进程被杀」：只留 planned，没有 started。
-    setMeta(db, META_RECLUSTER_PLANNED_AT, String(Date.now()))
+    setReclusterPlanned(db, Date.now())
     const resumed = await resumeIfPending(db)
     assert.equal(resumed.ok, true)
     assert.equal(resumed.skipped, false)

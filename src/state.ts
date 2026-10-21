@@ -10,16 +10,8 @@ import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import {
-  ensureMeta,
-  getMeta,
-  setMeta,
-  META_BUILDER,
-  META_CALIB_LAST_CHECK,
-  META_CALIB_LAST_ERROR,
-  META_ENTRY_RULE,
-  META_SCHEMA_VERSION,
-} from './db/meta.js'
+import { ensureBuildInfo } from './db/build-info.js'
+import { readCalibState, setCalibLastCheck, setCalibLastError } from './db/calib-state.js'
 import { openVault } from './db/open.js'
 import { SCHEMA_VERSION } from './db/schema.js'
 import {
@@ -185,11 +177,12 @@ function noteCalibration(cal: CalibrationState): void {
  *
  * 为什么是 ensure 而不是 set：库若是另一套入口规则生成的，覆盖元数据只会把
  * 「不一致」这个事实抹掉 —— 而它恰恰是需要被看见的东西（由 checkEntryRule 报告）。
+ *
+ * 不再记 schema 版本：版本号的唯一真相源是 PRAGMA user_version。旧实现另存了一份
+ * schema_version 键，两份值在真实库里漂成了 4 与 3。
  */
 function stampVault(db: DatabaseSync): void {
-  ensureMeta(db, META_SCHEMA_VERSION, String(SCHEMA_VERSION))
-  ensureMeta(db, META_ENTRY_RULE, ENTRY_RULE_ID)
-  ensureMeta(db, META_BUILDER, 'runtime')
+  ensureBuildInfo(db, { entryRule: ENTRY_RULE_ID, builder: 'runtime' })
 }
 
 /** 上一次报过的编码器失败原因。按**状态变化**记日志，避免同一原因把日志库刷满。 */
@@ -261,14 +254,6 @@ export function noteRecallDegradations(meta: RecallMeta): void {
   }
 }
 
-/** 从 meta 读一个数值；缺失或非数返回 null。 */
-function metaNum(db: DatabaseSync, key: string): number | null {
-  const raw = getMeta(db, key)
-  if (raw === null) return null
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : null
-}
-
 /**
  * 错误的原因码：只取短 token（类名 / 错误码）。
  *
@@ -295,7 +280,7 @@ export async function maybeRecalibrate(): Promise<string> {
   const now = Date.now()
   const atoms = Number((rt.db.prepare('SELECT COUNT(*) AS n FROM atom').get() as { n: number | bigint }).n)
   const { positive: positives, negative: negatives } = sampleStats()
-  const lastCheckAt = metaNum(rt.db, META_CALIB_LAST_CHECK)
+  const lastCheckAt = readCalibState(rt.db).lastCheckAt
 
   // 第一轮：只验前三道（sBaseline 传 null 时漂移那道自动跳过）。
   const pre = evaluateGates({ atoms, positives, negatives, now, lastCheckAt, sBaseline: null, currentS: 0 })
@@ -304,18 +289,20 @@ export async function maybeRecalibrate(): Promise<string> {
   // 算 S：伪查询抽样，纯读、不改库。库无向量时 calibrate 会抛 —— 那是「算不出」，按不重标处理。
   let currentS = 0
   try {
-    currentS = calibrate(rt.db).sBaseline
+    // 显式声明本插件当前的结构版本：标定包默认只认它发布时见过的版本，
+    // 插件升级结构后由调用方声明，标定包不需要跟着发版。
+    currentS = calibrate(rt.db, { acceptSchemaVersions: [SCHEMA_VERSION] }).sBaseline
   } catch (err) {
     // **不写 calib_last_check_at**（审核发现 P0-1）：算 S 失败不是「判过 S」。写下去等于让一次失败
     // 换来 12 小时冷却 —— 用户看到的现象是「明明有样本、库也够大，却一直不重标」，而门禁不会红。
     // 失败只留原因码；条件恢复后下一次写入立刻能再试。
-    setMeta(rt.db, META_CALIB_LAST_ERROR, causeCode(err))
+    setCalibLastError(rt.db, causeCode(err))
     log.warn('calib.snapshot_missing')
     return 'no_vectors'
   }
 
   // 只有算成功才记时间：冷却期是「上次判过 S」的冷却，不是「上次试过」的冷却。
-  setMeta(rt.db, META_CALIB_LAST_CHECK, String(now))
+  setCalibLastCheck(rt.db, now)
 
   const snap = readSnapshotState(rt.db)
   const sBaseline = snap.state === 'ok' ? snap.snapshot.sBaseline : null
@@ -332,7 +319,10 @@ export async function maybeRecalibrate(): Promise<string> {
   }))
 
   try {
-    const result = recalibrateAndWrite(rt.db, samples, { encoderModel: rt.cfg.encoderModel })
+    const result = recalibrateAndWrite(rt.db, samples, {
+      encoderModel: rt.cfg.encoderModel,
+      acceptSchemaVersions: [SCHEMA_VERSION],
+    })
     // 整体替换：新的参数一次换上。读侧要么看到旧的、要么看到新的，不存在「一半新一半旧」。
     rt.calibration = { state: 'calibrated', params: { ...result.params } }
     log.info('calib.recalibrate_done', {
@@ -344,7 +334,7 @@ export async function maybeRecalibrate(): Promise<string> {
     return 'recalibrated'
   } catch (err) {
     const code = causeCode(err)
-    setMeta(rt.db, META_CALIB_LAST_ERROR, code)
+    setCalibLastError(rt.db, code)
     log.warn('calib.recalibrate_failed', { stage: 'recalibrate', reason: code })
     return 'failed'
   }

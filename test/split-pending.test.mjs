@@ -29,7 +29,7 @@ import {
   readConfirmedSplits,
   readPendingSegments,
 } from '../dist/pipeline/split.js'
-import { META_SPLIT_SEGMENTS, setMeta } from '../dist/db/meta.js'
+import { upsertSegments } from '../dist/db/split-queue.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { closeLog, flushLog, logFilePath } from '../dist/log/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
@@ -308,14 +308,14 @@ describe('T29 判据 2：召回时把候选连同使用场景给出来', () => {
       assert.ok(line.includes('（3 段，'), '写入侧应当已经记下 3 段：' + line)
     }
 
-    setMeta(db, META_SPLIT_SEGMENTS, JSON.stringify(ids.map((id) => [id, 2])))
+    for (const id of ids) upsertSegments(db, id, 2)
     for (const id of ids) {
       const line = anchorLine(assembleView(db, recall(db, q, null, { topN: 24 }), { scene: q }).text, id)
       assert.ok(line.includes('（2 段，'), '库里改成 2，锚行就得说 2 段：' + line)
     }
 
-    // 老库没有这个键：位还在，段数没有。那句话仍然成立，只是少一个数。
-    db.prepare('DELETE FROM meta WHERE key = ?').run(META_SPLIT_SEGMENTS)
+    // 队列里没有段数：位还在，数没有。那句话仍然成立，只是少一个数。
+    db.exec('DELETE FROM split_queue WHERE segments IS NOT NULL')
     for (const id of ids) {
       const line = anchorLine(assembleView(db, recall(db, q, null, { topN: 24 }), { scene: q }).text, id)
       assert.ok(line.includes('疑似应拆分（切点按长度，未判内容）'), '缺段数时退回固定串：' + line)
@@ -566,14 +566,14 @@ describe('T29 判据 4 / 5：确认与忽略', () => {
     assert.deepEqual(snapshotOf(routeDir, id), before, '确认不得改动记忆本身')
     const d = openVault(join(routeDir, 'lattice.db')).db
     try {
-      assert.deepEqual(readConfirmedSplits(d), [id], '确认状态要落在 meta 里')
+      assert.deepEqual(readConfirmedSplits(d), [id], '确认状态要落在 split_queue 里')
     } finally {
       d.close()
     }
     flushLog()
     assert.ok(
       logEvents(routeDir).includes('split.confirmed'),
-      '确认要留一条日志：meta 清单会 FIFO 淘汰，被挤掉的那条只剩日志能证明它被确认过',
+      '确认要留一条日志：队列按 added_at 淘汰，被挤掉的那条只剩日志能证明它被确认过',
     )
   })
 
@@ -673,7 +673,7 @@ describe('T29 判据 4 / 5：确认与忽略', () => {
     assert.equal(
       events.filter((e) => e === 'split.confirmed').length,
       SPLIT_CONFIRMED_MAX + 1,
-      '每条确认各留一条日志 —— 包括后来被挤掉的那条，这正是 meta 状态回答不了的',
+      '每条确认各留一条日志 —— 包括后来被挤掉的那条，这正是队列状态回答不了的',
     )
     assert.equal(events.filter((e) => e === 'split.evicted').length, 1, '挤掉一条就记一条')
     const logDb = new DatabaseSync(logFilePath(routeDir), { readOnly: true })
@@ -683,6 +683,27 @@ describe('T29 判据 4 / 5：确认与忽略', () => {
     } finally {
       logDb.close()
     }
+  })
+
+  it('判据 5：删掉记忆时它的队列行跟着消失（外键 ON DELETE CASCADE）', () => {
+    const rt = getRuntime(cfgOf(routeDir))
+    const id = seedFlagged(routeDir)
+    upsertSegments(rt.db, id, 2)
+    const count = (atomId) =>
+      Number(rt.db.prepare('SELECT COUNT(*) AS n FROM split_queue WHERE atom_id = ?').get(atomId).n)
+    assert.equal(count(id), 1, '先得有一行才谈得上消失')
+
+    // 外键真的开着：指向不存在记忆的行必须被拒。
+    assert.throws(
+      () =>
+        rt.db
+          .prepare('INSERT INTO split_queue (atom_id, segments, confirmed, added_at) VALUES (?, 2, 0, ?)')
+          .run(900000 + id, Date.now()),
+      /FOREIGN KEY/i,
+    )
+
+    rt.db.prepare('DELETE FROM atom WHERE id = ?').run(id)
+    assert.equal(count(id), 0, '记忆没了，队列行不能留着指向不存在的 id')
   })
 })
 

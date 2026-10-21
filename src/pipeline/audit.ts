@@ -28,7 +28,7 @@
 // 「建过但没有」。这个标记只加在写侧；本模块仍然只读。
 
 import type { DatabaseSync } from 'node:sqlite'
-import { getMeta, META_RECLUSTER_AT } from '../db/meta.js'
+import { readReclusterTimes } from '../db/recluster-state.js'
 import { GRAPH_INFER_MAX_ATOMS, INFERRED_ORIGIN, edgeOriginCounts } from '../graph/infer.js'
 import { DUP_COS, DUP_LEX } from './search.js'
 import { FLAG_ARCHIVED } from '../db/flags.js'
@@ -355,7 +355,7 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
   const learned = entryByOrigin.learned ?? 0
 
   // ── 高相似未合并对（读 atom_pair，同 topic 的不算）───────────────────
-  const rebuiltAt = hasTable(db, 'meta') ? metaNumber(db, META_RECLUSTER_AT) : null
+  const rebuiltAt = hasTable(db, 'recluster_state') ? readReclusterTimes(db).completedAt : null
   const pairRowsTotal = count(db, 'SELECT COUNT(*) AS n FROM atom_pair')
   const atomsAfterRebuild =
     rebuiltAt === null ? null : count(db, 'SELECT COUNT(*) AS n FROM atom WHERE created_at > ?', rebuiltAt)
@@ -501,12 +501,4 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
         atoms === 0 ? null : count(db, 'SELECT COUNT(*) AS n FROM atom WHERE recall_hits = 0') / atoms,
     },
   }
-}
-
-/** 读一个数字形态的 meta 值；不存在或不是有限数时返回 null。 */
-function metaNumber(db: DatabaseSync, key: string): number | null {
-  const raw = getMeta(db, key)
-  if (raw === undefined || raw.trim() === '') return null
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : null
 }
