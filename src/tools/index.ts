@@ -199,7 +199,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     name: 'lattice_write',
     description:
       '记住一件事。仅在值得跨会话复用时调用；对话里临时说过的不要写。写之前先 recall 查重 ——' +
-      '重复只会提示、不会拦你。太短的碎片会被拒收，过长的会按句拆成多条。',
+      '重复只会提示、不会拦你。太短的碎片会被拒收，过长的会按句拆成多条。' +
+      '改口用 supersedes：把它想取代的那条旧记忆标成「已被本条取代」；撤销一次改口用 unsupersede：' +
+      '把被取代的那条清回来。两者作用相反 —— supersedes 建立标记、unsupersede 清掉标记，' +
+      '一次调用只能给其中一个。',
     // 注意形状：parameters 是「属性名 → 值 schema」的映射，**不是** {type, properties}。
     // 必填写成属性上的 required: true。写错会在 defineTool 时就抛错，整个插件加载失败。
     parameters: {
@@ -227,6 +230,12 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       supersedes: {
         type: 'number',
         description: '取代哪条旧记忆的 id（改口时用）；旧条只标记，不删。',
+      },
+      unsupersede: {
+        type: 'number',
+        description:
+          '取消哪条记忆的被取代状态（撤销一次改口时用）：传被取代的那条 id，把它的「已被 #N 取代」清掉。' +
+          '只清标记：不删行、不改内容；本来就没有被取代时如实说明，不报错。',
       },
       edges: {
         type: 'array',
@@ -256,6 +265,18 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const hint = typeof args?.topic_hint === 'number' ? args.topic_hint : undefined
       const sup =
         typeof args?.supersedes === 'number' && Number.isFinite(args.supersedes) ? args.supersedes : undefined
+      const unsup =
+        typeof args?.unsupersede === 'number' && Number.isFinite(args.unsupersede)
+          ? args.unsupersede
+          : undefined
+      // 两个参数方向相反：同时给出来是调用方搞错了，与其猜一边，不如一次说清并拒绝。
+      // 这一步放在写库之前 —— 回执说「没有写库」就必须真的没写。
+      if (sup !== undefined && unsup !== undefined) {
+        return (
+          '写入失败：supersedes 与 unsupersede 不能同时给 —— 一个建立取代关系、一个取消它。' +
+          '要改口就只传 supersedes（并写新的那条）；要撤销改口就只传 unsupersede。这次没有写库。'
+        )
+      }
       // 形状由 write.ts 的 validateDeclaredEdges 校验：工具层**原样搬运**，连「不是数组」
       // 也交给它 —— 否则那种输入会被这里静默丢掉，调用方看不到任何说明。
       const edges = args?.edges === undefined ? undefined : (args.edges as DeclaredEdgeInput[])
@@ -387,6 +408,32 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
                 (multi ? '（切分后的第一条）' : '（本条）') +
                 '取代（旧条不会删除）。',
         )
+      }
+      // 取消取代（T67）：与 supersedes 对称，只动 superseded_by 这一列 ——
+      // 不删行、不改内容、不碰 edge 表（库里的关系行原样保留）。
+      // 三种结果分开说：「没有改动」有两个不同原因（id 不在库里 / 本来就没被取代），
+      // 混成一句，调用方就不知道下一步该做什么。
+      if (unsup !== undefined) {
+        const row = rt.db.prepare('SELECT superseded_by FROM atom WHERE id = ?').get(unsup) as
+          { superseded_by: number | bigint | null } | undefined
+        if (row === undefined) {
+          lines.push('注意：记忆 #' + unsup + ' 不在库里，未改动任何东西。')
+        } else if (row.superseded_by === null || row.superseded_by === undefined) {
+          lines.push('记忆 #' + unsup + ' 本来就没有被取代，未改动。')
+        } else {
+          const by = Number(row.superseded_by)
+          rt.db
+            .prepare('UPDATE atom SET superseded_by = NULL, updated_at = ? WHERE id = ?')
+            .run(Date.now(), unsup)
+          lines.push(
+            '已取消 #' +
+              unsup +
+              ' 的被取代标记：#' +
+              by +
+              ' 不再取代它，两条记忆都还在；' +
+              '再用原文召回，它会重新出现。',
+          )
+        }
       }
       return lines.join('\n')
     },
