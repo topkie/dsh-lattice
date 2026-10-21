@@ -36,6 +36,7 @@ import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 export const SPLIT_CONFIRMED_MAX = 32 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '未标定，是护栏：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长'
     failsWhen: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度']
     guardedBy: ['test/split-pending.test.mjs']
@@ -52,6 +53,7 @@ export const SPLIT_CONFIRMED_MAX = 32 satisfies ThresholdValue<
 export const SPLIT_SEGMENTS_MAX = 32 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '未标定，是护栏：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对召回没有影响，设它是为了让 meta 的值不无限增长'
     failsWhen: ['一次写入的切分段数上限（REVIEW_MAX_SEGMENTS）', '锚段条数（topN 与实际预算）']
     affects: '「切分时共几段」映射的条数上限（meta 的 split_pending_segments，FIFO）。满了只影响更早的候选还能不能显示段数，段数未知时锚行退回不带段数的固定串'

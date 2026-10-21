@@ -30,6 +30,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import {
+  DESIGN_DOCS,
   DESIGN_GAPS,
   THRESHOLDS,
   constNameOf,
@@ -67,9 +68,9 @@ function missingOf(entry) {
 
 const QUERIES = {
   'needs-review': () =>
-    needsReviewEntries().map((e) => ({ name: e.name, area: e.area, detail: missingOf(e) })),
-  unguarded: () => unguardedEntries().map((e) => ({ name: e.name, area: e.area, detail: '' })),
-  undated: () => undatedEntries().map((e) => ({ name: e.name, area: e.area, detail: '' })),
+    needsReviewEntries(ENTRIES).map((e) => ({ name: e.name, area: e.area, detail: missingOf(e) })),
+  unguarded: () => unguardedEntries(ENTRIES).map((e) => ({ name: e.name, area: e.area, detail: '' })),
+  undated: () => undatedEntries(ENTRIES).map((e) => ({ name: e.name, area: e.area, detail: '' })),
 }
 
 function renderQuery(mode) {
@@ -123,7 +124,10 @@ function checkReviewBaseline() {
   }
   const current = { needsReview: QUERIES['needs-review'](), unguarded: QUERIES.unguarded() }
   const known = new Set([...THRESHOLDS.map((e) => e.name), ...typeEntries.map((e) => e.name)])
-  const problems = [...inventoryProblems(inventory, known), ...reviewBaselineProblems(baseline, inventory)]
+  const problems = [
+    ...inventoryProblems(inventory, known),
+    ...reviewBaselineProblems(baseline, inventory, ENTRIES),
+  ]
   // 「已解决」= 基线里当前不再出现的项：不报错，只提示可以删（基线只允许变短）。
   let resolved = 0
   for (const [key, rows] of [
@@ -340,6 +344,33 @@ function isDerived(node, known) {
  * 字段白名单与 kind 合法性由 thresholdOriginProblems 断言：类型参数里的 T 不受约束，
  * 写错字段名不会编译报错，只能在这里抓。
  */
+/**
+ * 类型里的值：字面量类型（字符串 / 数字 / 布尔）、元组、类型字面量。
+ *
+ * 数字要转成 number —— 只取 `getText()` 会把它读成字符串 "0.75"，后续 `typeof === 'number'`
+ * 的判断一律落空，字段默默当成没写（`docDefault` 就是这么被漏掉的）。
+ */
+function typeToValue(t, sf) {
+  if (ts.isLiteralTypeNode(t)) {
+    const lit = t.literal
+    if (ts.isStringLiteral(lit)) return lit.text
+    if (ts.isNumericLiteral(lit)) return Number(lit.text)
+    if (lit.kind === ts.SyntaxKind.TrueKeyword) return true
+    if (lit.kind === ts.SyntaxKind.FalseKeyword) return false
+    return lit.getText(sf)
+  }
+  if (ts.isTupleTypeNode(t)) return t.elements.map((e) => typeToValue(e, sf))
+  if (ts.isTypeLiteralNode(t)) {
+    const out = {}
+    for (const m of t.members) {
+      if (!ts.isPropertySignature(m) || m.name === undefined) continue
+      out[m.name.getText(sf)] = m.type === undefined ? null : typeToValue(m.type, sf)
+    }
+    return out
+  }
+  return t.getText(sf)
+}
+
 function readThresholdOrigin(d, sf) {
   const init = d.initializer
   if (init === undefined || !ts.isSatisfiesExpression(init)) return null
@@ -358,15 +389,7 @@ function readThresholdOrigin(d, sf) {
     for (const m of second.members) {
       if (!ts.isPropertySignature(m) || m.name === undefined) continue
       const key = m.name.getText(sf)
-      if (m.type !== undefined && ts.isLiteralTypeNode(m.type) && ts.isStringLiteral(m.type.literal)) {
-        meta[key] = m.type.literal.text
-      } else if (m.type !== undefined && ts.isTupleTypeNode(m.type)) {
-        meta[key] = m.type.elements.map((e) =>
-          ts.isLiteralTypeNode(e) && ts.isStringLiteral(e.literal) ? e.literal.text : e.getText(sf),
-        )
-      } else {
-        meta[key] = m.type === undefined ? null : m.type.getText(sf)
-      }
+      meta[key] = m.type === undefined ? null : typeToValue(m.type, sf)
     }
   }
   return { kind, meta }
@@ -597,7 +620,7 @@ const ZOD = parseZodSchemas()
 // 写字面量就是「同一个值两处各写一份」，常量改了 schema 不跟，两处各自漂移。
 function zodProblems() {
   const problems = []
-  for (const e of THRESHOLDS) {
+  for (const e of ENTRIES) {
     if (e.zod === undefined) continue
     const z = ZOD.get(e.zod.name)
     if (z === undefined) {
@@ -671,6 +694,30 @@ function displayFrom(meta, value, lookup) {
 /** 常量名 → 当前值：display 模板里的 {NAME} 从这里查。 */
 const VALUE_BY_NAME = new Map(decls.filter((d) => d.value !== null).map((d) => [d.name, d.value]))
 
+/** 设计文档对照：类型参数里是扁平字段，这里拼回 Entry.design 的形状。 */
+function designFrom(meta) {
+  if (typeof meta.docDefault !== 'number') return undefined
+  const range = Array.isArray(meta.docRange) ? meta.docRange : []
+  return {
+    doc: typeof meta.doc === 'string' ? meta.doc : '',
+    key: typeof meta.docKey === 'string' ? meta.docKey : '',
+    default: meta.docDefault,
+    ...(range.length === 2 && range.every((x) => typeof x === 'number')
+      ? { min: range[0], max: range[1] }
+      : {}),
+    ...(typeof meta.docScale === 'number' ? { scale: meta.docScale } : {}),
+    ...(Array.isArray(meta.docKeys) ? { codeKeys: meta.docKeys } : {}),
+  }
+}
+
+/** zod 指针：抄值会在 schema 改动后失真，所以只记名字，值去 index.ts 现读。 */
+function zodFrom(meta) {
+  const z = meta.zod
+  if (z === null || typeof z !== 'object' || Array.isArray(z)) return undefined
+  if (typeof z.name !== 'string') return undefined
+  return { file: typeof z.file === 'string' ? z.file : 'src/index.ts', name: z.name }
+}
+
 const typeEntries = decls
   .filter((d) => d.origin !== null && d.value !== null)
   .map((d) => {
@@ -688,13 +735,22 @@ const typeEntries = decls
         : { kind: 'chosen', why: typeof meta.why === 'string' ? meta.why : '' }
     return {
       name: d.name,
-      area: FILE_AREA[d.file] ?? '其他',
+      area: typeof meta.area === 'string' ? meta.area : (FILE_AREA[d.file] ?? '其他'),
       value: () => d.value,
       definedBy: { file: d.file, name: d.name },
       affects: typeof meta.affects === 'string' ? meta.affects : '',
       variesWith: Array.isArray(meta.failsWhen) ? meta.failsWhen : [],
       display: displayFrom(meta, d.value, VALUE_BY_NAME),
       diverges: typeof meta.diverges === 'string' ? meta.diverges : undefined,
+      design: designFrom(meta),
+      zod: zodFrom(meta),
+      divergence: typeof meta.divergence === 'string' ? meta.divergence : undefined,
+      refs: Array.isArray(meta.refs)
+        ? meta.refs.filter((r) => r !== null && typeof r === 'object' && typeof r.symbol === 'string')
+        : undefined,
+      otherSites: Array.isArray(meta.otherSites)
+        ? meta.otherSites.filter((s) => typeof s === 'string')
+        : undefined,
       calibration: {
         origin,
         ...(Array.isArray(meta.guardedBy) ? { guardedBy: meta.guardedBy } : {}),
@@ -731,6 +787,22 @@ const ORIGIN_FIELDS = new Set([
   'unit',
   'note',
   'display',
+  // 设计文档对照（T65 阶段 3 批 2）：原先在表里是 design 对象与 zod 指针，现在拆成扁平字段
+  // 写进类型参数 —— 类型参数里嵌对象要多一层解析，而扁平字段在白名单里一眼看得全。
+  'doc',
+  'docKey',
+  'docDefault',
+  'docRange',
+  'docScale',
+  'docKeys',
+  'zod',
+  'divergence',
+  // 第二取值点与跨文件引用：批 1 的 51 条都没有这两项，批 2 有三条要带过来。
+  'refs',
+  'otherSites',
+  // 领域：文件到领域的映射不够用（write.ts 一个文件横跨落位 / 注入 / 图扩展 / 入口），
+  // 所以分类跟着条目走。它不是来历，只是打印时分组用。
+  'area',
 ])
 const ORIGIN_KINDS = new Set(['recheckable', 'chosen'])
 
@@ -751,7 +823,8 @@ function thresholdOriginProblems() {
           where +
           '）：类型参数里有不认识的字段 ' +
           key +
-          ' —— 只允许 finding / why / tool / scale / at / formula / failsWhen / guardedBy / affects / diverges / unit / note / display',
+          ' —— 只允许 ' +
+          [...ORIGIN_FIELDS].join(' / '),
       )
     }
   }
@@ -765,7 +838,7 @@ const assertionProblems = [
   ...thresholdOriginProblems(),
 ]
 const refSites = [
-  ...THRESHOLDS.map((e) => [e.name, e.refs ?? []]),
+  ...ENTRIES.map((e) => [e.name, e.refs ?? []]),
   ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
 ]
 for (const [where, refs] of refSites) {
@@ -881,7 +954,16 @@ say(
 say('')
 say('## 与设计文档 §7 的对照（只列有对应项的行）')
 say('')
-say('设计文档 = 开发笔记《设计/技术文档/7.配置项清单.md》（设计正文不进本仓库）。')
+const usedDocs = [
+  ...new Set(
+    ENTRIES.map((e) => e.design?.doc)
+      .filter((d) => typeof d === 'string' && d !== '')
+      .map((k) => DESIGN_DOCS[k] ?? k),
+  ),
+]
+say(
+  '设计文档 = ' + (usedDocs.length === 0 ? '（无对应项）' : usedDocs.join('、')) + '（设计正文不进本仓库）。',
+)
 say('')
 if (MD) {
   say('| 名称 | 设计默认 | 设计范围 | 代码默认 | zod 默认 | zod 范围 | 一致？ |')
@@ -892,7 +974,7 @@ const designRows = []
 // 「存在分叉」本身不是问题（文档可能没同步），「分叉没人解释」才是：读表的人会在这里停下来，
 // 然后自己去猜。判据不是「不一致就红」，那会永久红。
 const unexplainedDiverges = []
-for (const entry of THRESHOLDS) {
+for (const entry of ENTRIES) {
   if (entry.design === undefined) continue
   const d = entry.design
   const scaleK = d.scale ?? 1
@@ -966,7 +1048,7 @@ if (!MD) {
 
 // 「设计文档没有这个键」不再手写（T55 第 3 项）：句子由字段倒推，缺 design 也缺 external
 // 的条目自动出现在这里。手写的同一句话会与字段脱钩 —— 补上 design 之后它还在，而字段已经变了。
-const notInDesignDoc = THRESHOLDS.filter((e) => e.design === undefined && e.external === undefined)
+const notInDesignDoc = ENTRIES.filter((e) => e.design === undefined && e.external === undefined)
 say('')
 say('## 设计文档 §7 没有对应键的条目（自动生成）')
 say('')

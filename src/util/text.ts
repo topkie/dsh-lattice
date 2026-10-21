@@ -89,6 +89,7 @@ export function stripMarkdown(text: string): string {
 export const SUMMARY_CHARS = 48 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '摘要按字符截断的上限由「一句话讲一件事」这条写入约定的实际长度决定，无实测标定记录；此前函数签名默认值与两个调用点各写一遍，T45 批一合并成一个常量'
     failsWhen: ['一句话讲一件事这条写入约定的实际长度分布', '语言']
     guardedBy: ['test/util.test.mjs', 'test/write.test.mjs']

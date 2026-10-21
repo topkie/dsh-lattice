@@ -41,6 +41,7 @@ export { sampleFilePath }
 export const SAMPLE_QUEUE_MAX = 64 satisfies ThresholdValue<
   'chosen',
   {
+    area: '校准样本'
     why: '未标定：按「一次召回最多入队一条」推算，64 条足以吸收事件循环被占住的一整轮（对照 LOG_QUEUE_MAX 的 200 条：日志一次召回可能同时产生三条事件）；不是测出来的队列深度'
     failsWhen: ['事件循环被占住的时长', '单条样本的内存占用']
     affects: '缓冲：内存队列上限 64 条；满了丢最旧并计数，不阻塞召回、不抛错'

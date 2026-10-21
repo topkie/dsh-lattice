@@ -51,6 +51,7 @@ import { DUP_COS, DUP_LEX } from './search.js'
 export const REVIEW_MIN_CHARS = 12 satisfies ThresholdValue<
   'recheckable',
   {
+    area: '写入'
     tool: '无脚本（一次分布核对，未点名脚本路径）'
     finding: '**不是标定值，是一次分布核对**：基准库正文字符数分布里低于 20 字的只有 2 条（0.15%），且两条都是 `---` 这种不可能被召回的空壳；第 3 短的一条（29 字）已是一句完整结论。真机库 2026-10-17 现取 14 条、最短 81 字，样本量不足以定下界。依据是「在基准库上只抓空壳」+「一句合法中文结论的下界约 15 字」，不是运行语料上的标定；刻意不复用 MIN_ATOM_CHARS(80)'
     scale: '基准库 1374 条 atom（真机库 14 条）'
@@ -66,6 +67,7 @@ export const REVIEW_MIN_CHARS = 12 satisfies ThresholdValue<
 export const REVIEW_MAX_CHARS = MAX_ATOM_CHARS satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '它直接引用 migrate/split.ts 的 MAX_ATOM_CHARS，是同一个数、同一个界；该界本身无标定记录（两条路径受同一组约束：FTS 索引体积、落位会被平均掉），没有测量给出它'
     failsWhen: ['同 MAX_ATOM_CHARS（atom 正文长度分布、FTS 索引体积、落位质量）']
     guardedBy: ['test/migrate.test.mjs', 'test/review.test.mjs']
@@ -82,6 +84,7 @@ export const REVIEW_MAX_CHARS = MAX_ATOM_CHARS satisfies ThresholdValue<
 export const REVIEW_WRITE_BUDGET_MS = 1000 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '产品侧时延预算，不是语料标定：一次工具调用最多花 1 秒，没有实测出处，取值是判断；只用来换算切分段数上限'
     failsWhen: ['宿主对一次工具调用的时延预期']
     affects: '一次写入（切分 + 逐段落库）的时间预算；只用来换算切分段数上限'
@@ -100,6 +103,7 @@ export const REVIEW_WRITE_BUDGET_MS = 1000 satisfies ThresholdValue<
 export const REVIEW_SEGMENT_MS = 125 satisfies ThresholdValue<
   'recheckable',
   {
+    area: '写入'
     tool: '无脚本（本机实测，未点名脚本路径）'
     finding: '8 次单段写入耗时 111–148 ms（每段含一次编码与一次全量词表重建，后者约 113 ms），取 125 ms；换机器或库规模会变，届时上限自动跟着变'
     scale: '1374 条 atom 的库副本，8 次单段写入'
@@ -126,6 +130,7 @@ export const REVIEW_MAX_SEGMENTS = Math.floor(
 ) satisfies ThresholdValue<
   'recheckable',
   {
+    area: '写入'
     tool: '源码表达式（src/pipeline/review.ts 的 `REVIEW_WRITE_BUDGET_MS / REVIEW_SEGMENT_MS`）'
     finding: '由 REVIEW_WRITE_BUDGET_MS ÷ REVIEW_SEGMENT_MS 算出 8；改输入后重新构建，派生值跟着变。旧口径「一条记忆里不该装着 8 件以上的事」与时间预算给出同一个整数'
     formula: true
@@ -140,6 +145,7 @@ export const REVIEW_MAX_SEGMENTS = Math.floor(
 export const REVIEW_SCAN_BUDGET_MS = 10 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '产品侧时延预算，不是语料标定：重复检测加在每次写入上，只给它 10 ms，是判断；只用来换算一次比对多少条成员'
     failsWhen: ['宿主对一次工具调用的时延预期']
     affects: '重复检测的时间预算；只用来换算一次比对多少条成员'
@@ -158,6 +164,7 @@ export const REVIEW_SCAN_BUDGET_MS = 10 satisfies ThresholdValue<
 export const REVIEW_MEMBER_SCAN_MS = 0.05 satisfies ThresholdValue<
   'recheckable',
   {
+    area: '写入'
     tool: '无脚本（本机实测，未点名脚本路径）'
     finding: '在基准库最大主题上 findDuplicate 单次 1.663 ms、均摊 0.045 ms/条；纯比对循环（bigram-Jaccard + 512 维余弦）0.038 ms/条；取 0.05（向上取整，宁可少扫）'
     scale: '基准库最大主题 37 个成员'
@@ -182,6 +189,7 @@ export const REVIEW_SCAN_LIMIT = Math.floor(
 ) satisfies ThresholdValue<
   'recheckable',
   {
+    area: '写入'
     tool: '源码表达式（src/pipeline/review.ts 的 `REVIEW_SCAN_BUDGET_MS / REVIEW_MEMBER_SCAN_MS`）'
     finding: '由 REVIEW_SCAN_BUDGET_MS ÷ REVIEW_MEMBER_SCAN_MS 算出 200；改输入后重新构建，派生值跟着变。旧口径「200 条足以覆盖同一主题下的近期成员」与时间预算给出同一个整数'
     formula: true

@@ -30,7 +30,20 @@ export const CHANNEL_WEIGHT: Readonly<Record<Channel, number>> = {
 }
 
 /** RRF 常数。60 是常用取值：压低头部排名的垄断，让多路共识浮现。 */
-export const RRF_K = 60
+export const RRF_K = 60 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '60 是 RRF 的常用取值（算法惯例），无实测记录；它压平头部排名垄断的程度由融合方式决定'
+    failsWhen: ['换成别的融合方式时']
+    affects: 'RRF 融合常数：分越高越压平头部排名的垄断，让多路共识浮现'
+    diverges: '**zod schema 里没有它** —— 文档给了 10-100 的范围，运行时不生效、不可调'
+    doc: 't7'
+    docKey: 'rrfK'
+    docDefault: 60
+    docRange: [10, 100]
+  }
+>
 
 /** 归属因子：主属 > 仅次属 > 仅由图路引入。 */
 export const AFFILIATION = { primary: 1.0, secondary: 0.76, graphOnly: 0.7 } as const
@@ -448,7 +461,16 @@ function vecPath(db: DatabaseSync, q: Float32Array | null, k: number, scope?: st
   return best.sort((a, b) => b.cos - a.cos)
 }
 /** 单路最多用多少个词进 FTS 查询。长查询切出的 bigram 会很多，超出部分区分度也低。 */
-export const MAX_QUERY_TERMS = 48
+export const MAX_QUERY_TERMS = 48 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '单路最多用多少词进 FTS 查询是判断：长查询切出的 bigram 会很多，超出部分区分度也低；M1 把它归为「中文 bigram 的候选密度」，但无实测'
+    failsWhen: ['库规模', '查询长度分布', '中文 bigram 的候选密度']
+    affects: '单路最多用多少个词进 FTS 查询'
+    diverges: 'M1 已把它列为「按实际候选数取、用 FTS5 查询复杂度上限兜底」的待办项，未做'
+  }
+>
 
 /**
  * 四路各自取多少条进融合：向量路 100、词面两路各 100、图路 50。
@@ -458,9 +480,36 @@ export const MAX_QUERY_TERMS = 48
  * 变化，固定上限在库长大时会让召回质量悄悄退化 —— 改预算制属后续执行点（T45 批二），
  * 本次只把它们从内联字面量提成具名常量，取值未变。
  */
-export const K_VEC = 100
-export const K_LEX = 100
-export const K_GRAPH = 50
+export const K_VEC = 100 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '向量路进融合的固定条数上限：随库规模变化、实际约束的是召回质量而不是性能，无记录、无实测；取多少是固定上限的取舍'
+    failsWhen: ['库规模（库长大时固定取前 N 会让召回质量悄悄退化）']
+    affects: '向量路取多少条进融合（向量粗筛的宽度）'
+    diverges: '**zod schema 里也没有** —— 固定上限改预算制是 T45 批二（与 T40 合并）'
+  }
+>
+export const K_LEX = 100 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '与 K_VEC 同一次盘点、同一类：词面两路各取多少条进融合，无记录、无实测；固定上限随库规模漂移'
+    failsWhen: ['库规模', '中文 bigram 的候选密度']
+    affects: '词面两路（Entry 与正文）各取多少条进融合'
+    diverges: '**zod schema 里也没有**'
+  }
+>
+export const K_GRAPH = 50 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '图路一跳取多少条进融合是容量分配，没有测量过程能给出这个数；与 K_VEC 同一次盘点、同一类，无实测'
+    failsWhen: ['图路的边密度', '库规模']
+    affects: '图路一跳扩展取多少条进融合（与 OUT_DEGREE_CAP 分工：那条限每个种子的出度，这条限总量）'
+    diverges: '**zod schema 里也没有**'
+  }
+>
 
 /**
  * 图路拿向量路的前多少条做种子。
@@ -468,7 +517,15 @@ export const K_GRAPH = 50
  * 图路是「补多跳关联」，不是主召回，所以只从最像的那几条出发；种子多了会把
  * 一跳扩展的候选池灌满噪声。取值依据与 kGraph 属同一类（无实测记录）。
  */
-export const DEFAULT_SEED_COUNT = 10
+export const DEFAULT_SEED_COUNT = 10 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '图路用向量路的前多少条做种子：源码无注释、开发笔记里也没有这个数，是固定条数上的取舍，无测量'
+    failsWhen: ['图路的边密度与精度', '库规模']
+    affects: '图路用向量路的前多少条做种子（A.slice(0, DEFAULT_SEED_COUNT)）'
+  }
+>
 
 /**
  * 召回交给注入层的默认条数（调用方不传 topN 时用它）。
@@ -477,7 +534,21 @@ export const DEFAULT_SEED_COUNT = 10
  * 候选，这个是召回返回多少条。两者同值纯属巧合，合并会把「调落位候选数」变成
  * 「改注入条数」。运行时实际生效的默认值来自配置项 topN（见 tools/index.ts）。
  */
-export const RECALL_TOP_N = 24
+export const RECALL_TOP_N = 24 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '24 只在调用方不传 topN 时起作用，生产路径实际生效的是配置项 topN（zod 默认 24）；默认条数是容量选择，没有测量给出它'
+    failsWhen: ['注入字符预算', '一次注入能容纳的摘要条数']
+    affects: '召回交给注入层的默认条数（调用方不传 topN 时用它）'
+    diverges: '**与 DEFAULT_TOP_N 同为 24、不同量**（T45 批一判定为恰好同值，不合并）：那个是落位时取多少个 topic 候选，这个是召回交注入层的条数。设计文档 §7 的 topN 指后者'
+    doc: 't7'
+    docKey: 'topN'
+    docDefault: 24
+    docRange: [5, 50]
+    zod: { file: 'src/index.ts'; name: 'topN' }
+  }
+>
 
 /**
  * RRF 融合。
@@ -523,6 +594,7 @@ function affiliationFactor(secondary: boolean, onlyGraph: boolean): number {
 export const DUP_COS = 0.92 satisfies ThresholdValue<
   'chosen',
   {
+    area: '重排去重'
     why: '0.92 沿用原设计 atom_pair 表的既有取值，改成词面判定后没有重测；没有一次「不同说法的同一件事」实测（DUP_LEX 才有）。几何票的门槛是旧接口留下的数'
     failsWhen: ['换编码模型（余弦尺度会变）', '同义改写的相似度分布']
     guardedBy: ['test/archive.test.mjs']
@@ -543,6 +615,7 @@ export const DUP_COS = 0.92 satisfies ThresholdValue<
 export const DUP_LEX = 0.72 satisfies ThresholdValue<
   'recheckable',
   {
+    area: '重排去重'
     tool: '无脚本（构造的对照句对，直接算 bigram-Jaccard）'
     finding: '0.5 时「系统代理必须走本地端口……」与「系统代理配置本地端口……」的 bigram-Jaccard 为 0.64，两者讲同一件事但各有信息、不该折叠；取 0.72 后只有几乎逐字重复才被压制（同一段文本 Jaccard 为 1.0）'
     failsWhen: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）']

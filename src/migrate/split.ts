@@ -14,6 +14,7 @@ import type { ThresholdValue } from '../threshold-types.js'
 export const MIN_ATOM_CHARS = 80 satisfies ThresholdValue<
   'chosen',
   {
+    area: '迁移切分'
     why: '无记录，源码也无注释：切分时一条 atom 的最小字符数是脚本取舍；它只影响一次性迁移脚本（本机卡片导入），不参与运行时管线'
     failsWhen: ['「一句话讲一件事」这条写入约定的实际长度']
     guardedBy: ['test/migrate.test.mjs']
@@ -25,6 +26,7 @@ export const MIN_ATOM_CHARS = 80 satisfies ThresholdValue<
 export const MAX_ATOM_CHARS = 600 satisfies ThresholdValue<
   'chosen',
   {
+    area: '迁移切分'
     why: '无记录（同 MIN_ATOM_CHARS）：切分时一条 atom 的最大字符数是 FTS 索引体积与落位质量之间的取舍，没有测量给出它'
     failsWhen: ['同上']
     guardedBy: ['test/migrate.test.mjs']

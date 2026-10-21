@@ -10,6 +10,7 @@
 // 不影响知识正交。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { bigramTerms, toSearchColumn } from '../util/text.js'
 import { log } from '../log/index.js'
 
@@ -50,7 +51,18 @@ export const ENTRY_WEIGHT: Readonly<Record<EntryOrigin, number>> = {
  * 的百分之几，而**召回不到是功能损失、索引变大只是存储成本**，两者不对等。
  * 真实记忆通常 40~180 字，16 个槽位基本覆盖得住。
  */
-export const DEFAULT_MAX_EXTRACTED = 16
+export const DEFAULT_MAX_EXTRACTED = 16 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '入口'
+    tool: '无脚本（2026-10-17 全库扫描与配对 bootstrap，未点名脚本路径）'
+    finding: '纯 Entry 路 gold 召回 8 与 12 比 16 低 25 个百分点（95% 区间不含 0），16→32 只多 10 个百分点（区间含 0），16 是收益拐点；端到端在 8~32 全区间不动；三种预算化形态都不优于固定 16'
+    scale: '六点 + 四个补点的全库扫描（配对 bootstrap 4000 次）'
+    at: '2026-10-17'
+    failsWhen: ['中文 bigram 的候选密度（切词规则）', '正文长度分布', '语料语言']
+    affects: '每个 atom 抽取的入口数上限（declared 入口不参与这个竞争）'
+  }
+>
 
 /**
  * 入口抽取规则标识。
@@ -71,7 +83,16 @@ export const DEFAULT_MAX_EXTRACTED = 16
 export const ENTRY_RULE_ID = 'bigram-idf-v4'
 
 /** 95% 置信区间的 z 值（双侧）。只用于推导 MIN_VOCAB_FOR_DF 的语料规模线。 */
-export const DF_FILTER_CONFIDENCE_Z = 1.96
+export const DF_FILTER_CONFIDENCE_Z = 1.96 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '95% 双侧正态分位是统计惯例，不是在本库上标定的值；它只用于把规模线换算成可复算的数，不参与运行时判定'
+    failsWhen: ['对规模线置信水平的要求']
+    affects: '推导 MIN_VOCAB_FOR_DF 时的置信水平；不参与运行时的过滤判定'
+    display: '{v}（95% 双侧）'
+  }
+>
 
 /**
  * 泛词线处可接受的 95% 区间半宽：四分之一个比例单位。
@@ -79,7 +100,16 @@ export const DF_FILTER_CONFIDENCE_Z = 1.96
  * 这是一个**精度要求**，不是从语料标定出来的：df/N 的估计误差超过四分之一时，
  * 「大约一半」与「大约四分之一」就分不开，df/N > 0.5 这条判据也就无从谈起。
  */
-export const DF_FILTER_HALF_WIDTH = 0.25
+export const DF_FILTER_HALF_WIDTH = 0.25 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '对 df/N 估计精度的要求：误差超过四分之一时「大约一半」与「大约四分之一」分不开。取值是判断而不是语料标定'
+    failsWhen: ['对 df/N 估计精度的要求']
+    affects: '推导 MIN_VOCAB_FOR_DF 时的精度要求；不参与运行时的过滤判定'
+    display: '{v}（四分之一个比例单位）'
+  }
+>
 
 /** p=0.5 处、样本量为 n 的 Wilson 95% 区间半宽。 */
 function wilsonHalfWidthAtHalf(n: number, z: number): number {
@@ -121,7 +151,16 @@ export const MIN_VOCAB_FOR_DF = minCorpusForDfHalfWidth()
  * 它与 MIN_VOCAB_FOR_DF 是一对：那条管「什么时候这条判据才可信」，这条管「可信之后
  * 划在哪」。0.5 的出处是「过半数即无区分度」这句直觉，不是某次测量 —— 标定缺口见阈值表。
  */
-export const DF_FILTER_RATIO = 0.5
+export const DF_FILTER_RATIO = 0.5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '「过半数即无区分度」这句直觉定下的线：df/N 超过一半的词元直接丢弃。M2 审核 T11 记录该判据在基准库上够不到、从未在目标语料上触发，即没有任何测量给出 0.5'
+    failsWhen: ['库内 atom 数与来源分布', '语言（英文词表大，问题不明显）']
+    affects: '泛词过滤：df/N 超过此比例的词元直接丢弃（不参与入口竞争）'
+    diverges: '**本任务要治的原始病例**：判据取自直觉、在运行语料上不触发、且没有任何地方记着它的标定来源。治理（改相对判据）属后续执行点，本次只登记不改值'
+  }
+>
 
 /**
  * IDF 平滑项（Robertson-Sparck Jones 形式里的 0.5）。
@@ -129,11 +168,35 @@ export const DF_FILTER_RATIO = 0.5
  * 属算法惯例而非实测取值；把它提成具名常量是因为同一个公式里它出现两次
  * （分子与分母各一次），此前是两处各写一个 0.5。
  */
-export const IDF_PRIOR = 0.5
+export const IDF_PRIOR = 0.5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: 'IDF 平滑项的常规写法（Robertson-Sparck Jones 形式）：0.5 属算法惯例，不是在本库上测出来的'
+    failsWhen: ['仅在换用别的 IDF 变体时']
+    affects: '入口打分的 IDF 平滑项：log((N - df + IDF_PRIOR) / (df + IDF_PRIOR) + 1)'
+  }
+>
 
 /** 入口词元的长度区间（按码点）。 */
-export const MIN_TERM = 2
-export const MAX_TERM = 8
+export const MIN_TERM = 2 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '「二字词是中文检索的主力」这条设计判断；M1 B 类表只把它归为「汉语词长分布」，没有一次实测'
+    failsWhen: ['上游切词规则（改成词级切分后长度含义会变）', '换成英文/日文语料']
+    affects: '入口词元的长度下界（按码点）；低于它不参选'
+  }
+>
+export const MAX_TERM = 8 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '同 MIN_TERM：上界取汉语词长分布的常见上端，B 类表归为「汉语词长分布」，无实测记录'
+    failsWhen: ['上游切词规则', '语料语言', '正文的书写粒度']
+    affects: '入口词元的长度上界（按码点）；超过它不参选'
+  }
+>
 
 /**
  * 整段中文作为入口时的长度上限。
@@ -147,7 +210,15 @@ export const MAX_TERM = 8
  * v4 起这里只剩长度封顶这一条约束：原先还有「不许含虚字」，已随单字虚词表一起换成
  * 几何判据（见 isUsableTerm）。
  */
-export const MAX_HAN_TERM = 4
+export const MAX_HAN_TERM = 4 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: 'D11-6 的理由是「真词里超过四字的极少」—— 定性判断，未做词长统计；整段连续汉字超过四字即出局'
+    failsWhen: ['语料语言', '正文的书写粒度（一句话讲一件事的实际长度）']
+    affects: '整段连续汉字作为入口时的长度上限（超过四字即出局）；三字以上另需通过边界自由度判据（v4 起）'
+  }
+>
 
 /** 单码点是否为汉字。 */
 const isHan = (ch: string): boolean => ch >= '\u4e00' && ch <= '\u9fff'
@@ -166,7 +237,16 @@ const isHan = (ch: string): boolean => ch >= '\u4e00' && ch <= '\u9fff'
  * v4 起这条只覆盖「一侧恒定且有观测」的候选：**两侧都恒定**的已在候选资格里直接出局
  *（见 hasBoundaryFreedom），两者是分工而不是强弱两档。
  */
-export const FRAGMENT_PENALTY = 0.35
+export const FRAGMENT_PENALTY = 0.35 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '系数幅度按「让碎片落到有真词可选的槽位之外、又不至于候选不足时把槽位空出来」这条要求取；证据明写幅度是判断、不是扫描出来的。它引的标注测量测的是边界自由度判据的分开度，不是本系数'
+    failsWhen: ['边界自由度判据本身的变化', '语料里真词与碎片的比例']
+    affects: '边界自由度缺一侧的候选（疑似跨词边界碎片）得分乘以该系数；降权而非剔除（v4 起两侧都恒定的已直接出局）'
+    diverges: 'M2 审核实测：单靠该降权**不足以把二字碎片挤出展示窗口**（审核报告「二字汉字碎片」一节）。v4 因此把它上面的那档（两侧都恒定）改成硬判出局，本条只管「只剩一侧、或观测不足」的候选'
+  }
+>
 
 /**
  * 该词元是否值得作为入口。
@@ -530,16 +610,57 @@ export function buildEntries(
 // 全部登记在 thresholds.ts。
 
 /** 反哺时取 query 的几条特征词。 */
-export const LEARNED_FEATURE_TERMS = 3
+export const LEARNED_FEATURE_TERMS = 3 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '设计报告 §27「取 query 的 TF-IDF top-3 特征词」给定的个数，未在本库标定；取几个特征词是反哺强度与噪声之间的取舍'
+    failsWhen: ['查询长度分布', '一次召回命中多少条 atom（乘数效应）', '冷启动阶段库还小、IDF 不稳']
+    affects: '一次召回反哺几个查询特征词（取 query 的 TF-IDF 前三，与写入侧同一套抽取规则）'
+    doc: 't17'
+    docKey: '反哺三步 · 第 1 条'
+    docDefault: 3
+  }
+>
 
 /** 一天的毫秒数。冷却与半衰期都以「天」为语义单位，换算只写在这里。 */
-export const MILLIS_PER_DAY = 86_400_000
+export const MILLIS_PER_DAY = 86_400_000 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '一天有多少毫秒是单位定义，不是取值选择；它不是测出来的，也不是选出来的'
+    failsWhen: ['不随时间或语料变化']
+    affects: 'learned 的冷却与半衰期换算（本模块里唯一一处「天」到毫秒的换算）'
+  }
+>
 
 /** 冷却：同一（查询词, atom）在这么多小时内只记一次。 */
-export const LEARNED_COOLDOWN_HOURS = 24
+export const LEARNED_COOLDOWN_HOURS = 24 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '§27 防抖第 1 条「24 h 内只记 1 次」给的值，未在本库标定；窗口多长是「重复同一问法算不算新证据」的取舍'
+    failsWhen: ['一次会话里重复同一问法的频率', '召回频次（低频库里冷却几乎不触发）']
+    affects: '冷却：同一（查询词, atom）在这个窗口内只记 1 次，重复查询不构成重复证据'
+    doc: 't17'
+    docKey: '防抖第 1 条（单位与代码一致，都是小时）'
+    docDefault: 24
+  }
+>
 
 /** 遗忘：证据强度 count_eff 的半衰期（天）。 */
-export const LEARNED_HALF_LIFE_DAYS = 90
+export const LEARNED_HALF_LIFE_DAYS = 90 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '§27 防抖第 2 条「90 天半衰期」给的值，未在本库标定；半衰期取决于记忆的实际复用周期，要真实使用期才能测出'
+    failsWhen: ['记忆的实际复用周期', '召回频次']
+    affects: '遗忘与淘汰共用的证据强度 count_eff 的半衰期'
+    doc: 't17'
+    docKey: '防抖第 2 条'
+    docDefault: 90
+  }
+>
 
 /**
  * 遗忘线：count_eff 低于此值的 learned 行删掉。
@@ -552,19 +673,83 @@ export const LEARNED_HALF_LIFE_DAYS = 90
  * 这里改用 0.5，含义是「残留证据不足半个事件」：hits=1 静默 90 天后消失，
  * hits=2 静默 180 天后消失。整数计数下这是这条线唯一说得通的位置。
  */
-export const LEARNED_FORGET_COUNT_EFF = 0.5
+export const LEARNED_FORGET_COUNT_EFF = 0.5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '文档取 1.5、代码取 0.5：文档的 count 是实数累加，而 entry.hits 是 INTEGER NOT NULL，没有第二列存小数；整数事件数下 1.5 会把 hits=1 的行写下即删，0.5 是「整数计数下这条线唯一说得通的位置」，不是标定结果'
+    failsWhen: ['hits 的存储口径（若将来改成小数累加，这条线要按文档回到 1.5）', '召回频次']
+    affects: '遗忘线：count_eff 低于它的 learned 行删除'
+    divergence: '文档的 count 是实数累加，hits 是整数列 —— 这不是调参分歧，是存储口径不一致导致同一个数字无法照抄'
+    doc: 't17'
+    docKey: '防抖第 2 条（文档取 1.5，代码取 0.5，见 divergence）'
+    docDefault: 1.5
+  }
+>
 
 /** 单个 atom 的 learned 入口上限。 */
-export const LEARNED_MAX_PER_ATOM = 12
+export const LEARNED_MAX_PER_ATOM = 12 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '§27 防抖第 3 条「learned 入口 ≤ 12 条」给的值，未在本库标定；上限值本身是槽位额度的取舍'
+    failsWhen: [
+      'extracted 入口上限（DEFAULT_MAX_EXTRACTED=16）—— 两者是同一批槽位的两半',
+      '真实召回里「查询词不属于该 atom 已有入口」的比例（T17 探针实测这个比例很高，上限很少触发）',
+    ]
+    guardedBy: ['test/entries-learned.test.mjs']
+    affects: '单 atom 的 learned 入口上限，超出按 count_eff 淘汰最低的'
+    doc: 't17'
+    docKey: '防抖第 3 条'
+    docDefault: 12
+  }
+>
 
 /** 全局 learned 上限 = 此系数 × 库里的 atom 数。 */
-export const LEARNED_GLOBAL_FACTOR = 5
+export const LEARNED_GLOBAL_FACTOR = 5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '§27 防抖第 4 条「learned 总数 ≤ 5 × n_atoms」给的值，未在本库标定；随库增长的额度是反哺总量的取舍'
+    failsWhen: ['库的 atom 数（这个上限随库增长，因此不是固定额度）']
+    affects: '全局 learned 上限 = 此系数 × 库里的 atom 数，超出按 count_eff 淘汰最低的'
+    doc: 't17'
+    docKey: '防抖第 4 条'
+    docDefault: 5
+  }
+>
 
 /** 升档线：count_eff 达到此值即把分值升到 extracted 档。 */
-export const LEARNED_PROMOTE_COUNT = 5
+export const LEARNED_PROMOTE_COUNT = 5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '§27 反哺三步第 3 条「count ≥ 5」给的值，未在本库标定；升档线定在几次命中是「够了」的判断，低频库里几乎不会发生'
+    failsWhen: [
+      '冷却窗口（24 h）与整数计数：hits ≥ 5 意味着至少 5 个跨 24 h 的事件，即约 5~7 天的使用',
+      '召回频次；低频库里升档几乎不会发生',
+    ]
+    affects: '升档线：count_eff 到线且最近有命中时，learned 行的分值升到 extracted 档（0.6）'
+    doc: 't17'
+    docKey: '反哺三步 · 第 3 条（文档的 count 也是实数累加）'
+    docDefault: 5
+  }
+>
 
 /** 升档要求的最近命中窗口（天）。 */
-export const LEARNED_PROMOTE_RECENT_DAYS = 30
+export const LEARNED_PROMOTE_RECENT_DAYS = 30 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '入口'
+    why: '§27 第 3 条「30 天内出现 ≥ 2 次」的时间窗，未在本库标定；表里只有 hits 与 last_seen 两列，只能守住「最近一次命中在窗口内」这半边，另半边要事件级时间戳'
+    failsWhen: ['召回频次', '若将来给 entry 加一列「首次命中时间」，就能按文档实现完整的 30 天窗口']
+    affects: '升档与**降档**的时间窗：最近一次命中超出这个窗口就不再够格，已升档的降回 0.3'
+    diverges: '**只实现了「最近一次命中在 30 天内」，没有实现「30 天内出现 ≥ 2 次」**：后者要事件级时间戳，表里只有 hits 与 last_seen。这是收窄，不是放宽'
+    doc: 't17'
+    docKey: '反哺三步 · 第 3 条的「30 天内」'
+    docDefault: 30
+  }
+>
 
 /**
  * 升档后的分值上限 —— **只到 extracted 的 0.6，永不等于 declared 的 1.0**。

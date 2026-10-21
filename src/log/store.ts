@@ -34,6 +34,7 @@ export const LOG_SCHEMA_VERSION = 1
 export const LOG_FILE_MAX_BYTES = (4 * 1024 * 1024) satisfies ThresholdValue<
   'chosen',
   {
+    area: '降级日志'
     why: '没有日志事件速率的实测：4 MB 是产品决定的值，「降级事件稀疏、约能放数万条」是判断；本仓库没有事件速率与单条 detail 长度的实测'
     failsWhen: ['降级事件产生速率', '单条 detail 的长度', '愿意给日志的磁盘空间']
     affects: '写前与启动时检查：当前日志库达到此大小就改名为历史文件并新建（4 MB）'
@@ -44,6 +45,7 @@ export const LOG_FILE_MAX_BYTES = (4 * 1024 * 1024) satisfies ThresholdValue<
 export const LOG_KEEP_FILES = 5 satisfies ThresholdValue<
   'chosen',
   {
+    area: '降级日志'
     why: '取 5 个；5 个 × 4 MB 与总量 20 MB 相等，是产品决定的磁盘空间预算，没有测量出处'
     failsWhen: ['单文件阈值', '总量上限', '需要回溯多久的降级历史']
     affects: '清理：历史文件数 + 当前库不超过这个数，超出删最旧的（5 个，含当前库）'
@@ -54,6 +56,7 @@ export const LOG_KEEP_FILES = 5 satisfies ThresholdValue<
 export const LOG_TOTAL_MAX_BYTES = (LOG_KEEP_FILES * LOG_FILE_MAX_BYTES) satisfies ThresholdValue<
   'recheckable',
   {
+    area: '降级日志'
     tool: '源码表达式（src/log/store.ts 的 `LOG_KEEP_FILES * LOG_FILE_MAX_BYTES`）'
     finding: '由 LOG_KEEP_FILES × LOG_FILE_MAX_BYTES 算出 20 MB；改两个因子后重新构建，派生值跟着变，不需要测量'
     formula: true

@@ -32,6 +32,7 @@ import { setMeta, META_RECLUSTER_AT } from '../db/meta.js'
 export const RECLUSTER_BATCH_ATOMS = 1000 satisfies ThresholdValue<
   'chosen',
   {
+    area: '重聚类'
     why: '没有标定：1000 取自「一批在本机约几十毫秒、不至于让事务次数爆炸」的粗估；没有测过宿主在何种批大小下开始出现可感知卡顿 —— 那需要端到端观测宿主的响应延迟，本轮没做'
     failsWhen: ['机器磁盘与 WAL 配置', '宿主对单次同步阻塞的容忍度', '库规模（批数随 atom 数增长）']
     affects: '落库阶段每个事务处理的条数：一批 = 一次事务 = 一次事件循环占用。它约束的是「重聚类会不会把宿主卡住」（B2 瓶颈：DatabaseSync 是同步的）'

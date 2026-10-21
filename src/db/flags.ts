@@ -28,6 +28,7 @@ import type { ThresholdValue } from '../threshold-types.js'
 export const FLAG_SPLIT_PENDING = 1 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '位定义来自设计报告对 flags 的命名（待拆分 / 歧义 / 未归类），位值一旦落库就不能改；置位判据是长度（review.ts 的 maxChars），不是自洽度评分 —— 候选按长度给出、不判断内容。任何测量都给不出位值'
     failsWhen: ['（不应变：改它等于把历史行解释错）']
     guardedBy: ['test/flags.test.mjs', 'test/split-pending.test.mjs', 'test/client-source.test.mjs']
@@ -39,6 +40,7 @@ export const FLAG_SPLIT_PENDING = 1 satisfies ThresholdValue<
 export const FLAG_AMBIGUOUS = 2 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '同 FLAG_SPLIT_PENDING：位值不可变 —— bit1 是 flags 的位定义，换掉会把历史行解释错。语义是「落位时两个候选接近、没把握」'
     failsWhen: ['（不应变）']
     guardedBy: ['test/flags.test.mjs', 'test/archive.test.mjs']
@@ -50,6 +52,7 @@ export const FLAG_AMBIGUOUS = 2 satisfies ThresholdValue<
 export const FLAG_UNCLASSIFIED = 4 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '同 FLAG_SPLIT_PENDING：位值不可变 —— bit2 是 flags 的位定义，换掉会把历史行解释错。语义是「与任何已有主题都不像」'
     failsWhen: ['（不应变）']
     guardedBy: ['test/flags.test.mjs']
@@ -61,6 +64,7 @@ export const FLAG_UNCLASSIFIED = 4 satisfies ThresholdValue<
 export const FLAG_ARCHIVED = 16 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '位值由设计文档对 flags 的命名确定（技术文档 §5），不可改；bit4 是 flags 的位定义，改它会把历史行解释错。归档不是删除：内容与边都还在，显式检索仍可见'
     failsWhen: ['（不应变）']
     guardedBy: ['test/archive.test.mjs', 'test/client-source.test.mjs']

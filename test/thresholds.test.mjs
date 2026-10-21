@@ -170,15 +170,17 @@ describe('阈值来历：缺键由打印脚本生成（T55）', () => {
 })
 
 describe('阈值来历：分叉声明必须成立（T55）', () => {
-  // 不要 design 的条目：这个 describe 里另有「docValue 与 design.default 一致」的用例，
+  // 不带 design 的数值条目：这个 describe 里有「写了 divergence 却没有 design」的用例，
   // 拿带 design 的条目当底座会让两条规则缠在一起。
   const numeric = THRESHOLDS.find((e) => typeof e.value() === 'number' && e.design === undefined)
 
-  it('docValue 与代码值相等 → 报「分叉已不存在」', () => {
+  it('design.default 与代码值相等 → 报「分叉已不存在」', () => {
+    const withDesign = THRESHOLDS.find((e) => e.design !== undefined && typeof e.value() === 'number')
     const entry = {
-      ...numeric,
+      ...withDesign,
       name: 'FAKE_DIVERGENCE',
-      divergence: { docValue: numeric.value(), note: '假的' },
+      value: () => withDesign.design.default,
+      divergence: '假的',
     }
     const problems = divergenceProblems([entry])
     assert.equal(problems.length, 1)
@@ -186,33 +188,28 @@ describe('阈值来历：分叉声明必须成立（T55）', () => {
     assert.match(problems[0], /分叉已不存在/)
   })
 
-  it('docValue 与代码值不同 → 不报', () => {
+  it('design.default 与代码值不同 → 不报', () => {
+    const withDesign = THRESHOLDS.find((e) => e.design !== undefined && typeof e.value() === 'number')
     const entry = {
-      ...numeric,
+      ...withDesign,
       name: 'FAKE_DIVERGENCE',
-      divergence: { docValue: numeric.value() + 1, note: '真的' },
+      value: () => withDesign.design.default + 1,
+      divergence: '真的',
     }
     assert.deepEqual(divergenceProblems([entry]), [])
   })
 
-  it('docValue 与 design.default 不同 → 报「两份记录已经漂移」', () => {
-    const withDesign = THRESHOLDS.find((e) => e.design !== undefined && typeof e.value() === 'number')
-    const entry = {
-      ...withDesign,
-      name: 'FAKE_DRIFT',
-      value: () => withDesign.design.default + 2,
-      divergence: { docValue: withDesign.design.default + 1, note: '漂移' },
-    }
+  it('写了 divergence 但没有 design → 报（文档值无从比对）', () => {
+    const entry = { ...numeric, name: 'FAKE_NO_DESIGN', divergence: '没有对照' }
     const problems = divergenceProblems([entry])
     assert.equal(problems.length, 1)
-    assert.match(problems[0], /FAKE_DRIFT/)
-    assert.match(problems[0], /design\.default/)
-    assert.match(problems[0], /漂移/)
+    assert.match(problems[0], /FAKE_NO_DESIGN/)
+    assert.match(problems[0], /没有 design/)
   })
 
   it('对象型条目上声明 divergence → 报（那种断言永远成立）', () => {
     const group = THRESHOLDS.find((e) => typeof e.value() === 'object')
-    const entry = { ...group, name: 'FAKE_GROUP', divergence: { docValue: 1, note: '假的' } }
+    const entry = { ...group, name: 'FAKE_GROUP', divergence: '假的' }
     const problems = divergenceProblems([entry])
     assert.equal(problems.length, 1)
     assert.match(problems[0], /只用于数值条目/)
@@ -264,7 +261,9 @@ describe('阈值来历：评审基线的四条规则', () => {
   })
 
   it('规则 3：把基线条目改成集合外的名字 → 红', () => {
-    const name = Object.keys(baseline.unguarded)[0]
+    // 用当前查询结果里的名字：baseline 的第一项可能已被搬走（只在定义处），
+    // 那样删掉它不会产生「新增的待评审条目」。
+    const name = unguardedEntries(THRESHOLDS)[0].name
     const list = { ...baseline.unguarded }
     delete list[name]
     list.NOT_A_THRESHOLD = baseline.unguarded[name]

@@ -31,6 +31,7 @@ import { runRecluster, type ReclusterResult } from './index.js'
 export const RECLUSTER_PLAN_DELAY_MS = 3000 satisfies ThresholdValue<
   'chosen',
   {
+    area: '重聚类'
     why: '未标定，是产品口味：3 秒是「点错了还能撤」与「点了要立刻有反应」之间的取值；没有测量能回答 3 秒比 1 秒或 5 秒更合适 —— 它取决于人点下去之后多久会意识到自己点错了'
     failsWhen: ['用户对整理耗时的容忍度', '库规模（跑得越久，越需要更长的反悔窗口）']
     affects: '点「开始整理」之后等多久才真的开跑。这段时间里「取消」有效，之后只能等它跑完 —— 它决定了误点之后还有多长的反悔窗口'

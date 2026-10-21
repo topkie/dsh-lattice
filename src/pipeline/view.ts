@@ -22,7 +22,16 @@ import { DEFAULT_MAX_EXTRACTED } from './entries.js'
 export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
 
 /** 锚段保底条数——预算再紧也要给这么多条记忆留位置。 */
-export const MIN_ANCHORS = 3
+export const MIN_ANCHORS = 3 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '保底锚条数是「低相关只给入口段」与降噪彻底程度之间的取舍，最后选了分档方案；3 这个数本身没有实测标定'
+    failsWhen: ['无关查询的容忍度（保底越高，降噪越不彻底）', '一次注入的字符预算']
+    guardedBy: ['test/view.test.mjs']
+    affects: '锚段保底条数：预算再紧也先给这么多条；同时是摘录档的锚上限'
+  }
+>
 
 /**
  * 超预算时的裁剪顺序。
@@ -41,7 +50,15 @@ export type TrimStep = (typeof TRIM_ORDER)[number]
  * 步骤名 `paths->5` 里带着这个值（TRIM_ORDER 是行为契约，测试依赖它的顺序与字面量），
  * 改这里必须同步那个字符串 —— 这也是它此前一直没有名字的代价。
  */
-export const TRIM_PATHS_LIMIT = 5
+export const TRIM_PATHS_LIMIT = 5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '超预算后路段先降到多少是裁剪策略选择：TRIM_ORDER 的名字里带着 5、但 5 从哪来没有出处；它与 DEFAULT_PATH_LINES(15) 不是同一个量'
+    failsWhen: ['TRIM_ORDER 改动时（名字与值必须同步）']
+    affects: '裁剪第一步把路段行数上限压到的值（TRIM_ORDER 的 paths->5）'
+  }
+>
 
 /**
  * 锚行里「使用场景」（本次查询词）最多给多少个字符。
@@ -54,6 +71,7 @@ export const TRIM_PATHS_LIMIT = 5
 export const SPLIT_SCENE_CHARS = 16 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '未标定，是预算护栏：锚段按字符算预算，查询词可以是一整句，不截断会让一条锚多出几十上百字，同一段预算能装下的记忆随之变少；16 是保证单条锚文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）的取值'
     failsWhen: ['查询词长度分布', '锚段预算', '「单锚增量 ≤ 40 字」这条判据']
     affects: '锚行「用于：<查询词>」里查询词最多给几个字符（只对 flags 的 bit0 命中生效）。保证单条锚的文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）'
@@ -129,12 +147,62 @@ export interface ViewResult {
   trimmed: TrimStep[]
 }
 
-export const DEFAULT_BUDGET = 6000
-export const DEFAULT_ANCHOR_MAX = 1200
+export const DEFAULT_BUDGET = 6000 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '注入字符预算是容量选择：只有设计文档 §7 给了默认值 6000 与范围 1000–20000，没有标定依据'
+    failsWhen: ['模型上下文窗口', '一次注入里锚段的平均长度']
+    affects: '注入字符预算的默认值（工具调用可覆盖）'
+    diverges: '**同一个默认值写了三遍**：view.ts 的 DEFAULT_BUDGET、zod 的 .default(6000)、index.ts 的 `?? 6000`。三处目前一致'
+    doc: 't7'
+    docKey: 'viewBudget'
+    docDefault: 6000
+    docRange: [1000, 20000]
+    zod: { file: 'src/index.ts'; name: 'viewBudget' }
+  }
+>
+export const DEFAULT_ANCHOR_MAX = 1200 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '单条锚的字符上限是显示容量选择：源码无注释，设计文档 §7 也没有这个键'
+    failsWhen: ['atom 正文长度分布', '字符预算']
+    affects: '单条锚的字符上限（全文很长时截断，避免一条吃掉整段）'
+    diverges: '**zod schema 里也没有** —— 运行时不可配置'
+  }
+>
 /** 每主题最多列几条未进锚的条目：取抽取配额的一半（DEFAULT_MAX_EXTRACTED ÷ 2）。 */
-export const DEFAULT_ENTRIES_PER_TOPIC = DEFAULT_MAX_EXTRACTED / 2
-export const DEFAULT_ENTRY_LINE_MAX = 160
-export const DEFAULT_PATH_LINES = 15
+export const DEFAULT_ENTRIES_PER_TOPIC = (DEFAULT_MAX_EXTRACTED / 2) satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '注入'
+    tool: '源码表达式（src/pipeline/view.ts 的 `DEFAULT_MAX_EXTRACTED / 2`）'
+    finding: '由 DEFAULT_MAX_EXTRACTED(16) ÷ 2 算出 8；改输入后重新构建，派生值跟着变，不需要测量'
+    formula: true
+    failsWhen: ['DEFAULT_MAX_EXTRACTED 改动时（同一件事的两个端点）', '主题数']
+    affects: '每个命中主题给几条入口（摘录档由 TIER_ENTRIES 收窄到 4）'
+  }
+>
+export const DEFAULT_ENTRY_LINE_MAX = 160 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '单行入口的字符上限是显示判断：源码无注释，设计文档与 zod 里都没有这个键'
+    failsWhen: ['入口词的长度分布', '每主题入口条数']
+    affects: '单个主题的入口行字符上限（防止一行过长挤占锚段）'
+    diverges: '**zod schema 里也没有**'
+  }
+>
+export const DEFAULT_PATH_LINES = 15 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '路段整体行数上限是容量选择：源码无注释，TRIM_ORDER 里的 5 与它是什么关系也没有写明'
+    failsWhen: ['一跳关联的平均条数', '字符预算']
+    affects: '路段整体行数上限（裁剪顺序里会先降到 5、再清零）'
+  }
+>
 
 /**
  * 路段每行摘要的截断长度：20 个词。
@@ -144,11 +212,35 @@ export const DEFAULT_PATH_LINES = 15
  * （词数也不同）。三个数都按「一行给几个词 × TERM_CHARS」折算，不再各写一个字符数 ——
  * 此前 80 / 64 / 60 三个字符数彼此只差几个字符，读者看不出它们其实是同一量纲上的三档。
  */
-export const PATH_SUMMARY_CHARS = 20 * TERM_CHARS
+export const PATH_SUMMARY_CHARS = (20 * TERM_CHARS) satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '路段每行摘要截断 20 个词是显示判断，不是标定结果：路只提供线索，锚是正文、降级锚是空间不足时的短摘要，三个截断分属不同角色，不合并'
+    failsWhen: ['路段在注入里的角色（纯线索）']
+    affects: '路段每行摘要的截断长度：20 个词'
+  }
+>
 /** 锚降级为摘要时的截断长度：16 个词（摘录档整段走这条）。 */
-export const ANCHOR_SUMMARY_CHARS = 16 * TERM_CHARS
+export const ANCHOR_SUMMARY_CHARS = (16 * TERM_CHARS) satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '锚段降级为摘要时的截断 16 个词是显示判断，不是标定结果；上游是 extractSummary 的 48'
+    failsWhen: ['摘要长度分布（extractSummary 的 48 是它的上游）']
+    affects: '锚段降级为摘要时的截断长度：16 个词（st.anchorToSummary 分支）'
+  }
+>
 /** 空间不足时把单条锚降级为短摘要所截断的长度：15 个词（与上一条是两条不同分支）。 */
-export const DEMOTED_ANCHOR_CHARS = 15 * TERM_CHARS
+export const DEMOTED_ANCHOR_CHARS = (15 * TERM_CHARS) satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '空间不足时把锚降级为短摘要的截断 15 个词是显示判断，不是标定结果；与 16 词那条只差 1 个词、分属不同分支，属「恰好近似」不是同源'
+    failsWhen: ['同上；这个值更像历史遗留']
+    affects: '空间不足时把锚降级为短摘要所截断的长度：15 个词（与 16 词那条是两条不同分支）'
+  }
+>
 
 /**
  * 注入档位：按匹配质量决定这次给多少。
@@ -168,9 +260,35 @@ export const DEMOTED_ANCHOR_CHARS = 15 * TERM_CHARS
 export type ViewTier = 'full' | 'brief' | 'excerpt'
 
 /** 完整档的下界。不参与按库规模重标，理由见 calib 的说明与重标报告。 */
-export const TIER_FULL_MIN = 0.55
+export const TIER_FULL_MIN = 0.55 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '注入'
+    tool: '无脚本（D15-2 标定，未点名脚本路径）'
+    finding: '相关 top1 min 0.524 / p50 0.683，无关 top1 max 0.398，两类之间是空的；取空隙中间只为容错，不是为了拟合'
+    scale: '20 条 gold 查询 + 4 条无关查询'
+    failsWhen: ['换编码模型（余弦尺度直接变）', '库规模与来源分布', '语料的领域混合度']
+    guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs']
+    affects: 'tierOf：最高余弦 >= 此值走完整档（三段全给）'
+    diverges: '**标定语料与运行库不一致**：标定在基准库上，而插件跑在宿主库上（M2 审核指出的同一类问题）。本表不再记语料规模与来源分布 —— 是否仍适用，看对应重标报告；没有报告时按「无记录」处理，不猜'
+  }
+>
 /** 精简档下界的**默认值**（库小于锚点表下端时用它）；生效值见 calib 的锚点表。 */
-export const TIER_BRIEF_MIN = 0.45
+export const TIER_BRIEF_MIN = 0.45 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '注入'
+    tool: '无脚本（D15-2 与 2026-10-17 重标定，均未点名脚本路径）'
+    finding: '两段来历：① 原标定无关上界 0.398、相关下界 0.524，0.45 夹在中间；② 2026-10-17 重标定在扩容后的基准库上，无关 top1 上界升到 0.515、相关下界 0.525，0.45 落进无关分布内部，故降级为默认值（生效值改由 calib 锚点表按规模给出），扫描读数 0.466 / 0.470 / 0.492 / 0.514 / 0.514 / 0.514 / 0.514 / 0.525；2026-10-18 复核：24 条无关查询、1 次误通过时 conformal 可认证上限 (1+1)/(24+1)=8.0%，Clopper-Pearson 95% 区间 [0.11%, 21.12%]'
+    scale: '原标定 20 gold + 4 无关；重标定 8 个规模点各 30 次降采样、20 gold + 20 无关'
+    at: '2026-10-17'
+    failsWhen: ['换编码模型', '库规模（生效值随规模变，本常量不再等于生效值）', '语料的领域混合度']
+    guardedBy: ['test/calibrate.test.mjs', 'test/view.test.mjs']
+    affects: '库小于锚点表下端时的**默认**精简档下界；库 >= 12 条时生效值由 calib 的锚点表按规模给出，本常量不再等于生效值。它同时仍是弱相关提示线 LOW_RELEVANCE_HINT 的取值来源'
+    diverges: '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。重标定已把生效值改成规模的函数（本次），但**弱相关提示线 LOW_RELEVANCE_HINT 仍是这个常数**（`src/tools/index.ts` 的 `LOW_RELEVANCE_HINT` 直接引用它）—— 工具层不在本次改动边界内，两处暂时分叉，见实现报告的未确定项。本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理'
+    refs: [{ file: 'src/tools/index.ts'; symbol: 'LOW_RELEVANCE_HINT' }]
+  }
+>
 
 /**
  * 按最高余弦判档。

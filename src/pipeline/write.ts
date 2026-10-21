@@ -91,7 +91,15 @@ export interface DeclaredEdgeNote {
  * 声明边因此排在推断边之前），不进任何原子的打分 —— 打分只看四路召回的名次
  * （search.ts 的 fuse），边不产生名次。
  */
-export const DECLARED_EDGE_CONFIDENCE = 1
+export const DECLARED_EDGE_CONFIDENCE = 1 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '图扩展'
+    why: '设计取值，不是标定：裁决把 declared 定义为真相源，而「声明」本身就是证据，因此给满 1.0，与 near 边「没有证据时给中位」的 0.5 相反；1.0 的作用是让声明边在【路】段与邻居截断里排在推断边之前'
+    failsWhen: ['图路每个种子的出度截断（换值会换掉留下的邻居）', '【路】段的行序']
+    affects: '写入声明边（origin = declared）时的 confidence：它是一个常量，不是相似度。**只影响图路内部先后**：每个种子留哪几条邻居（查询侧的出度截断按它排序），以及【路】段的行序。它**不进原子分数** —— 但会经图路的名次间接改变候选的 final：换掉两条声明边的 confidence，可能改变谁先谁后，也可能换掉被截断留下的那几条'
+  }
+>
 
 /**
  * 声明边 type 的字符数上限。
@@ -100,7 +108,15 @@ export const DECLARED_EDGE_CONFIDENCE = 1
  * 字符，32 留出两倍余量给项目自定义的关系名。超长的 type 不会让内容写不进去，
  * 只让这条边不落库（拒因回执）。
  */
-export const DECLARED_EDGE_TYPE_MAX = 32
+export const DECLARED_EDGE_TYPE_MAX = 32 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '图扩展'
+    why: '护栏，不是标定：现有五类 kind 最长 10 个字符（supersedes），32 留两倍余量给项目自定义的关系名；再长就会挤占回执与注入文本，且没有任何已知用法需要它'
+    failsWhen: ['模型自取关系名的实际长度分布（本项目尚无这份实测）']
+    affects: '写入声明边时 type 的字符数上限：超过即拒这条边（不拒记忆），拒因随回执返回。字符集另有判据（小写字母 / 数字 / 下划线，正则见 write.ts 的 DECLARED_EDGE_TYPE_RE）'
+  }
+>
 
 /**
  * type 的字符集：小写字母开头，其后小写字母 / 数字 / 下划线。
@@ -369,17 +385,68 @@ export const DEFAULT_THRESHOLDS: WriteThresholds = {
  * 同一件事在文档里是配置项、在代码里是魔法数。本次只把它提成具名常量，取值未变，
  * 也仍不进 zod（是否可配置是另一件事，改它要动对外形状）。
  */
-export const DELTA_PEAK = 0.06
+export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '双峰拒绝线：前两名余弦差小于多少算「分不开」。0.06 来自《设计报告》落位判定表与设计文档 §7 的 deltaPeak 默认值，没有测量给出它；它是对「两个候选要多近才拒绝并入」的取舍'
+    failsWhen: ['换编码模型（余弦尺度的间距会变）', '同域不同子话题的密度']
+    guardedBy: ['test/write.test.mjs']
+    affects: 'decidePlacement：sim1 - sim2 小于此差值时判为「双峰」，退回新建（ambiguous）'
+    diverges: '**仍不进 zod schema**：运行时不可配置。T45 批一只把它从内联字面量提成具名常量（取值未变）——「文档有名字、代码里是魔法数」这一半已消除，可配置性是另一件事'
+    doc: 't7'
+    docKey: 'deltaPeak'
+    docDefault: 0.06
+    docRange: [0.01, 0.2]
+  }
+>
 /** 计算词面这一票的候选数上限（词面比余弦贵得多）。 */
-const LEX_CANDIDATES = 8
+const LEX_CANDIDATES = 8 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '词面第二票的成本上限：每算一个候选 topic 就多一次索引查询，取 8 是为控制查询数 —— 依据是成本不是分布，没有实测标定记录'
+    failsWhen: ['候选 topic 数与索引查询成本', '库规模（候选变多时该近似会失真）']
+    affects: 'decidePlacement：有向量时，只给余弦最靠前的这么多候选 topic 算词面那一票'
+  }
+>
 /** 无向量时先取多少个 topic 参与词面预筛。 */
-const WORD_ONLY_CANDIDATES = 64
-export const DEFAULT_TOP_N = 24
+const WORD_ONLY_CANDIDATES = 64 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '无余弦可用时先取多少个 topic 参与词面预筛，是候选规模上的接口约束：取多少由查询成本与库内 topic 总数决定，注释只说「先取多少个」，没有测量给出 64'
+    failsWhen: ['库内 topic 总数', 'topic 表按 rebuilt_at 倒序取候选这一近似的偏差']
+    affects: '无向量时先取多少个 topic 参与词面预筛（没有余弦可用，只能靠它缩小候选）'
+    diverges: '**没有进 zod schema**：降级路径的候选上限运行时不可配置'
+  }
+>
+export const DEFAULT_TOP_N = 24 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '落位时取多少个 topic 候选：固定上限，由库规模与每次落位的代价决定，无记录；它与召回条数同为 24 是同值不同义，不合并 —— 合并会让「调注入条数」顺带改掉落位候选数'
+    failsWhen: ['库内 topic 总数', '落位准确率对候选规模的敏感度']
+    affects: 'loadCandidates 的默认候选上限（写入侧的 topic 候选数）'
+    diverges: '**设计文档 §7 的 topN 指召回条数**（对应 search.ts 的 RECALL_TOP_N），不是这里的落位候选数 ——两件事同为 24 纯属巧合，改配置不会改这里'
+    otherSites: [
+      'src/tools/index.ts recall(..., { topN: cfg.topN }) —— 召回条数走的是配置（zod 的 topN），不是这里的 24',
+    ]
+  }
+>
 /**
  * 无向量预筛的候选放大倍数：词面筛掉一批之后还要留够 decidePlacement 的输入。
  * 导出是为了让阈值登记表引用真值而不是复制一份。
  */
-export const WORD_ONLY_TOP_N_FACTOR = 2
+export const WORD_ONLY_TOP_N_FACTOR = 2 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '词面预筛会淘汰一批候选，保留数取 topN 的倍数：取 2 倍是为「筛掉一批之后还留够 decidePlacement 的输入」，属余量取舍，没有测量'
+    failsWhen: ['词面预筛的淘汰率', 'topN 改动时']
+    affects: '无向量时，词面预筛保留的候选数是 topN 的多少倍'
+  }
+>
 
 /**
  * 取词表索引（DF）。**每次调用都重建，不做缓存。**
@@ -417,9 +484,25 @@ export function invalidateVocab(_ctx: WriteCtx): void {
  */
 const topicLexCache = new WeakMap<DatabaseSync, Map<number, Set<string>>>()
 /** 单个成员贡献给 topic 指纹的正文字符数。 */
-export const FINGERPRINT_CHARS = 400
+export const FINGERPRINT_CHARS = 400 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '指纹宽度取「中文摘要 + 背景段」的典型长度：写死一个字符数，取多少由语料段落长度与跨机器一致性决定，未记录任何测量；换成别的语料要重标'
+    failsWhen: ['语料的段落长度分布', '语言（换成英文/日文语料）']
+    affects: '每个成员贡献给 topic 词面指纹的正文字符数（指纹用于估重叠度）'
+  }
+>
 /** 单个 topic 最多取多少个成员的指纹。 */
-export const FINGERPRINT_MEMBERS = 40
+export const FINGERPRINT_MEMBERS = 40 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '单个 topic 取多少个成员的指纹：上限值，取前 N 个保证结果确定，注释只说「最多取多少个」，无实测标定记录'
+    failsWhen: ['单个 topic 的成员数分布（大 topic 多时指纹代表性下降）']
+    affects: '单个 topic 最多取多少个成员的指纹（取前 N 个，保证结果确定）'
+  }
+>
 
 /**
  * 注入行按「词」折算时的字符宽度：一个词条按最多 4 个汉字计。
@@ -431,7 +514,15 @@ export const FINGERPRINT_MEMBERS = 40
  * 4 的口径与 entries.ts 的 MAX_HAN_TERM 一致（真词极少超过四字），但**不复用那个常量**：
  * 那是候选资格的上限，这里是显示宽度的折算单位，两者的改动理由不同。
  */
-export const TERM_CHARS = 4
+export const TERM_CHARS = 4 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '注入'
+    why: '折算单位不是阈值：一个词按四个汉字折算，是把「一行给几个词」换算成字符数的口径，属显示口径的约定；没有测量给出这个折算值。它与 entries.ts 的 MAX_HAN_TERM(4) 同源，但证据明说不复用那个常量'
+    failsWhen: ['注入层一行给几个词（各段角色不同）']
+    affects: '注入行按「词」折算时的字符宽度：主题标签 4 词、单条降级摘要 15 词、摘录档锚摘要 16 词、路段摘要 20 词，都乘本值得到字符数'
+  }
+>
 
 /**
  * 新建 topic 时，标签从摘要里取多少个字符：4 个词。
@@ -440,7 +531,18 @@ export const TERM_CHARS = 4
  * 标签写进去时截到这么宽，读出来时也按这么宽裁。此前两处各自写 16，改一处就会
  * 让「存进去的标签」与「显示的标签」宽度分家。
  */
-export const TOPIC_LABEL_CHARS = 4 * TERM_CHARS
+export const TOPIC_LABEL_CHARS = (4 * TERM_CHARS) satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '落位'
+    tool: '源码表达式（src/pipeline/write.ts 的 `4 * TERM_CHARS`）'
+    finding: '由 TERM_CHARS(4) 与「4 个词」算出 16；改词数或 TERM_CHARS 后重新构建，派生值跟着变，不需要测量'
+    formula: true
+    failsWhen: ['主题标签在注入层显示多宽', '摘要长度分布']
+    affects: '主题标签的宽度：新建 topic 时取摘要的前这么多字符，注入层入口行也按同一宽度裁（write.ts 的 slice 与 view.ts 的 clip 是同一个量）'
+    otherSites: ['src/pipeline/view.ts 入口行 `clip(t.label, TOPIC_LABEL_CHARS)`（同源，不再是第二份数字）']
+  }
+>
 
 /**
  * 写 near 边时的默认 confidence（有真实相似度时用相似度顶替）。
@@ -448,7 +550,15 @@ export const TOPIC_LABEL_CHARS = 4 * TERM_CHARS
  * 是「没有证据时给中位」的占位值，不是标定结果 —— 它只影响图路排序的相对次序，
  * 不影响是否建边。
  */
-export const NEAR_EDGE_CONFIDENCE = 0.5
+export const NEAR_EDGE_CONFIDENCE = 0.5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '落位'
+    why: '「没有证据时给中位」的占位值：写 near 边时若没有真实相似度可填，就填一个中位常数；是占位不是标定结果'
+    failsWhen: ['图路排序对 confidence 的依赖方式']
+    affects: '写 near 边时的默认 confidence（有真实 sim 时用 sim 顶替）'
+  }
+>
 
 function topicLexOf(ctx: WriteCtx, topicId: number): Set<string> {
   let per = topicLexCache.get(ctx.db)
@@ -627,6 +737,7 @@ export function decidePlacement(
 export const SEARCH_BODY_MAX_CHARS = 1600 satisfies ThresholdValue<
   'chosen',
   {
+    area: '写入'
     why: '进 trigram 索引的正文字符上限是索引代价与长正文细节召回之间的取舍：注释只说明「摘要重复一次」的理由，无实测标定记录；同一函数内此前写了两遍（判断与切片），T45 批一合并为一个常量'
     failsWhen: ['atom 正文长度分布', '长正文的细节召回是否重要']
     affects: 'buildSearchBody 里进 trigram 索引的正文字符上限（超出即截断）'

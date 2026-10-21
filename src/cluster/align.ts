@@ -29,6 +29,7 @@ import type { ThresholdValue } from '../threshold-types.js'
 export const DEFAULT_ALIGN_COS = 0.8 satisfies ThresholdValue<
   'chosen',
   {
+    area: '重聚类'
     why: '时序文档 4.3 给的 0.80，该文档没有给标定实验；探针实测了这条线的效果（配对成功率与配对余弦的分位），但没有反向标定「0.80 之下哪些其实同属一个主题」—— 那需要人工对照，本轮没做。数值上与落位的 tauJoin = 0.78 接近，但两者问的是不同的问题，不要合并'
     failsWhen: ['换编码模型（余弦尺度会变）', '重聚类的频率（间隔越久，旧质心越不代表现状）']
     affects: '身份对齐：新簇质心与旧 topic 质心的余弦达到此值才允许配对，配对成功的旧 topic id 被继承（挂在其上的主属引用、次属引用与 near 边因此不失效）'

@@ -31,6 +31,7 @@ import type { ThresholdValue } from '../threshold-types.js'
 export const MST_BRIDGE_FACTOR = 2 satisfies ThresholdValue<
   'chosen',
   {
+    area: '重聚类'
     why: '无标定实验。取 2（即桥边比任何真实边都贵）是一个语义选择而不是拟合：分量之间一条边都没有（不是「边太贵」，是真的没有），任何取法都造不出真实的连接，只能保证桥边排在 Kruskal 顺序的最后'
     failsWhen: ['k（k 越大分量越少，需要桥边的场合越少）', '语料的密度分布']
     affects: 'k 近邻图不连通时，缝合分量所用的桥边权重 = 全图最大权重 × 本值。它决定那些孤立分量在层次树上「多晚」才被并进全局根'

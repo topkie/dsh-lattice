@@ -31,6 +31,7 @@ import type { ThresholdValue } from '../threshold-types.js'
 export const DEFAULT_KNN_K = 2 satisfies ThresholdValue<
   'recheckable',
   {
+    area: '重聚类'
     tool: 'T16 探针（无脚本）'
     finding: '基准库上与参照实现（clusternova，mpts=2）对照：k=2 得 82 簇 / 噪声占 68.9%，参照 75 簇 / 73.4%，双向成员重合度 0.77 / 0.85；k≥6 时本实现塌缩到个位数簇。设计报告 §21 给 min_samples = 2，而 min_samples 与 k 在本实现里是同一个参数'
     scale: '基准库 1374 条真实向量、512 维（只有一个规模档）'

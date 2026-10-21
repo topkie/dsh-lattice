@@ -208,6 +208,7 @@ const LOG_CLEAR_ROUTE_PATH = '/api/lattice-log-clear'
 const FORGET_BODY_MAX_BYTES = 4096 satisfies ThresholdValue<
   'chosen',
   {
+    area: '显式删除'
     why: '无记录，是资源上限：删除请求只有一个整数 id，几百字节足够；读请求体是累积式的，没有上限就等于允许任何本机进程让宿主堆任意大的字符串（回环不是「可信」，只是「本机」—— 宿主对插件路由不做鉴权）'
     failsWhen: ['请求体里要不要带更多字段']
     guardedBy: ['test/plugin.test.mjs']
@@ -235,11 +236,24 @@ const DEFAULT_ENCODER_MODEL = 'Xenova/bge-small-zh-v1.5'
 /**
  * 交注入层的默认候选数。
  *
- * 与 `pipeline/search.ts` 的 `RECALL_TOP_N` 同为 24，但**不是同一个量**：那个是
- * `recall()` 自己的兜底，这个是**配置项 topN 的默认值**（运行时真正生效的是后者）。
- * 两者同值纯属巧合 —— 合并会把「改注入条数」变成「改 recall 的默认参数」。
+ * 与 `pipeline/search.ts` 的 `RECALL_TOP_N`、写入侧的 `DEFAULT_TOP_N` 同为 24，但**不是同一个量**：
+ * 那个是 `recall()` 自己的兜底，这个是**配置项 topN 的默认值**（运行时真正生效的是后者），
+ * 第三个是落位时取多少个 topic 候选。三者同值纯属巧合 —— 合并会把「改注入条数」变成
+ * 「改 recall 的默认参数」或「改落位候选数」。
+ *
+ * 名字带上了配置项前缀（T65 阶段 3 批 2 改）：它与写入侧的常量同名不同量，搬到定义处后
+ * 打印表里会出现两行同名条目，读的人分不清哪一行是哪一个。
  */
-const DEFAULT_TOP_N = 24
+const CONFIG_TOP_N_DEFAULT = 24 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '召回融合'
+    why: '配置项 topN 的默认条数：容量选择，没有测量给出它；与设计文档 §7 的 topN 默认值一致，但这条记录的是「配置入口的默认值」，文档对照那一条在 RECALL_TOP_N 上'
+    failsWhen: ['注入字符预算', '一次注入能容纳的摘要条数']
+    affects: 'Config.topN 的默认值；调用方不传 topN 时，召回交注入层的条数'
+    diverges: '**与 RECALL_TOP_N、写入侧 DEFAULT_TOP_N 同为 24、不同量**：这条是配置项的默认值，改它等于改「默认注入多少条」；另两条分别是 recall 的兜底参数与落位候选数'
+  }
+>
 
 export const Config = z.object({
   enabled: z.boolean().default(true),
@@ -263,7 +277,7 @@ export const Config = z.object({
   /** 注入字符预算 */
   viewBudget: z.number().min(1000).max(20000).default(DEFAULT_BUDGET),
   /** 交注入层的候选数 */
-  topN: z.number().min(5).max(50).default(DEFAULT_TOP_N),
+  topN: z.number().min(5).max(50).default(CONFIG_TOP_N_DEFAULT),
   /**
    * 下面三项与**机器**相关，留 0 表示按机器内存与库大小自动推导（见 util/memory.ts）。
    * 之所以做成可选覆盖而不是固定默认值：合理取值取决于内存与磁盘，写死必然在别的机器上不合适。
@@ -346,7 +360,7 @@ export function apply(ctx: Context, config: unknown): void {
       tauNew: Number(cfg.tauNew ?? DEFAULT_THRESHOLDS.tauNew),
     },
     viewBudget: Number(cfg.viewBudget ?? DEFAULT_BUDGET),
-    topN: Number(cfg.topN ?? DEFAULT_TOP_N),
+    topN: Number(cfg.topN ?? CONFIG_TOP_N_DEFAULT),
     samplesEnabled: cfg.samplesEnabled !== false,
     resources: {
       mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,

@@ -17,6 +17,7 @@
 // （现在已经 8 个参数），反馈是低频动作；挂上去等于每次写入都替反馈付一次参数成本。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { ThresholdValue } from '../threshold-types.js'
 import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { recall, recordRecall, type RecallMeta } from '../pipeline/search.js'
@@ -80,7 +81,22 @@ function textOutput() {
  * 上面原本写着「分头定两个数，只会让它们慢慢分叉」，而它自己就是这个形态。
  * 2026-10-17 修正：`isWeakMatch()` 改为接受 `briefMin`，调用处传 `view.briefMin`。
  */
-export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN
+export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '注入'
+    tool: '无脚本（D15-4 / D15-5 的实测，未点名脚本路径）'
+    finding: '原值 0.68 永不触发：gold 集 top1 中位数就有 0.683 ——「一个永不触发的提示与没有提示是一回事，却看起来还在工作」；改为与摘录档下界同源（= TIER_BRIEF_MIN），理由是两者回答同一个问题：「这次的匹配算不算相关」。标定约束落在 0.398 与 0.524 之间'
+    scale: '同 D15-2：20 条 gold + 4 条无关查询'
+    failsWhen: ['TIER_BRIEF_MIN 改动时（它是别名，不是独立取值）', '换编码模型']
+    guardedBy: ['test/tools.test.mjs']
+    affects: 'isWeakMatch：低于此值在召回结果前标一句「可能不相关」（只提示不拦截）'
+    refs: [{ file: 'src/tools/index.ts'; symbol: 'LOW_RELEVANCE_HINT' }]
+    otherSites: [
+      '`src/tools/index.ts` 的 `LOW_RELEVANCE_HINT` = TIER_BRIEF_MIN —— 不是自己的数，与摘录档同源',
+    ]
+  }
+>
 
 /**
  * 有命中时追加在召回结果末尾的一句：关系可以显式声明（T38 的可发现性）。

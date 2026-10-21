@@ -27,6 +27,7 @@
 // 认 related，计数见 edgeOriginCounts），重建时按 origin 跳过。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { decodeVec, VEC_DIM } from '../util/vec.js'
 
 /** 每条边在库里的来源标记。declared 是真相源，inferred 由本模块重算。 */
@@ -47,7 +48,17 @@ export const DECLARED_ORIGIN = 'declared'
  * 96% 的 atom 过线邻居多于 K，所以 K 就是 MOD 的旋钮。§36 给的目标区间是 2~5，
  * 取中点 4 得到实测 MOD 3.86。
  */
-export const NEAR_K = 4
+export const NEAR_K = 4 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '图扩展'
+    tool: 'T18 探针 03（无脚本）'
+    finding: '参数网格（K = 2/3/4/6/8 × cosMin = 0.70/0.75/0.80）：96%（1293/1374）的 atom 过线邻居多于 K，所以 MOD 由 K 直接决定 —— K=4 → 3.86、K=6（cosMin 0.75）→ 4.64；按 §36 的 MOD 目标区间 2~5 取中点 4'
+    scale: '基准库 1374 条 atom（只有一个规模档）'
+    failsWhen: ['库规模（atom 越多近邻越密）', '换编码模型（余弦尺度会变）', '§36 的 MOD 目标区间']
+    affects: 'inferEdges：每个 atom 保留多少个向量近邻作为 near 边。它同时是图路的宽度与 §36 第 8 项 MOD 的旋钮 —— 实测 MOD 几乎等于 K'
+  }
+>
 
 /**
  * 近邻边的余弦截断线：低于它的对不建边。
@@ -57,13 +68,45 @@ export const NEAR_K = 4
  * 砍掉一批「明显更差」的边，只会把一批 atom 变成孤点。实测：0.70 → 孤立 1.6%，
  * 0.75 → 8.1%（已越过 §36 的 <8% 目标），0.80 → 34%（越过 20% 报警线）。
  */
-export const NEAR_COS_MIN = 0.7
+export const NEAR_COS_MIN = 0.7 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '图扩展'
+    tool: 'T18 探针 01（余弦分布）与探针 03（参数网格）'
+    finding: 'top-16 邻居的 cos 中位数 0.748、p10 0.685 —— 0.70 与 0.86 之间没有自然断点，抬线砍不掉一批「明显更差」的边，只会制造孤点：0.70 → 孤立 1.6%，0.75 → 8.1%（越过 §36 的 <8% 目标），0.80 → 34%（越过 20% 报警线）。0.70 是三个候选里唯一同时满足 MOD 与孤立率两条区间的。它不是「相似」的语义线，只是「别把可用的 atom 变成孤点」的底线'
+    scale: '基准库 1374 条 atom'
+    failsWhen: ['换编码模型（余弦尺度会变）', '§36 的孤立率目标', '语料的领域混合度']
+    affects: 'inferEdges：余弦低于此值的 atom 对不建边。它决定边质量的下限，也决定孤立率'
+  }
+>
 
 /** 每 atom 出度的**硬上限**（§33 的降级路径与 §40 的反例判据都点名了 16）。 */
-export const OUT_DEGREE_CAP = 16
+export const OUT_DEGREE_CAP = 16 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '图扩展'
+    why: '设计文档给的值，未在本库标定：§33 的降级路径、§40 的反例判据、技术文档 4.2 的图路参数都写 16，值来自设计文档；它是 K 被调大时的兜底，不是标定出来的上限'
+    failsWhen: ['NEAR_K（K 接近或超过 16 时它才开始生效）', '库规模与语料密度']
+    affects: '出度硬上限。两个来源各自用一次、**不合并计数**：推断边每 atom ≤ 16（inferEdges 把超出的邻居截断），声明边每批 ≤ 16（write.ts 把超出的边拒掉）。所以同一个 atom 可以有 16 条推断边 + 16 条声明边，合计不设上限。查询侧（graphPath 的每个种子）也用它截断候选，同样不参与前两者的计数'
+    doc: 't18fail'
+    docKey: '出度硬上限'
+    docDefault: 16
+  }
+>
 
 /** 全量两两比较的规模上限；超出时拒绝推断并如实报告，而不是安静地跑上几分钟。 */
-export const GRAPH_INFER_MAX_ATOMS = 4000
+export const GRAPH_INFER_MAX_ATOMS = 4000 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '图扩展'
+    tool: '无脚本（按实测吞吐外推）'
+    finding: '基准库全量成对（943 251 对、512 维）实测 460~510 ms；按 O(N²) 外推到 4 000 条约 4 s、到 8 000 条约 16 s。取 4 000 对应「首次召回最多多等约 4 秒」这个判断，不是实测出来的上限；要真正解掉这条外推，得把全量成对换成桶内候选或 SimHash 预筛'
+    scale: '基准库 1374 条 atom，943 251 对、512 维'
+    failsWhen: ['机器算力', '单次召回可接受的阻塞时长', '是否改成近邻候选而非全量成对']
+    guardedBy: ['test/audit.test.mjs']
+    affects: 'inferEdges：超过此规模就不做全量两两比较，直接拒绝推断并如实报告结果，而不是安静地跑上几分钟'
+  }
+>
 
 /**
  * 图路认的 kind 白名单，与 search.ts 的图路 SQL 必须一致。

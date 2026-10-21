@@ -16,6 +16,7 @@ import { FLAG_ARCHIVED } from '../db/flags.js'
 export const LIST_MAX_LIMIT = 50 satisfies ThresholdValue<
   'chosen',
   {
+    area: '目录'
     why: '上限是硬边界、防止调用方一次拉空整个库（D13-1）：50 本身无实测记录，它约束的是注意力稀释，不是某个分布'
     failsWhen: ['一次注入能容纳的摘要条数', '库规模']
     guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs']
@@ -28,6 +29,7 @@ export const LIST_MAX_LIMIT = 50 satisfies ThresholdValue<
 export const LIST_DEFAULT_LIMIT = 20 satisfies ThresholdValue<
   'chosen',
   {
+    area: '目录'
     why: '`src/pipeline/list.ts` 的 `LIST_DEFAULT_LIMIT` 注释「取值偏小：列目录是为了定位，不是为了读完」：默认页大小是使用偏好选择，不是标定结果'
     failsWhen: ['同上']
     guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs']
