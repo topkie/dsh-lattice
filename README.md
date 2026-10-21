@@ -3,6 +3,9 @@
 > 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地记忆插件：
 > 把对话与工作中值得长期复用的知识，沉淀成**结构化、可检索、可重建**的本地记忆。
 
+它的定位可以概括成一句话：**一个本子和一支笔**。
+不自动替你记、不猜你要什么；只保证写下的东西找得回、改得动、删得掉。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 
