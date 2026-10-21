@@ -20,6 +20,10 @@
 
 ### 0.1 装
 
+0.9.0 还没发布到 npm（插件与它的运行时依赖 `lattice-calib` 都不在 npm 上），所以 `dsh plugin add dsh-lattice`
+在这一版上跑不通。先按 [README 的安装一节](../README.md) 从源码构建，把两组文件复制进 profile 的 `node_modules`。
+发布到 npm 之后，最短路径才是：
+
 ```bash
 cd <DSH_HOME>/profiles/<profile>
 dsh plugin --profile <profile> add dsh-lattice

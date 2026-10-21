@@ -9,9 +9,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 
-> **状态：核心链路可用，接口仍可能变动。** 存储、编码、写入、召回、注入组装与六个工具
-> 都已实现并有测试覆盖；用户界面（列表 / 搜索 / 删除）与写入侧审核层也已落地。
-> 维护闭环里还有两项在做（重聚类、1 跳图扩展）。
+> **状态：0.9.0，第一个对外发布版。** 存储、编码、写入、召回、注入组装、1 跳图扩展与六个工具都已实现，
+> 门禁带 467 条测试；设置页能列出现有记忆、搜到指定一条、不借助模型把它删掉。
+> 整理（重聚类）要手动触发，没有定时自动执行。其余已知限制见 [CHANGELOG](CHANGELOG.md) 的「已知限制」一节。
 
 ## 它解决什么
 
@@ -50,13 +50,37 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 ## 安装
 
+本插件还没有发布到 npm（它与运行时依赖 [`lattice-calib`](https://github.com/topkie/lattice-calib)
+都不在 npm 上），所以现在只有从源码装这一条路。需要 Node 22 以上、git 与 pnpm ≥ 9（与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。
+
 ```bash
-# 安装到宿主 profile（安装后需重启宿主）
-cd <DSH_HOME>/profiles/<profile>
-dsh plugin --profile <profile> add dsh-lattice
+git clone https://github.com/topkie/dsh-lattice.git
+git clone https://github.com/topkie/lattice-calib.git
+
+# 两个都要构建：插件运行时 import 标定包
+cd lattice-calib && pnpm install && pnpm run build && cd ..
+
+cd dsh-lattice
+# 标定包还没发到 npm，把刚构建的这份装成依赖（会写进本地的 package.json）
+pnpm add ../lattice-calib
+pnpm run build
 ```
 
-卸载：从该 profile 的 `package.json` 中移除依赖，并删除 `node_modules/dsh-lattice`。
+构建完把下面两组文件放进宿主 profile 的 `node_modules`（两个目录平级），然后重启宿主：
+
+| 目标目录 | 放什么 |
+|---|---|
+| `node_modules/dsh-lattice/` | `dist/`、`lib/`、`package.json`、`cordis.patch.yml` |
+| `node_modules/lattice-calib/` | `dist/`、`package.json` |
+
+`<DSH_HOME>` 因平台而异；不确定就找宿主配置里 `profiles/` 所在的那一层。
+只复制 `dist/` 或只复制 `lib/` 会出现「后端是新版、设置页是旧版」，两样要一起复制。
+
+装好后用一次写入与一次召回确认：让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；
+也可以直接调 `lattice_ping`，它返回插件版本、库结构版本与当前编码器状态。
+
+卸载：删掉 `node_modules/dsh-lattice/` 与 `node_modules/lattice-calib/`，重启宿主。
+记忆数据在独立的数据目录里，不会被这一步删掉。
 
 ## 配置
 
