@@ -433,6 +433,7 @@ const exprCount = scanned.filter((d) => d.form === 'expression').length
 // 三种关系原先靠手写的文字维持，现在由这里核对：
 //   1. display 里不写字面等式 —— 等式随常量变，写成字符串就跟不上；
 //   2. 声明了 divergence.docValue 的，分叉必须真的存在（相等 = 这条该删）；
+//      条目有 design 时，docValue 还必须等于 design.default（同一事实的两份记录）；
 //   3. refs 指向的文件存在、符号在文件里出现 —— 行号会漂，符号不会。
 const assertionProblems = [...displayProblems(), ...divergenceProblems()]
 const refSites = [
@@ -763,7 +764,9 @@ if (unregistered.length > 0 || missingAnchors.length > 0 || bypassed.length > 0)
 if (assertionProblems.length > 0) {
   console.error('')
   console.error('断言不成立：登记里的 display 等式、divergence 或 refs 与代码对不上。')
-  console.error('修法：display 改成函数；分叉消失就删掉 divergence；refs 里的符号改名了要同步。')
+  console.error(
+    '修法：display 改成函数；分叉消失就删掉 divergence；docValue 与 design.default 不一致时两处一起改；refs 里的符号改名了要同步。',
+  )
   for (const p of assertionProblems) console.error('  ' + p)
   process.exit(1)
 }

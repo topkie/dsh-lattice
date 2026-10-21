@@ -170,7 +170,9 @@ describe('阈值来历：缺键由打印脚本生成（T55）', () => {
 })
 
 describe('阈值来历：分叉声明必须成立（T55）', () => {
-  const numeric = THRESHOLDS.find((e) => typeof e.value() === 'number')
+  // 不要 design 的条目：这个 describe 里另有「docValue 与 design.default 一致」的用例，
+  // 拿带 design 的条目当底座会让两条规则缠在一起。
+  const numeric = THRESHOLDS.find((e) => typeof e.value() === 'number' && e.design === undefined)
 
   it('docValue 与代码值相等 → 报「分叉已不存在」', () => {
     const entry = {
@@ -191,6 +193,21 @@ describe('阈值来历：分叉声明必须成立（T55）', () => {
       divergence: { docValue: numeric.value() + 1, note: '真的' },
     }
     assert.deepEqual(divergenceProblems([entry]), [])
+  })
+
+  it('docValue 与 design.default 不同 → 报「两份记录已经漂移」', () => {
+    const withDesign = THRESHOLDS.find((e) => e.design !== undefined && typeof e.value() === 'number')
+    const entry = {
+      ...withDesign,
+      name: 'FAKE_DRIFT',
+      value: () => withDesign.design.default + 2,
+      divergence: { docValue: withDesign.design.default + 1, note: '漂移' },
+    }
+    const problems = divergenceProblems([entry])
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /FAKE_DRIFT/)
+    assert.match(problems[0], /design\.default/)
+    assert.match(problems[0], /漂移/)
   })
 
   it('对象型条目上声明 divergence → 报（那种断言永远成立）', () => {

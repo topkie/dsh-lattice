@@ -496,6 +496,12 @@ src/
 | `formula: true` | 值由代码里的算式算出：`--needs-review` 跳过它 |
 | `guardedBy` | 按常量名断言默认值的测试文件（`chosen` 也有这个字段） |
 
+**显示值与分叉记录也是断言。** `display` 里含数字时必须写成函数，数字从常量插值
+（单位换算见 `src/thresholds.ts` 的 `displayNumber`）—— 打印时现取，常量改了它跟着变；
+写成字符串的数字迟早与常量脱钩，`print-thresholds.mjs` 会让门禁变红。只有不含数字的纯文字
+说明可以保留字符串。声明了 `divergence` 的条目若同时有 `design`，`docValue` 必须等于
+`design.default`：两者记的是同一件事实（设计文档给的默认值），只改一处就是漂移，同样会红。
+
 T54 迁移完成后，旧的 `evidence`（解释）与 `source`（来源指针）已删除：解释进
 `finding` / `why`，来源指针进 `tool` / `at`，不保留第二份。
 

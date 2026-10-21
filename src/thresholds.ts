@@ -317,7 +317,9 @@ export interface ThresholdEntry {
    *
    * 只用于「文档有值、代码不同」。文档没有这个键、或分叉讲的是别的事（缺 zod、实现位置或单位
    * 不同、文档未同步），仍写在 `diverges` 里。声明了就必须与 `value()` 不同 —— 相等说明分叉
-   * 已经不存在，这句话该删；这条断言由 `divergenceProblems` 检查，打印时非零退出。
+   * 已经不存在，这句话该删。条目同时有 `design` 时，`docValue` 还必须等于 `design.default`：
+   * 那是同一事实的两份记录，改一处不改另一处就是漂移。两条断言都由 `divergenceProblems` 检查，
+   * 打印时非零退出。
    */
   divergence?: { docValue: number; note: string }
   /**
@@ -332,8 +334,9 @@ export interface ThresholdEntry {
   /**
    * 打印时展示的值；值不是数字（例如 Set、复合推导值）时用它替代。
    *
-   * 写成函数时打印才求值：等式里的数字从常量插值，常量改了它跟着变。字面量里出现 `=`
-   * 会被打印脚本判红 —— 那种写法迟早与常量脱钩，而它本来就是为了让人看见「这个数是怎么算出来的」。
+   * 含数字的显示必须写成函数，数字从常量插值（单位换算走 `displayNumber`）：打印时现取，
+   * 常量改了它跟着变。写成字符串的数字迟早与常量脱钩，而这一列正是用来核对值的。
+   * 只有不含数字的纯文字说明可以保留字符串；字面量里出现 `=` 同样会被打印脚本判红。
    */
   display?: string | (() => string)
   /** 设计文档有、代码里已实现但键名不同的项：实现位置。 */
@@ -409,6 +412,15 @@ const DESIGN_DOC_T17 = '开发笔记 设计/设计报告/27.Entry三级权重与
 
 /** T18 的出度上限出自 §33 与 §40 两条，不在配置项清单里，单独指一处。 */
 const DESIGN_DOC_T18_FAIL = '开发笔记 设计/设计报告/33.失败模式与降级.md'
+
+/**
+ * 换算后的显示数字：字节→MB、毫秒→小时、比例→百分数会带二进制浮点尾巴
+ * （例如 0.04 × 100 = 4.000000000000001），显示时收掉。只收尾巴，不取整 ——
+ * 常量改了，显示仍跟着变。
+ */
+function displayNumber(value: number): string {
+  return String(Number(value.toPrecision(12)))
+}
 
 /** 全部登记项。按模块分块，与源码顺序一致，便于对照审查。 */
 export const THRESHOLDS: readonly ThresholdEntry[] = [
@@ -760,7 +772,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '95% 双侧正态分位是统计惯例，不是在本库上标定的值；它只用于把规模线换算成可复算的数，' +
         '不参与运行时判定',
     ),
-    display: '1.96（95% 双侧）',
+    display: () => `${DF_FILTER_CONFIDENCE_Z}（95% 双侧）`,
     definedBy: { file: 'src/pipeline/entries.ts', name: 'DF_FILTER_CONFIDENCE_Z' },
     affects: '推导 MIN_VOCAB_FOR_DF 时的置信水平；不参与运行时的过滤判定',
     variesWith: ['对规模线置信水平的要求'],
@@ -773,7 +785,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '对 df/N 估计精度的要求：误差超过四分之一时「大约一半」与「大约四分之一」分不开。' +
         '取值是判断而不是语料标定',
     ),
-    display: '0.25（四分之一个比例单位）',
+    display: () => `${DF_FILTER_HALF_WIDTH}（四分之一个比例单位）`,
     definedBy: { file: 'src/pipeline/entries.ts', name: 'DF_FILTER_HALF_WIDTH' },
     affects: '推导 MIN_VOCAB_FOR_DF 时的精度要求；不参与运行时的过滤判定',
     variesWith: ['对 df/N 估计精度的要求'],
@@ -1607,7 +1619,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       () => REVIEW_WRITE_BUDGET_MS,
       '产品侧时延预算，不是语料标定：一次工具调用最多花 1 秒，没有实测出处，取值是判断；只用来换算切分段数上限',
     ),
-    display: '1000 ms',
+    display: () => `${REVIEW_WRITE_BUDGET_MS} ms`,
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_WRITE_BUDGET_MS' },
     affects: '一次写入（切分 + 逐段落库）的时间预算；只用来换算切分段数上限',
     variesWith: ['宿主对一次工具调用的时延预期'],
@@ -1622,7 +1634,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       scale: '1374 条 atom 的库副本，8 次单段写入',
       at: '2026-10-18',
     }),
-    display: '125 ms（本机实测的单段写入耗时）',
+    display: () => `${REVIEW_SEGMENT_MS} ms（本机实测的单段写入耗时）`,
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SEGMENT_MS' },
     affects: '把写入预算换算成段数：1000 / 125 = 8',
     variesWith: ['编码器速度', '词表重建耗时（库规模）'],
@@ -1634,7 +1646,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       () => REVIEW_SCAN_BUDGET_MS,
       '产品侧时延预算，不是语料标定：重复检测加在每次写入上，只给它 10 ms，是判断；只用来换算一次比对多少条成员',
     ),
-    display: '10 ms',
+    display: () => `${REVIEW_SCAN_BUDGET_MS} ms`,
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_BUDGET_MS' },
     affects: '重复检测的时间预算；只用来换算一次比对多少条成员',
     variesWith: ['宿主对一次工具调用的时延预期'],
@@ -1649,7 +1661,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       scale: '基准库最大主题 37 个成员',
       at: '2026-10-18',
     }),
-    display: '0.05 ms（本机实测的单条比对耗时，向上取整）',
+    display: () => `${REVIEW_MEMBER_SCAN_MS} ms（本机实测的单条比对耗时，向上取整）`,
     definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MEMBER_SCAN_MS' },
     affects: '把扫描预算换算成条数：10 / 0.05 = 200',
     variesWith: ['成员正文长度', '向量维度'],
@@ -1664,7 +1676,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '上限本身是容量选择',
       { guardedBy: ['test/memory.test.mjs'] },
     ),
-    display: '256 MB（上限，与「内存的八分之一」取更小者）',
+    display: () =>
+      `${displayNumber(MMAP_LIMIT_BYTES / 1024 / 1024)} MB（上限，与「内存的八分之一」取更小者）`,
     definedBy: { file: 'src/util/memory.ts', name: 'MMAP_LIMIT_BYTES' },
     affects: 'mmap 窗口上限',
     variesWith: ['机器内存', '库文件大小'],
@@ -1678,7 +1691,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '库很小时也至少给这么多的下限是容量选择；与上限同处的 1.5 倍 / 八分之一 / 64 MB 三个数都没有出处',
       { guardedBy: ['test/memory.test.mjs'] },
     ),
-    display: '64 MB（下限）',
+    display: () => `${displayNumber(MMAP_FLOOR_BYTES / 1024 / 1024)} MB（下限）`,
     definedBy: { file: 'src/util/memory.ts', name: 'MMAP_FLOOR_BYTES' },
     affects: 'mmap 窗口下限（库很小时也至少给这么多）',
     variesWith: ['机器内存'],
@@ -1690,7 +1703,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       () => CACHE_RATIO,
       '页缓存占内存多少是取舍：SQLite 默认只有 2 MB，对万级 atom 偏小，也不能无上限；5% 没有实测依据',
     ),
-    display: '内存的 5%',
+    display: () => `内存的 ${displayNumber(CACHE_RATIO * 100)}%`,
     definedBy: { file: 'src/util/memory.ts', name: 'CACHE_RATIO' },
     affects: 'SQLite 页缓存目标大小（内存 × 5%）',
     variesWith: ['机器内存', '库的访问模式'],
@@ -1701,7 +1714,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     ...chosen(() => CACHE_FLOOR_BYTES, '页缓存下限是容量选择，无记录（同 CACHE_RATIO）', {
       guardedBy: ['test/memory.test.mjs'],
     }),
-    display: '16 MB',
+    display: () => `${displayNumber(CACHE_FLOOR_BYTES / 1024 / 1024)} MB`,
     definedBy: { file: 'src/util/memory.ts', name: 'CACHE_FLOOR_BYTES' },
     affects: '页缓存下限',
     variesWith: ['机器内存'],
@@ -1712,7 +1725,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     ...chosen(() => CACHE_CEIL_BYTES, '页缓存上限是容量选择，无记录（同 CACHE_RATIO）', {
       guardedBy: ['test/memory.test.mjs'],
     }),
-    display: '128 MB',
+    display: () => `${displayNumber(CACHE_CEIL_BYTES / 1024 / 1024)} MB`,
     definedBy: { file: 'src/util/memory.ts', name: 'CACHE_CEIL_BYTES' },
     affects: '页缓存上限',
     variesWith: ['机器内存'],
@@ -1726,7 +1739,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '与该值之间没有算式（乘 200 也没有出处）',
       { guardedBy: ['test/memory.test.mjs'] },
     ),
-    display: '5000 ms',
+    display: () => `${BUSY_TIMEOUT_FLOOR_MS} ms`,
     definedBy: { file: 'src/util/memory.ts', name: 'BUSY_TIMEOUT_FLOOR_MS' },
     affects: '写锁等待下限：max(5000, 单条写入耗时 × 200)',
     variesWith: ['磁盘延迟', '并发写入压力'],
@@ -1739,7 +1752,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       () => MMAP_MEMORY_DIVISOR,
       '八分之一是经验取法（mmap 是虚拟地址占用，但被访问的页会驻留物理内存）；比例取值是选择，无记录',
     ),
-    display: '8（内存的八分之一）',
+    display: () => `${MMAP_MEMORY_DIVISOR}（内存的八分之一）`,
     definedBy: { file: 'src/util/memory.ts', name: 'MMAP_MEMORY_DIVISOR' },
     affects: 'mmap 上限的第二个约束：与固定 256 MB 取更小者',
     variesWith: ['机器内存', '库的访问局部性'],
@@ -1748,7 +1761,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'MMAP_GROWTH',
     area: '资源',
     ...chosen(() => MMAP_GROWTH, '1.5 只为留一点余量让整个库文件进窗口，没有实测出处'),
-    display: '库文件的 1.5 倍',
+    display: () => `库文件的 ${MMAP_GROWTH} 倍`,
     definedBy: { file: 'src/util/memory.ts', name: 'MMAP_GROWTH' },
     affects: 'mmap 目标窗口相对库文件大小的倍数：让整个库文件能落进窗口',
     variesWith: ['库文件大小'],
@@ -1760,7 +1773,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       tool: '无脚本（本机磁盘上写一条记录并计时）',
       finding: '本机磁盘单条写入 3.5 ms，写锁等待时间以它为基数；换机器后这个数会变，届时等待时间自动跟着变',
     }),
-    display: '3.5 ms（本机实测的单条写入耗时）',
+    display: () => `${WRITE_COST_MEASURED_MS} ms（本机实测的单条写入耗时）`,
     definedBy: { file: 'src/util/memory.ts', name: 'WRITE_COST_MEASURED_MS' },
     affects: '写锁等待时间的推导基数：慢盘上按它放大，而不是拍一个更大的常数',
     variesWith: ['磁盘延迟', '机器负载'],
@@ -1769,7 +1782,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     name: 'BUSY_TIMEOUT_MULTIPLIER',
     area: '资源',
     ...chosen(() => BUSY_TIMEOUT_MULTIPLIER, '200 由「一次等待里最多排几次写入」这个取舍决定，没有实测出处'),
-    display: '200 倍',
+    display: () => `${BUSY_TIMEOUT_MULTIPLIER} 倍`,
     definedBy: { file: 'src/util/memory.ts', name: 'BUSY_TIMEOUT_MULTIPLIER' },
     affects: '等待时间 = 单条写入耗时 × 200（约能排下几百次写入）',
     variesWith: ['并发写入压力'],
@@ -2311,7 +2324,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '无测量依据，是产品口味：12 小时对应「一次写作会话」量级；没有任何测量' +
         '能回答「12 小时比 6 小时更合适」',
     ),
-    display: '12 小时',
+    display: () => `${displayNumber(RECALIBRATE_COOLDOWN_MS / 3600000)} 小时`,
     definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_COOLDOWN_MS' },
     affects: '冷却：距上次判 S 不足 12 小时就不判、也不重标（省一次伪查询抽样）',
     variesWith: ['用户的写作节奏', '库的变化速率'],
@@ -2355,7 +2368,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
         '192 维下 S 的 sd 约 0.0063，0.01 约 1.6σ —— 小于它的漂移分不清是库变了还是抽样噪声；' +
         '「1.6σ」这个系数是取舍，不是测量',
     }),
-    display: '0.01（约 1.6σ@192 维）',
+    display: () => `${RECALIBRATE_DRIFT}（约 1.6σ@192 维）`,
     definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_DRIFT' },
     affects: '闸②：S 与快照基准的差 ≤ 0.01 时不重标（噪声内不动）',
     variesWith: ['采样伪查询条数 m', '库规模'],
@@ -2492,6 +2505,10 @@ export function displayProblems(entries: readonly ThresholdEntry[] = THRESHOLDS)
  *
  * 这是唯一能把「代码改回去了、记录没跟着改」变成可见的办法。只认数值条目 —— 对象型阈值组
  * 没法用一个数表达分叉，写在它们上面会是一条永远成立的断言（等于没写），所以也报。
+ *
+ * 条目同时有 `design` 时，`docValue` 还必须等于 `design.default` —— 两者记的是同一件事实
+ * （设计文档给的默认值）。只比 `docValue` 与代码值的话，改设计记录时漏改分叉记录，门禁不会红，
+ * 表里会同时存在两个「文档默认值」。
  */
 export function divergenceProblems(entries: readonly ThresholdEntry[] = THRESHOLDS): string[] {
   const problems: string[] = []
@@ -2502,6 +2519,16 @@ export function divergenceProblems(entries: readonly ThresholdEntry[] = THRESHOL
     if (typeof v !== 'number') {
       problems.push(e.name + '：divergence 只用于数值条目，当前值不是数字')
       continue
+    }
+    if (e.design !== undefined && d.docValue !== e.design.default) {
+      problems.push(
+        e.name +
+          '：divergence.docValue（' +
+          d.docValue +
+          '）与 design.default（' +
+          e.design.default +
+          '）不同 —— 两份记录已经漂移，改一处必须改两处',
+      )
     }
     if (d.docValue === v) {
       problems.push(
