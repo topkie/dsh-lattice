@@ -50,7 +50,7 @@ describe('阈值来历：构造器的类型', () => {
 
 describe('阈值来历：三个查询', () => {
   it('needs-review 只收 recheckable、非公式、缺编码模型与语料规模的条目', () => {
-    const rows = needsReviewEntries()
+    const rows = needsReviewEntries(THRESHOLDS)
     for (const e of rows) {
       const o = e.calibration.origin
       assert.equal(o.kind, 'recheckable', e.name + ' 的来历不是 recheckable')
@@ -71,7 +71,7 @@ describe('阈值来历：三个查询', () => {
   })
 
   it('unguarded 只收有 origin、且 guardedBy 为空或没写的条目', () => {
-    const rows = unguardedEntries()
+    const rows = unguardedEntries(THRESHOLDS)
     assert.ok(rows.length > 0, '当前应至少列出一条（迁移完两个 area 后）')
     for (const e of rows) {
       assert.notEqual(e.calibration?.origin, undefined, e.name + ' 没有 origin')
@@ -81,7 +81,7 @@ describe('阈值来历：三个查询', () => {
   })
 
   it('undated 只收 recheckable、非公式、且没有记录测量时间的条目', () => {
-    const rows = undatedEntries()
+    const rows = undatedEntries(THRESHOLDS)
     assert.ok(rows.length > 0, '当前应至少列出一条（迁移完两个 area 后）')
     for (const e of rows) {
       const o = e.calibration.origin
@@ -94,7 +94,7 @@ describe('阈值来历：三个查询', () => {
     assert.ok(formulas.length > 0, '当前应有公式条目；若已全部消失，删掉这条断言')
     for (const e of formulas) {
       assert.equal(
-        undatedEntries().some((x) => x.name === e.name),
+        undatedEntries(THRESHOLDS).some((x) => x.name === e.name),
         false,
         e.name + ' 是公式条目，不该进 undated',
       )
@@ -281,7 +281,7 @@ describe('阈值来历：评审基线的四条规则', () => {
 
   it('规则 4：删掉一条当前不在结果中的基线项 → 绿（只允许变短）', () => {
     // 构造一条「已解决」项：名字是登记表里真实存在的条目，且不在当前 unguarded 结果里。
-    const current = new Set(unguardedEntries().map((e) => e.name))
+    const current = new Set(unguardedEntries(THRESHOLDS).map((e) => e.name))
     const resolved = THRESHOLDS.find((e) => e.calibration?.origin !== undefined && !current.has(e.name))
     if (resolved === undefined) return
     const withExtra = {

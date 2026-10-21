@@ -163,12 +163,8 @@ function checkReviewBaseline() {
   }
 }
 
-const QUERY_MODE = ['needs-review', 'unguarded', 'undated'].find((m) => has(m))
-if (QUERY_MODE !== undefined) {
-  renderQuery(QUERY_MODE)
-  process.exit(0)
-}
-// `--check-review` 的分派在文件末尾：它需要扫描结果（双来源），这里还没有。
+// 三个查询的分派见下方 `const ENTRIES` 之后：QUERIES 要读 ENTRIES，而它在那之后才拼出来。
+// `--check-review` 的分派在文件末尾：它需要扫描结果（双来源）。
 
 // ─────────────────────────── ① 源码扫描：AST ───────────────────────────
 
@@ -764,6 +760,15 @@ const typeEntries = decls
 /** 打印与对照的唯一入口：表里的条目 + 常量定义处的条目。 */
 const ENTRIES = [...THRESHOLDS, ...typeEntries]
 
+// 三个查询的分派放在这里，不放在文件开头：QUERIES 的实现读 ENTRIES（「表 + 定义处」两种来源），
+// 而 ENTRIES 要到上面这一行才拼出来。早于它分派就是暂时性死区 —— 0.4.0 上三条查询因此全部
+// ReferenceError，而门禁只跑 --check-review，测试只调函数，两处都看不见（0.4.1 修复）。
+const QUERY_MODE = ['needs-review', 'unguarded', 'undated'].find((m) => has(m))
+if (QUERY_MODE !== undefined) {
+  renderQuery(QUERY_MODE)
+  process.exit(0)
+}
+
 // `--doc-keys`：设计文档改了一条之后，用它找出受影响的条目（T65 阶段 4）。
 //
 // 原先设想把设计对照做成一份独立的台账文件。否定的理由是同一条判据：台账会成为仓库内的
@@ -959,9 +964,9 @@ say(
     rows.length +
     ' 行：可复算 ' +
     recheckableCount +
-    ' 行（其中公式 ' +
+    ' 行、公式 ' +
     formulaCount +
-    ' 行）、选择 ' +
+    ' 行、选择 ' +
     chosenCount +
     ' 行',
 )

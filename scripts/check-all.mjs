@@ -42,6 +42,10 @@ const STEPS = [
   // 阈值来历的评审批次（T54）：把「现在补不了」的条目记成存量清单（thresholds-review-baseline.json），
   // 只允许变短 —— 新增的待评审条目不能靠加基线消掉。与 thresholds 同类：只读源码，不需要模型与网络。
   ['thresholds-review', 'scripts/print-thresholds.mjs', ['--check-review']],
+  // 三条来历查询走一遍：它们与 --check-review 共用一个分派块，选哪条等价。
+  // **为什么必须有这一步**：--check-review 只触达查询函数，不触达命令行分派。0.4.0 上三条命令
+  // 全部 ReferenceError，而门禁 9 项全绿、452 条测试全过 —— 它们绕开了崩点，于是没人发现。
+  ['thresholds-query', 'scripts/print-thresholds.mjs', ['--undated']],
   // 文档一致性：文档里提到的「仓库内路径」与「表名」，能不能在仓库里找到。
   // **为什么要有它**：截至 2026-10-17，「指向不存在的结构」已经出现五处（一份平行的 DDL、
   // 三个不存在的模块、一个从未实现的位掩码、一条没有输入的图路、一个不存在的 config.ts）。

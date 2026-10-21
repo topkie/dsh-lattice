@@ -79,8 +79,14 @@ export type ThresholdArea =
   | '降级日志'
   | '校准样本'
 
-/** 登记项的取值：数字、字符串，或对象型阈值组的子键映射。 */
-export type ThresholdValue = number | string | Readonly<Record<string, number>>
+/**
+ * 登记项的取值：数字、字符串，或对象型阈值组的子键映射。
+ *
+ * 叫 `EntryValue` 而不是 `ThresholdValue`：后者已经是 `threshold-types.ts` 里带来历参数的
+ * 泛型（`ThresholdValue<'recheckable', {...}>`，117 处常量用它）。两个同名类型并存时，
+ * 读的人无法从名字判断手上的那个要不要带类型参数。
+ */
+export type EntryValue = number | string | Readonly<Record<string, number>>
 
 /** 一处源码引用：文件 + 符号名。行号会漂（引的那一段可能已经换成了别的函数），符号不会。 */
 export interface ThresholdRef {
@@ -177,7 +183,7 @@ export interface ThresholdEntry {
   name: string
   area: ThresholdArea
   /** 值仍在原处：打印时现取，不改行为。 */
-  value: () => ThresholdValue
+  value: () => EntryValue
   /** 定义处（文件 + 常量名）；行号由打印脚本自己定位，不手工维护。 */
   definedBy?: { file: string; name: string }
   /**
@@ -285,7 +291,7 @@ export type RecheckableMeta = Omit<Extract<Origin, { kind: 'recheckable' }>, 'ki
  * 值仍以函数给出，不复制数字 —— 模块默认值改了，登记表里的值跟着变。
  */
 export function recheckable(
-  value: () => ThresholdValue,
+  value: () => EntryValue,
   meta: RecheckableMeta,
 ): Pick<ThresholdEntry, 'value' | 'calibration'> {
   const { guardedBy, ...fields } = meta
@@ -301,7 +307,7 @@ export function recheckable(
  * 不需要额外的运行时检查 —— 「说不出为什么」不能靠随手补一个字段糊过去。
  */
 export function chosen(
-  value: () => ThresholdValue,
+  value: () => EntryValue,
   why: string,
   extra?: { guardedBy?: readonly string[] },
 ): Pick<ThresholdEntry, 'value' | 'calibration'> {
@@ -793,8 +799,14 @@ export const DESIGN_GAPS: readonly DesignGap[] = [
  * 不必去启动一个会 `process.exit` 的命令行进程。
  */
 
-/** 声明可复算、却缺编码模型或语料规模的条目。公式条目跳过：公式的条件由代码本身承担。 */
-export function needsReviewEntries(entries: readonly ThresholdEntry[] = THRESHOLDS): ThresholdEntry[] {
+/**
+ * 声明可复算、却缺编码模型或语料规模的条目。公式条目跳过：公式的条件由代码本身承担。
+ *
+ * 三个查询都不给默认值，必须显式传 `entries`：T65 之后 `THRESHOLDS` 只剩 20 条例外条目，
+ * 默认成它会让调用方静默漏掉搬到常量定义处的那 117 条。漏掉的结果是清单变短，看起来像
+ * 「缺口都补完了」—— 测试曾因此全绿，而命令行在同一份代码上三条全部报错（0.4.1 修复）。
+ */
+export function needsReviewEntries(entries: readonly ThresholdEntry[]): ThresholdEntry[] {
   return entries.filter((e) => {
     const o = e.calibration?.origin
     return (
@@ -804,7 +816,7 @@ export function needsReviewEntries(entries: readonly ThresholdEntry[] = THRESHOL
 }
 
 /** 没有测试按常量名断言默认值的条目。 */
-export function unguardedEntries(entries: readonly ThresholdEntry[] = THRESHOLDS): ThresholdEntry[] {
+export function unguardedEntries(entries: readonly ThresholdEntry[]): ThresholdEntry[] {
   return entries.filter((e) => {
     if (e.calibration?.origin === undefined) return false
     const g = e.calibration.guardedBy
@@ -818,7 +830,7 @@ export function unguardedEntries(entries: readonly ThresholdEntry[] = THRESHOLDS
  * 公式条目跳过：它们没有测量，也就没有「测量时间」可补 —— 列出来只会让清单里
  * 混进一批永远补不上的名字。
  */
-export function undatedEntries(entries: readonly ThresholdEntry[] = THRESHOLDS): ThresholdEntry[] {
+export function undatedEntries(entries: readonly ThresholdEntry[]): ThresholdEntry[] {
   return entries.filter((e) => {
     const o = e.calibration?.origin
     return o?.kind === 'recheckable' && o.formula !== true && o.at === undefined
@@ -996,7 +1008,7 @@ export function subKeys(entry: ThresholdEntry): readonly string[] {
 }
 
 /** 取当前值：值仍在原处，这里只是现取。 */
-export function currentValue(entry: ThresholdEntry): ThresholdValue {
+export function currentValue(entry: ThresholdEntry): EntryValue {
   return entry.value()
 }
 
