@@ -21,6 +21,7 @@
 // 不升 user_version（现为 4）。上限与 FIFO 淘汰见 SPLIT_CONFIRMED_MAX。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { META_SPLIT_CONFIRMED, META_SPLIT_SEGMENTS, getMeta, setMeta } from '../db/meta.js'
 import { log } from '../log/index.js'
 import { FLAG_SPLIT_PENDING } from '../db/flags.js'
@@ -32,7 +33,15 @@ import { FLAG_SPLIT_PENDING } from '../db/flags.js'
  * 二十几条锚。清单比锚段还长时，多出来的部分对任何一次召回都没有影响，却会让 meta 的
  * 值无限增长。淘汰方向选「最早确认的」：越靠近现在的决定越可能还在被处理。
  */
-export const SPLIT_CONFIRMED_MAX = 32
+export const SPLIT_CONFIRMED_MAX = 32 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定，是护栏：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长'
+    failsWhen: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度']
+    guardedBy: ['test/split-pending.test.mjs']
+    affects: '「用户已确认应拆分」清单的条数上限（meta 的 split_confirmed，FIFO 淘汰最早的一条）。满了只影响更早的确认还能不能出现在锚行提示里，不改变任何召回与写入行为'
+  }
+>
 
 /**
  * 「切分时共几段」这张表的条数上限（FIFO，与 SPLIT_CONFIRMED_MAX 同口径）。
@@ -40,7 +49,14 @@ export const SPLIT_CONFIRMED_MAX = 32
  * 一次写入最多切 REVIEW_MAX_SEGMENTS 段（8），所以这个上限容得下四次切分写入；
  * 超出的部分对任何一次召回都没有影响（一次最多展示二十几条锚），留着只让 meta 值涨。
  */
-export const SPLIT_SEGMENTS_MAX = 32
+export const SPLIT_SEGMENTS_MAX = 32 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定，是护栏：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对召回没有影响，设它是为了让 meta 的值不无限增长'
+    failsWhen: ['一次写入的切分段数上限（REVIEW_MAX_SEGMENTS）', '锚段条数（topN 与实际预算）']
+    affects: '「切分时共几段」映射的条数上限（meta 的 split_pending_segments，FIFO）。满了只影响更早的候选还能不能显示段数，段数未知时锚行退回不带段数的固定串'
+  }
+>
 
 /** 一次确认 / 忽略之后的状态。`changed=false` 表示位本来就清了（幂等，不是错误）。 */
 export interface SplitDecision {

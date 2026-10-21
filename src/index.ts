@@ -28,6 +28,7 @@
 // 与本插件的定位冲突。写入与召回都必须是显式动作。
 
 import { existsSync, readFileSync } from 'node:fs'
+import type { ThresholdValue } from './threshold-types.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -204,7 +205,15 @@ const LOG_CLEAR_ROUTE_PATH = '/api/lattice-log-clear'
  * 为什么要有：`readJson` 是**累积**式的，没有上限就意味着任何能连上回环的人都能让宿主
  * 为一个请求堆任意大的字符串。回环不是「可信」，只是「本机」（宿主对插件路由不做鉴权）。
  */
-const FORGET_BODY_MAX_BYTES = 4096
+const FORGET_BODY_MAX_BYTES = 4096 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '无记录，是资源上限：删除请求只有一个整数 id，几百字节足够；读请求体是累积式的，没有上限就等于允许任何本机进程让宿主堆任意大的字符串（回环不是「可信」，只是「本机」—— 宿主对插件路由不做鉴权）'
+    failsWhen: ['请求体里要不要带更多字段']
+    guardedBy: ['test/plugin.test.mjs']
+    affects: '删除端点（唯一的写路由）接受的请求体上限'
+  }
+>
 
 /**
  * 插件配置 schema。

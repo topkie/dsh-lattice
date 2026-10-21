@@ -22,6 +22,7 @@
 // 三个都在 src/thresholds.ts 里如实登记了它们的出处。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { MAX_ATOM_CHARS, MIN_ATOM_CHARS, splitBySentence } from '../migrate/split.js'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob } from '../util/vec.js'
@@ -47,10 +48,30 @@ import { DUP_COS, DUP_LEX } from './search.js'
  *     与 `write.ts` 标定 tauJoin 时「取底线而非中点」是同一条理由。
  *   - **不是在运行语料上标定的**：真机库样本量不足以定下界（见报告「未确定项」）。
  */
-export const REVIEW_MIN_CHARS = 12
+export const REVIEW_MIN_CHARS = 12 satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '无脚本（一次分布核对，未点名脚本路径）'
+    finding: '**不是标定值，是一次分布核对**：基准库正文字符数分布里低于 20 字的只有 2 条（0.15%），且两条都是 `---` 这种不可能被召回的空壳；第 3 短的一条（29 字）已是一句完整结论。真机库 2026-10-17 现取 14 条、最短 81 字，样本量不足以定下界。依据是「在基准库上只抓空壳」+「一句合法中文结论的下界约 15 字」，不是运行语料上的标定；刻意不复用 MIN_ATOM_CHARS(80)'
+    scale: '基准库 1374 条 atom（真机库 14 条）'
+    at: '2026-10-17'
+    failsWhen: ['「一句话讲一件事」这条写入约定的实际长度分布', '语言', '正文里是否允许单句参数']
+    guardedBy: ['test/review.test.mjs']
+    affects: '写入侧审核「自动处理·过短」：正文短于它的写入被拦下、不落库'
+    diverges: '`lattice_write` 的入参契约里也没有这条下限'
+  }
+>
 
 /** 过长线：与迁移切分共用同一个界（同一个函数切、同一组约束）。 */
-export const REVIEW_MAX_CHARS = MAX_ATOM_CHARS
+export const REVIEW_MAX_CHARS = MAX_ATOM_CHARS satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '它直接引用 migrate/split.ts 的 MAX_ATOM_CHARS，是同一个数、同一个界；该界本身无标定记录（两条路径受同一组约束：FTS 索引体积、落位会被平均掉），没有测量给出它'
+    failsWhen: ['同 MAX_ATOM_CHARS（atom 正文长度分布、FTS 索引体积、落位质量）']
+    guardedBy: ['test/migrate.test.mjs', 'test/review.test.mjs']
+    affects: '写入侧审核「自动处理·过长」：正文长于它的写入按句自动切分后分别写入'
+  }
+>
 
 /**
  * 一次写入（切分 + 逐段落库）的耗时预算，毫秒。
@@ -58,7 +79,16 @@ export const REVIEW_MAX_CHARS = MAX_ATOM_CHARS
  * 这是**产品侧的时延预算**，不是从语料标定出来的：一次工具调用最多花 1 秒。
  * 它只用来把下面两个结构性上界换算成具体条数。
  */
-export const REVIEW_WRITE_BUDGET_MS = 1000
+export const REVIEW_WRITE_BUDGET_MS = 1000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '产品侧时延预算，不是语料标定：一次工具调用最多花 1 秒，没有实测出处，取值是判断；只用来换算切分段数上限'
+    failsWhen: ['宿主对一次工具调用的时延预期']
+    affects: '一次写入（切分 + 逐段落库）的时间预算；只用来换算切分段数上限'
+    display: '{v} ms'
+    unit: 'ms'
+  }
+>
 
 /**
  * 单段写入的实测耗时，毫秒。
@@ -67,7 +97,19 @@ export const REVIEW_WRITE_BUDGET_MS = 1000
  * 与一次全量词表重建，后者约占 113 ms）。取区间中位附近的 125 ms。换机器、换库规模时
  * 这个数会变 —— 它记的是「本机一次实测」，不是常数。
  */
-export const REVIEW_SEGMENT_MS = 125
+export const REVIEW_SEGMENT_MS = 125 satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '无脚本（本机实测，未点名脚本路径）'
+    finding: '8 次单段写入耗时 111–148 ms（每段含一次编码与一次全量词表重建，后者约 113 ms），取 125 ms；换机器或库规模会变，届时上限自动跟着变'
+    scale: '1374 条 atom 的库副本，8 次单段写入'
+    at: '2026-10-18'
+    failsWhen: ['编码器速度', '词表重建耗时（库规模）']
+    affects: '把写入预算换算成段数：1000 / 125 = 8'
+    display: '{v} ms（本机实测的单段写入耗时）'
+    unit: 'ms'
+  }
+>
 
 /**
  * 一次写入最多切成多少段：**由时间预算 ÷ 单段实测耗时派生**（1000 / 125 = 8）。
@@ -79,10 +121,32 @@ export const REVIEW_SEGMENT_MS = 125
  * 为什么不是「不设上限」：每段都要过一次编码器与词表重建，段数不设上限等于让一次调用
  * 把写入路径变成秒级卡顿。
  */
-export const REVIEW_MAX_SEGMENTS = Math.floor(REVIEW_WRITE_BUDGET_MS / REVIEW_SEGMENT_MS)
+export const REVIEW_MAX_SEGMENTS = Math.floor(
+  REVIEW_WRITE_BUDGET_MS / REVIEW_SEGMENT_MS,
+) satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '源码表达式（src/pipeline/review.ts 的 `REVIEW_WRITE_BUDGET_MS / REVIEW_SEGMENT_MS`）'
+    finding: '由 REVIEW_WRITE_BUDGET_MS ÷ REVIEW_SEGMENT_MS 算出 8；改输入后重新构建，派生值跟着变。旧口径「一条记忆里不该装着 8 件以上的事」与时间预算给出同一个整数'
+    formula: true
+    failsWhen: ['单段写入耗时（编码器与词表重建）', '一次工具调用的时延预算']
+    guardedBy: ['test/review.test.mjs']
+    affects: '一次写入最多自动切成多少条；超过则整条不写入，交回调用方自己拆'
+    display: '{v}（= 写入预算 {REVIEW_WRITE_BUDGET_MS} ms ÷ 单段实测 {REVIEW_SEGMENT_MS} ms）'
+  }
+>
 
 /** 重复检测的时间预算，毫秒：每次写入都要走这一段，只给它 10 ms。 */
-export const REVIEW_SCAN_BUDGET_MS = 10
+export const REVIEW_SCAN_BUDGET_MS = 10 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '产品侧时延预算，不是语料标定：重复检测加在每次写入上，只给它 10 ms，是判断；只用来换算一次比对多少条成员'
+    failsWhen: ['宿主对一次工具调用的时延预期']
+    affects: '重复检测的时间预算；只用来换算一次比对多少条成员'
+    display: '{v} ms'
+    unit: 'ms'
+  }
+>
 
 /**
  * 单条成员比对的实测耗时，毫秒。
@@ -91,7 +155,19 @@ export const REVIEW_SCAN_BUDGET_MS = 10
  * ≈ 0.045 ms/条；纯比对循环（bigram-Jaccard + 512 维余弦）另测得 0.038 ms/条。
  * 取 0.05（向上取整）—— 宁可少扫几条，也不要让判定卡在预算边缘。
  */
-export const REVIEW_MEMBER_SCAN_MS = 0.05
+export const REVIEW_MEMBER_SCAN_MS = 0.05 satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '无脚本（本机实测，未点名脚本路径）'
+    finding: '在基准库最大主题上 findDuplicate 单次 1.663 ms、均摊 0.045 ms/条；纯比对循环（bigram-Jaccard + 512 维余弦）0.038 ms/条；取 0.05（向上取整，宁可少扫）'
+    scale: '基准库最大主题 37 个成员'
+    at: '2026-10-18'
+    failsWhen: ['成员正文长度', '向量维度']
+    affects: '把扫描预算换算成条数：10 / 0.05 = 200'
+    display: '{v} ms（本机实测的单条比对耗时，向上取整）'
+    unit: 'ms'
+  }
+>
 
 /**
  * 重复 / 高相似一次最多比多少个同主题成员：**由扫描预算 ÷ 单条实测耗时派生**
@@ -101,7 +177,19 @@ export const REVIEW_MEMBER_SCAN_MS = 0.05
  * 在今天的实测上给出同一个数。到上限时不静默 —— 结果里带 `scanned` / `truncated`，
  * 调用方能分清「比过了不重复」与「根本没比完」。
  */
-export const REVIEW_SCAN_LIMIT = Math.floor(REVIEW_SCAN_BUDGET_MS / REVIEW_MEMBER_SCAN_MS)
+export const REVIEW_SCAN_LIMIT = Math.floor(
+  REVIEW_SCAN_BUDGET_MS / REVIEW_MEMBER_SCAN_MS,
+) satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '源码表达式（src/pipeline/review.ts 的 `REVIEW_SCAN_BUDGET_MS / REVIEW_MEMBER_SCAN_MS`）'
+    finding: '由 REVIEW_SCAN_BUDGET_MS ÷ REVIEW_MEMBER_SCAN_MS 算出 200；改输入后重新构建，派生值跟着变。旧口径「200 条足以覆盖同一主题下的近期成员」与时间预算给出同一个整数'
+    formula: true
+    failsWhen: ['单个主题的成员数分布', 'atom 正文的平均长度']
+    affects: '重复 / 高相似检测一次最多比多少个同主题成员（**只读，不写库**）'
+    display: '{v}（= 扫描预算 {REVIEW_SCAN_BUDGET_MS} ms ÷ 单条实测 {REVIEW_MEMBER_SCAN_MS} ms）'
+  }
+>
 
 export interface ReviewThresholds {
   minChars: number

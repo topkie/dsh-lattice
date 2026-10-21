@@ -69,14 +69,10 @@ import {
   LEARNED_PROMOTE_RECENT_DAYS,
   LEARNED_PROMOTE_MAX_WEIGHT,
 } from './pipeline/entries.js'
-import { LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT } from './pipeline/list.js'
-import { FORGOTTEN_MIN_BIGRAMS, FORGOTTEN_SCAN_LIMIT } from './pipeline/forget.js'
 import {
   AFFILIATION,
   CHANNEL_WEIGHT,
   DEFAULT_SEED_COUNT,
-  DUP_COS,
-  DUP_LEX,
   K_GRAPH,
   K_LEX,
   K_VEC,
@@ -95,24 +91,13 @@ import {
   MIN_ANCHORS,
   PATH_SUMMARY_CHARS,
   SEGMENT_RATIO,
-  SPLIT_SCENE_CHARS,
   TIER_BRIEF_MIN,
   TIER_FULL_MIN,
   TRIM_ORDER,
   TRIM_PATHS_LIMIT,
 } from './pipeline/view.js'
 import { TIER_SCALE_ANCHORS, TIER_SCALE_MIN_ATOMS, TIER_SCALE_STABLE_ATOMS } from './pipeline/calibrate.js'
-import { FLAG_AMBIGUOUS, FLAG_ARCHIVED, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from './db/flags.js'
-import { SPLIT_CONFIRMED_MAX, SPLIT_SEGMENTS_MAX } from './pipeline/split.js'
-import { RECLUSTER_PLAN_DELAY_MS } from './cluster/executor.js'
-import {
-  RECALIBRATE_COOLDOWN_MS,
-  RECALIBRATE_DRIFT,
-  RECALIBRATE_MIN_ATOMS,
-  RECALIBRATE_MIN_POSITIVE,
-  RECALIBRATE_OBVIOUS_LIMIT,
-  RECALIBRATE_SAMPLE_LIMIT,
-} from './calibration/trigger.js'
+import { RECALIBRATE_MIN_ATOMS } from './calibration/trigger.js'
 import {
   DECLARED_EDGE_CONFIDENCE,
   DECLARED_EDGE_TYPE_MAX,
@@ -122,40 +107,11 @@ import {
   FINGERPRINT_CHARS,
   FINGERPRINT_MEMBERS,
   NEAR_EDGE_CONFIDENCE,
-  SEARCH_BODY_MAX_CHARS,
   TERM_CHARS,
   TOPIC_LABEL_CHARS,
   WORD_ONLY_TOP_N_FACTOR,
 } from './pipeline/write.js'
-import { MAX_ATOM_CHARS, MIN_ATOM_CHARS } from './migrate/split.js'
-import { SUMMARY_CHARS } from './util/text.js'
-import {
-  REVIEW_MAX_CHARS,
-  REVIEW_MAX_SEGMENTS,
-  REVIEW_MEMBER_SCAN_MS,
-  REVIEW_MIN_CHARS,
-  REVIEW_SCAN_BUDGET_MS,
-  REVIEW_SCAN_LIMIT,
-  REVIEW_SEGMENT_MS,
-  REVIEW_WRITE_BUDGET_MS,
-} from './pipeline/review.js'
-import { DEFAULT_ALIGN_COS } from './cluster/align.js'
-import { DEFAULT_KNN_K } from './cluster/graph.js'
-import { DEFAULT_MIN_CLUSTER_SIZE } from './cluster/hierarchy.js'
-import { MST_BRIDGE_FACTOR } from './cluster/mst.js'
-import { RECLUSTER_BATCH_ATOMS } from './cluster/rebuild.js'
 import { GRAPH_INFER_MAX_ATOMS, NEAR_COS_MIN, NEAR_K, OUT_DEGREE_CAP } from './graph/infer.js'
-import { LOG_FLUSH_WINDOW_MS, LOG_QUEUE_MAX, LOG_WRITE_FAILED_MIN_INTERVAL_MS } from './log/index.js'
-import { LOG_EXPORT_MAX_BYTES, LOG_EXPORT_MAX_ROWS } from './log/export.js'
-import { LOG_FILE_MAX_BYTES, LOG_KEEP_FILES, LOG_TOTAL_MAX_BYTES } from './log/store.js'
-import { SAMPLE_QUEUE_MAX } from './samples/index.js'
-import {
-  SAMPLE_MAX_ROWS,
-  SAMPLE_NEG_OBVIOUS_MAX,
-  SAMPLE_OBVIOUS_MAX_TOP1,
-  SAMPLE_RETAIN_DAYS,
-  SAMPLE_UNCERTAIN_MAX_TOP1,
-} from './samples/store.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
 export type ThresholdArea =
@@ -402,15 +358,6 @@ const DESIGN_DOC_T17 = '开发笔记 设计/设计报告/27.Entry三级权重与
 /** T18 的出度上限出自 §33 与 §40 两条，不在配置项清单里，单独指一处。 */
 const DESIGN_DOC_T18_FAIL = '开发笔记 设计/设计报告/33.失败模式与降级.md'
 
-/**
- * 换算后的显示数字：字节→MB、毫秒→小时、比例→百分数会带二进制浮点尾巴
- * （例如 0.04 × 100 = 4.000000000000001），显示时收掉。只收尾巴，不取整 ——
- * 常量改了，显示仍跟着变。
- */
-function displayNumber(value: number): string {
-  return String(Number(value.toPrecision(12)))
-}
-
 /** 全部登记项。按模块分块，与源码顺序一致，便于对照审查。 */
 export const THRESHOLDS: readonly ThresholdEntry[] = [
   // ────────────────────────────── 落位（write.ts）──────────────────────────────
@@ -622,35 +569,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     definedBy: { file: 'src/pipeline/write.ts', name: 'NEAR_EDGE_CONFIDENCE' },
     affects: '写 near 边时的默认 confidence（有真实 sim 时用 sim 顶替）',
     variesWith: ['图路排序对 confidence 的依赖方式'],
-  },
-  {
-    name: 'SUMMARY_CHARS',
-    area: '写入',
-    ...chosen(
-      () => SUMMARY_CHARS,
-      '摘要按字符截断的上限由「一句话讲一件事」这条写入约定的实际长度决定，无实测标定记录；' +
-        '此前函数签名默认值与两个调用点各写一遍，T45 批一合并成一个常量',
-      { guardedBy: ['test/util.test.mjs', 'test/write.test.mjs'] },
-    ),
-    definedBy: { file: 'src/util/text.ts', name: 'SUMMARY_CHARS' },
-    affects: '写入时抽取摘要的字符上限（摘要进 atom.summary，参与注入与去重）',
-    variesWith: ['一句话讲一件事这条写入约定的实际长度分布', '语言'],
-    otherSites: [
-      'src/pipeline/write.ts `extractSummary(text, SUMMARY_CHARS)`（同源）',
-      'src/pipeline/forget.ts 墓碑摘要 `extractSummary(..., SUMMARY_CHARS)`（同源）',
-    ],
-  },
-  {
-    name: 'SEARCH_BODY_MAX_CHARS',
-    area: '写入',
-    ...chosen(
-      () => SEARCH_BODY_MAX_CHARS,
-      '进 trigram 索引的正文字符上限是索引代价与长正文细节召回之间的取舍：注释只说明「摘要重复一次」的理由，无实测标定记录；' +
-        '同一函数内此前写了两遍（判断与切片），T45 批一合并为一个常量',
-    ),
-    definedBy: { file: 'src/pipeline/write.ts', name: 'SEARCH_BODY_MAX_CHARS' },
-    affects: 'buildSearchBody 里进 trigram 索引的正文字符上限（超出即截断）',
-    variesWith: ['atom 正文长度分布', '长正文的细节召回是否重要'],
   },
   // ────────────────────────────── 入口（entries.ts）──────────────────────────────
   {
@@ -1152,33 +1070,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['库规模', '查询长度分布', '中文 bigram 的候选密度'],
     diverges: 'M1 已把它列为「按实际候选数取、用 FTS5 查询复杂度上限兜底」的待办项，未做',
   },
-  {
-    name: 'DUP_COS',
-    area: '重排去重',
-    ...chosen(
-      () => DUP_COS,
-      '0.92 沿用原设计 atom_pair 表的既有取值，改成词面判定后没有重测；' +
-        '没有一次「不同说法的同一件事」实测（DUP_LEX 才有）。几何票的门槛是旧接口留下的数',
-      { guardedBy: ['test/archive.test.mjs'] },
-    ),
-    definedBy: { file: 'src/pipeline/search.ts', name: 'DUP_COS' },
-    affects: '重复压制：余弦低于此值即不判重复（两票中的几何票）；仅在同主属 topic 桶内两两比较',
-    variesWith: ['换编码模型（余弦尺度会变）', '同义改写的相似度分布'],
-  },
-  {
-    name: 'DUP_LEX',
-    area: '重排去重',
-    ...recheckable(() => DUP_LEX, {
-      tool: '无脚本（构造的对照句对，直接算 bigram-Jaccard）',
-      finding:
-        '0.5 时「系统代理必须走本地端口……」与「系统代理配置本地端口……」的 bigram-Jaccard 为 0.64，' +
-        '两者讲同一件事但各有信息、不该折叠；取 0.72 后只有几乎逐字重复才被压制（同一段文本 Jaccard 为 1.0）',
-      guardedBy: ['test/archive.test.mjs'],
-    }),
-    definedBy: { file: 'src/pipeline/search.ts', name: 'DUP_LEX' },
-    affects: '重复压制：词面重叠低于此值即不判重复（两票中的词面票）',
-    variesWith: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）'],
-  },
   // ────────────────────────────── 注入（view.ts）───────────────────────────────
   {
     name: 'SEGMENT_RATIO',
@@ -1482,312 +1373,11 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     variesWith: ['TRIM_ORDER 改动时（名字与值必须同步）'],
   },
   // ────────────────────────────── 目录（list.ts）───────────────────────────────
-  {
-    name: 'LIST_MAX_LIMIT',
-    area: '目录',
-    ...chosen(
-      () => LIST_MAX_LIMIT,
-      '上限是硬边界、防止调用方一次拉空整个库（D13-1）：50 本身无实测记录，' +
-        '它约束的是注意力稀释，不是某个分布',
-      { guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs'] },
-    ),
-    definedBy: { file: 'src/pipeline/list.ts', name: 'LIST_MAX_LIMIT' },
-    affects: '一页最多给多少条；请求值被强制钳制到 [1, 50]',
-    variesWith: ['一次注入能容纳的摘要条数', '库规模'],
-    diverges: '**zod schema 里也没有**（工具侧有测试守着钳制行为）',
-  },
-  {
-    name: 'LIST_DEFAULT_LIMIT',
-    area: '目录',
-    ...chosen(
-      () => LIST_DEFAULT_LIMIT,
-      '`src/pipeline/list.ts` 的 `LIST_DEFAULT_LIMIT` 注释「取值偏小：列目录是为了定位，不是为了读完」：默认页大小是使用偏好选择，' +
-        '不是标定结果',
-      { guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs'] },
-    ),
-    definedBy: { file: 'src/pipeline/list.ts', name: 'LIST_DEFAULT_LIMIT' },
-    refs: [{ file: 'src/pipeline/list.ts', symbol: 'LIST_DEFAULT_LIMIT' }],
-    affects: '默认页大小',
-    variesWith: ['同上'],
-  },
   // ────────────────────── 迁移切分（migrate/split.ts）─────────────────────────
-  {
-    name: 'MIN_ATOM_CHARS',
-    area: '迁移切分',
-    ...chosen(
-      () => MIN_ATOM_CHARS,
-      '无记录，源码也无注释：切分时一条 atom 的最小字符数是脚本取舍；它只影响一次性迁移脚本' +
-        '（本机卡片导入），不参与运行时管线',
-      { guardedBy: ['test/migrate.test.mjs'] },
-    ),
-    definedBy: { file: 'src/migrate/split.ts', name: 'MIN_ATOM_CHARS' },
-    affects: '切分时一条 atom 的最小字符数（低于它不再切）',
-    variesWith: ['「一句话讲一件事」这条写入约定的实际长度'],
-    diverges: '文档的 autoSplit 是一期关闭的配置项',
-  },
-  {
-    name: 'MAX_ATOM_CHARS',
-    area: '迁移切分',
-    ...chosen(
-      () => MAX_ATOM_CHARS,
-      '无记录（同 MIN_ATOM_CHARS）：切分时一条 atom 的最大字符数是 FTS 索引体积与落位质量' +
-        '之间的取舍，没有测量给出它',
-      { guardedBy: ['test/migrate.test.mjs'] },
-    ),
-    definedBy: { file: 'src/migrate/split.ts', name: 'MAX_ATOM_CHARS' },
-    affects: '切分时一条 atom 的最大字符数（超过即按句子再切）',
-    variesWith: ['同上'],
-  },
   // ───────────────── 写入侧审核（pipeline/review.ts，M3-T22）─────────────────
-  {
-    name: 'REVIEW_MIN_CHARS',
-    area: '写入',
-    ...recheckable(() => REVIEW_MIN_CHARS, {
-      tool: '无脚本（一次分布核对，未点名脚本路径）',
-      finding:
-        '**不是标定值，是一次分布核对**：基准库正文字符数分布里低于 20 字的只有 2 条（0.15%），且两条都是 `---` 这种不可能被召回的空壳；第 3 短的一条（29 字）已是一句完整结论。' +
-        '真机库 2026-10-17 现取 14 条、最短 81 字，样本量不足以定下界。依据是「在基准库上只抓空壳」+「一句合法中文结论的下界约 15 字」，不是运行语料上的标定；刻意不复用 MIN_ATOM_CHARS(80)',
-      scale: '基准库 1374 条 atom（真机库 14 条）',
-      at: '2026-10-17',
-      guardedBy: ['test/review.test.mjs'],
-    }),
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MIN_CHARS' },
-    affects: '写入侧审核「自动处理·过短」：正文短于它的写入被拦下、不落库',
-    variesWith: ['「一句话讲一件事」这条写入约定的实际长度分布', '语言', '正文里是否允许单句参数'],
-    diverges: '`lattice_write` 的入参契约里也没有这条下限',
-  },
-  {
-    name: 'REVIEW_MAX_CHARS',
-    area: '写入',
-    ...chosen(
-      () => REVIEW_MAX_CHARS,
-      '它直接引用 migrate/split.ts 的 MAX_ATOM_CHARS，是同一个数、同一个界；该界本身无标定记录（两条路径受同一组约束：FTS 索引体积、落位会被平均掉），没有测量给出它',
-      { guardedBy: ['test/migrate.test.mjs', 'test/review.test.mjs'] },
-    ),
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MAX_CHARS' },
-    affects: '写入侧审核「自动处理·过长」：正文长于它的写入按句自动切分后分别写入',
-    variesWith: ['同 MAX_ATOM_CHARS（atom 正文长度分布、FTS 索引体积、落位质量）'],
-    constName: null,
-    otherSites: ['src/migrate/split.ts 的 MAX_ATOM_CHARS 是它的真相源'],
-  },
-  {
-    name: 'REVIEW_MAX_SEGMENTS',
-    area: '写入',
-    ...recheckable(() => REVIEW_MAX_SEGMENTS, {
-      tool: '源码表达式（src/pipeline/review.ts 的 `REVIEW_WRITE_BUDGET_MS / REVIEW_SEGMENT_MS`）',
-      finding:
-        '由 REVIEW_WRITE_BUDGET_MS ÷ REVIEW_SEGMENT_MS 算出 8；改输入后重新构建，派生值跟着变。旧口径「一条记忆里不该装着 8 件以上的事」与时间预算给出同一个整数',
-      formula: true,
-      guardedBy: ['test/review.test.mjs'],
-    }),
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MAX_SEGMENTS' },
-    affects: '一次写入最多自动切成多少条；超过则整条不写入，交回调用方自己拆',
-    display: () =>
-      `${REVIEW_MAX_SEGMENTS}（= 写入预算 ${REVIEW_WRITE_BUDGET_MS} ms ÷ 单段实测 ${REVIEW_SEGMENT_MS} ms）`,
-    variesWith: ['单段写入耗时（编码器与词表重建）', '一次工具调用的时延预算'],
-  },
-  {
-    name: 'REVIEW_SCAN_LIMIT',
-    area: '写入',
-    ...recheckable(() => REVIEW_SCAN_LIMIT, {
-      tool: '源码表达式（src/pipeline/review.ts 的 `REVIEW_SCAN_BUDGET_MS / REVIEW_MEMBER_SCAN_MS`）',
-      finding:
-        '由 REVIEW_SCAN_BUDGET_MS ÷ REVIEW_MEMBER_SCAN_MS 算出 200；改输入后重新构建，派生值跟着变。旧口径「200 条足以覆盖同一主题下的近期成员」与时间预算给出同一个整数',
-      formula: true,
-    }),
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_LIMIT' },
-    affects: '重复 / 高相似检测一次最多比多少个同主题成员（**只读，不写库**）',
-    display: () =>
-      `${REVIEW_SCAN_LIMIT}（= 扫描预算 ${REVIEW_SCAN_BUDGET_MS} ms ÷ 单条实测 ${REVIEW_MEMBER_SCAN_MS} ms）`,
-    variesWith: ['单个主题的成员数分布', 'atom 正文的平均长度'],
-  },
-  {
-    name: 'REVIEW_WRITE_BUDGET_MS',
-    area: '写入',
-    ...chosen(
-      () => REVIEW_WRITE_BUDGET_MS,
-      '产品侧时延预算，不是语料标定：一次工具调用最多花 1 秒，没有实测出处，取值是判断；只用来换算切分段数上限',
-    ),
-    display: () => `${REVIEW_WRITE_BUDGET_MS} ms`,
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_WRITE_BUDGET_MS' },
-    affects: '一次写入（切分 + 逐段落库）的时间预算；只用来换算切分段数上限',
-    variesWith: ['宿主对一次工具调用的时延预期'],
-  },
-  {
-    name: 'REVIEW_SEGMENT_MS',
-    area: '写入',
-    ...recheckable(() => REVIEW_SEGMENT_MS, {
-      tool: '无脚本（本机实测，未点名脚本路径）',
-      finding:
-        '8 次单段写入耗时 111–148 ms（每段含一次编码与一次全量词表重建，后者约 113 ms），取 125 ms；换机器或库规模会变，届时上限自动跟着变',
-      scale: '1374 条 atom 的库副本，8 次单段写入',
-      at: '2026-10-18',
-    }),
-    display: () => `${REVIEW_SEGMENT_MS} ms（本机实测的单段写入耗时）`,
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SEGMENT_MS' },
-    affects: '把写入预算换算成段数：1000 / 125 = 8',
-    variesWith: ['编码器速度', '词表重建耗时（库规模）'],
-  },
-  {
-    name: 'REVIEW_SCAN_BUDGET_MS',
-    area: '写入',
-    ...chosen(
-      () => REVIEW_SCAN_BUDGET_MS,
-      '产品侧时延预算，不是语料标定：重复检测加在每次写入上，只给它 10 ms，是判断；只用来换算一次比对多少条成员',
-    ),
-    display: () => `${REVIEW_SCAN_BUDGET_MS} ms`,
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_SCAN_BUDGET_MS' },
-    affects: '重复检测的时间预算；只用来换算一次比对多少条成员',
-    variesWith: ['宿主对一次工具调用的时延预期'],
-  },
-  {
-    name: 'REVIEW_MEMBER_SCAN_MS',
-    area: '写入',
-    ...recheckable(() => REVIEW_MEMBER_SCAN_MS, {
-      tool: '无脚本（本机实测，未点名脚本路径）',
-      finding:
-        '在基准库最大主题上 findDuplicate 单次 1.663 ms、均摊 0.045 ms/条；纯比对循环（bigram-Jaccard + 512 维余弦）0.038 ms/条；取 0.05（向上取整，宁可少扫）',
-      scale: '基准库最大主题 37 个成员',
-      at: '2026-10-18',
-    }),
-    display: () => `${REVIEW_MEMBER_SCAN_MS} ms（本机实测的单条比对耗时，向上取整）`,
-    definedBy: { file: 'src/pipeline/review.ts', name: 'REVIEW_MEMBER_SCAN_MS' },
-    affects: '把扫描预算换算成条数：10 / 0.05 = 200',
-    variesWith: ['成员正文长度', '向量维度'],
-  },
   // ──────────────────────── 资源参数（util/memory.ts）─────────────────────────
   // ─────────────────── 显式删除（forget.ts，T20 / §44）───────────────────────
-  {
-    name: 'FORGOTTEN_MIN_BIGRAMS',
-    area: '显式删除',
-    ...chosen(
-      () => FORGOTTEN_MIN_BIGRAMS,
-      '不是标定值，是一条有意义性下限：Jaccard 是两边一比算出来的，2 个 bigram 对 20 个也能得 0.09。' +
-        '取 2 是复用 entries.ts 的 MIN_TERM = 2（bigram 的最小语义单位就是 2 个字符），不是另立一个数。' +
-        '真正需要标定的是「多短算太短」，那要拿真实短记忆的分布来定，本轮没有这份分布',
-      { guardedBy: ['test/forget.test.mjs'] },
-    ),
-    definedBy: { file: 'src/pipeline/forget.ts', name: 'FORGOTTEN_MIN_BIGRAMS' },
-    affects: '防写回判据的**可判下限**：两侧任一不足这么多 bigram 就不做判断（放行）',
-    variesWith: ['写入约定里一条记忆的最短长度'],
-    diverges: '**不是阈值而是下限**，登记它是为了让「防写回在多短的文本上不生效」可被一条命令查出来',
-  },
-  {
-    name: 'FORGOTTEN_SCAN_LIMIT',
-    area: '显式删除',
-    ...chosen(
-      () => FORGOTTEN_SCAN_LIMIT,
-      '无记录，是资源上限而非质量阈值：墓碑数与用户删除过的条数同阶，正常到不了；' +
-        '取 2000 是为了让写入有界 —— 无上限的全表读会让写入随删除次数悄悄变慢',
-    ),
-    definedBy: { file: 'src/pipeline/forget.ts', name: 'FORGOTTEN_SCAN_LIMIT' },
-    affects: '写入时最多比对多少条墓碑；超过时结果带 truncated，写入结果上会标出来',
-    variesWith: ['用户删除的累计条数', '写入路径的延迟预算'],
-  },
-  {
-    name: 'FORGET_BODY_MAX_BYTES',
-    area: '显式删除',
-    ...chosen(
-      () => 4096,
-      '无记录，是资源上限：删除请求只有一个整数 id，几百字节足够；读请求体是累积式的，' +
-        '没有上限就等于允许任何本机进程让宿主堆任意大的字符串（回环不是「可信」，只是「本机」—— ' +
-        '宿主对插件路由不做鉴权）',
-      { guardedBy: ['test/plugin.test.mjs'] },
-    ),
-    definedBy: { file: 'src/index.ts', name: 'FORGET_BODY_MAX_BYTES' },
-    affects: '删除端点（唯一的写路由）接受的请求体上限',
-    variesWith: ['请求体里要不要带更多字段'],
-  },
   // ────────────────────────────── 重聚类（T16）──────────────────────────────
-  {
-    name: 'RECLUSTER_PLAN_DELAY_MS',
-    area: '重聚类',
-    ...chosen(
-      () => RECLUSTER_PLAN_DELAY_MS,
-      '未标定，是产品口味：3 秒是「点错了还能撤」与「点了要立刻有反应」之间的取值；' +
-        '没有测量能回答 3 秒比 1 秒或 5 秒更合适 —— 它取决于人点下去之后多久会意识到自己点错了',
-    ),
-    definedBy: { file: 'src/cluster/executor.ts', name: 'RECLUSTER_PLAN_DELAY_MS' },
-    affects:
-      '点「开始整理」之后等多久才真的开跑。这段时间里「取消」有效，之后只能等它跑完 —— ' +
-      '它决定了误点之后还有多长的反悔窗口',
-    variesWith: ['用户对整理耗时的容忍度', '库规模（跑得越久，越需要更长的反悔窗口）'],
-  },
-  {
-    name: 'DEFAULT_KNN_K',
-    area: '重聚类',
-    ...recheckable(() => DEFAULT_KNN_K, {
-      tool: 'T16 探针（无脚本）',
-      finding:
-        '基准库上与参照实现（clusternova，mpts=2）对照：k=2 得 82 簇 / 噪声占 68.9%，参照 75 簇 / 73.4%，' +
-        '双向成员重合度 0.77 / 0.85；k≥6 时本实现塌缩到个位数簇。设计报告 §21 给 min_samples = 2，' +
-        '而 min_samples 与 k 在本实现里是同一个参数',
-      scale: '基准库 1374 条真实向量、512 维（只有一个规模档）',
-    }),
-    definedBy: { file: 'src/cluster/graph.ts', name: 'DEFAULT_KNN_K' },
-    affects:
-      'k 近邻图每点保留的邻居数，同时也是 min_samples（核心距离取第几近邻）—— ' +
-      '它决定互可达距离里「核心距离」那一项有多大，也就决定了小簇会被抹平到什么程度',
-    variesWith: ['库规模（k 越大越小簇越易被抹平）', '语料密度分布', '换编码模型（余弦尺度会变）'],
-  },
-  {
-    name: 'DEFAULT_MIN_CLUSTER_SIZE',
-    area: '重聚类',
-    ...chosen(
-      () => DEFAULT_MIN_CLUSTER_SIZE,
-      '设计报告 §21 写死 min_cluster_size = 3，没有给标定实验；「3 是不是对的」本轮没有测 —— ' +
-        '没有拿「人工判定哪些记忆属于同一主题」做对照，所以 3 的来历是设计报告',
-    ),
-    definedBy: { file: 'src/cluster/hierarchy.ts', name: 'DEFAULT_MIN_CLUSTER_SIZE' },
-    affects:
-      '簇的规模门槛：小于此值的碎片在压缩阶段并入父簇，而不是各自成为一个主题。' +
-      '它是唯一带语义的聚类参数 —— 直接表达「多小算一个独立主题」',
-    variesWith: ['库规模', '一条记忆的平均信息量', '「一个主题至少几条记忆才有用」这个产品判断'],
-  },
-  {
-    name: 'DEFAULT_ALIGN_COS',
-    area: '重聚类',
-    ...chosen(
-      () => DEFAULT_ALIGN_COS,
-      '时序文档 4.3 给的 0.80，该文档没有给标定实验；探针实测了这条线的效果（配对成功率与' +
-        '配对余弦的分位），但没有反向标定「0.80 之下哪些其实同属一个主题」—— 那需要人工对照，' +
-        '本轮没做。数值上与落位的 tauJoin = 0.78 接近，但两者问的是不同的问题，不要合并',
-    ),
-    definedBy: { file: 'src/cluster/align.ts', name: 'DEFAULT_ALIGN_COS' },
-    affects:
-      '身份对齐：新簇质心与旧 topic 质心的余弦达到此值才允许配对，配对成功的旧 topic id ' +
-      '被继承（挂在其上的主属引用、次属引用与 near 边因此不失效）',
-    variesWith: ['换编码模型（余弦尺度会变）', '重聚类的频率（间隔越久，旧质心越不代表现状）'],
-  },
-  {
-    name: 'MST_BRIDGE_FACTOR',
-    area: '重聚类',
-    ...chosen(
-      () => MST_BRIDGE_FACTOR,
-      '无标定实验。取 2（即桥边比任何真实边都贵）是一个语义选择而不是拟合：分量之间一条边' +
-        '都没有（不是「边太贵」，是真的没有），任何取法都造不出真实的连接，只能保证桥边排在 ' +
-        'Kruskal 顺序的最后',
-    ),
-    definedBy: { file: 'src/cluster/mst.ts', name: 'MST_BRIDGE_FACTOR' },
-    affects:
-      'k 近邻图不连通时，缝合分量所用的桥边权重 = 全图最大权重 × 本值。' +
-      '它决定那些孤立分量在层次树上「多晚」才被并进全局根',
-    variesWith: ['k（k 越大分量越少，需要桥边的场合越少）', '语料的密度分布'],
-  },
-  {
-    name: 'RECLUSTER_BATCH_ATOMS',
-    area: '重聚类',
-    ...chosen(
-      () => RECLUSTER_BATCH_ATOMS,
-      '没有标定：1000 取自「一批在本机约几十毫秒、不至于让事务次数爆炸」的粗估；' +
-        '没有测过宿主在何种批大小下开始出现可感知卡顿 —— 那需要端到端观测宿主的响应延迟，本轮没做',
-    ),
-    definedBy: { file: 'src/cluster/rebuild.ts', name: 'RECLUSTER_BATCH_ATOMS' },
-    affects:
-      '落库阶段每个事务处理的条数：一批 = 一次事务 = 一次事件循环占用。' +
-      '它约束的是「重聚类会不会把宿主卡住」（B2 瓶颈：DatabaseSync 是同步的）',
-    variesWith: ['机器磁盘与 WAL 配置', '宿主对单次同步阻塞的容忍度', '库规模（批数随 atom 数增长）'],
-  },
   // ────────────────────────────── 图扩展（graph/infer.ts）──────────────────────────────
   {
     name: 'NEAR_K',
@@ -1892,282 +1482,12 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
   // 这一组的取值由用户决定，不是语料标定：日志的容量参数
   // 取决于「降级事件多久发生一次、一条多长」，而本仓库还没有这份实测。
   // 按本表纪律，这里如实写「未标定」，而不是编一个看起来有依据的场景。
-  {
-    name: 'LOG_FILE_MAX_BYTES',
-    area: '降级日志',
-    ...chosen(
-      () => LOG_FILE_MAX_BYTES,
-      '没有日志事件速率的实测：4 MB 是产品决定的值，「降级事件稀疏、约能放数万条」是判断；' +
-        '本仓库没有事件速率与单条 detail 长度的实测',
-    ),
-    definedBy: { file: 'src/log/store.ts', name: 'LOG_FILE_MAX_BYTES' },
-    affects: '写前与启动时检查：当前日志库达到此大小就改名为历史文件并新建（4 MB）',
-    variesWith: ['降级事件产生速率', '单条 detail 的长度', '愿意给日志的磁盘空间'],
-  },
-  {
-    name: 'LOG_KEEP_FILES',
-    area: '降级日志',
-    ...chosen(
-      () => LOG_KEEP_FILES,
-      '取 5 个；5 个 × 4 MB 与总量 20 MB 相等，是产品决定的磁盘空间预算，没有测量出处',
-    ),
-    definedBy: { file: 'src/log/store.ts', name: 'LOG_KEEP_FILES' },
-    affects: '清理：历史文件数 + 当前库不超过这个数，超出删最旧的（5 个，含当前库）',
-    variesWith: ['单文件阈值', '总量上限', '需要回溯多久的降级历史'],
-  },
-  {
-    name: 'LOG_TOTAL_MAX_BYTES',
-    area: '降级日志',
-    ...recheckable(() => LOG_TOTAL_MAX_BYTES, {
-      tool: '源码表达式（src/log/store.ts 的 `LOG_KEEP_FILES * LOG_FILE_MAX_BYTES`）',
-      finding:
-        '由 LOG_KEEP_FILES × LOG_FILE_MAX_BYTES 算出 20 MB；改两个因子后重新构建，派生值跟着变，不需要测量',
-      formula: true,
-    }),
-    definedBy: { file: 'src/log/store.ts', name: 'LOG_TOTAL_MAX_BYTES' },
-    affects: '清理：全部日志文件（含当前库）总大小超过此值就删最旧的历史文件（20 MB）',
-    variesWith: ['单文件阈值', '保留文件数', '磁盘配额'],
-  },
-  {
-    name: 'LOG_QUEUE_MAX',
-    area: '降级日志',
-    ...chosen(
-      () => LOG_QUEUE_MAX,
-      '200 条在 50 ms 窗口下的吸收能力是按速率推算，本仓库没有降级事件速率的实测；取 200 条',
-    ),
-    definedBy: { file: 'src/log/index.ts', name: 'LOG_QUEUE_MAX' },
-    affects: '缓冲：内存队列上限 200 条；满了丢最旧并计数，不阻塞、不抛错',
-    variesWith: ['降级事件爆发速率', '批量窗口', '单条日志的内存占用'],
-  },
-  {
-    name: 'LOG_FLUSH_WINDOW_MS',
-    area: '降级日志',
-    ...chosen(
-      () => LOG_FLUSH_WINDOW_MS,
-      '取值「setImmediate 或 50 ms」，实现取两者中更保守的上界；50 ms 是产品决定的窗口，没有测量出处',
-    ),
-    definedBy: { file: 'src/log/index.ts', name: 'LOG_FLUSH_WINDOW_MS' },
-    affects:
-      '缓冲：批量窗口的**上界**。正常路径由 setImmediate 在下一轮事件循环 flush；' +
-      '只有事件循环被占住、队首已等满 50ms 时才当场 flush（不新增定时器）',
-    variesWith: ['事件产生速率', '崩溃时允许丢失的时间窗', '宿主的事件循环忙碌程度'],
-  },
-  {
-    name: 'LOG_WRITE_FAILED_MIN_INTERVAL_MS',
-    area: '降级日志',
-    ...chosen(
-      () => LOG_WRITE_FAILED_MIN_INTERVAL_MS,
-      '限频间隔来自设计草案第三节的规定（1 次/分钟），没有测量出处',
-    ),
-    definedBy: { file: 'src/log/index.ts', name: 'LOG_WRITE_FAILED_MIN_INTERVAL_MS' },
-    affects: '写失败降级：log.write_failed 的限频间隔（1 次/分钟）',
-    variesWith: ['故障持续时间', '日志库的可用性', '用户对日志噪声的容忍度'],
-  },
-  {
-    name: 'LOG_EXPORT_MAX_ROWS',
-    area: '降级日志',
-    ...chosen(
-      () => LOG_EXPORT_MAX_ROWS,
-      '取 10 万行；按单行约 60~120 字节估算 10 万行约 6~12 MB，与 10 MB 字节上限互为上界，' +
-        '没有导出规模的实测',
-    ),
-    definedBy: { file: 'src/log/export.ts', name: 'LOG_EXPORT_MAX_ROWS' },
-    affects: '导出：CSV 最多 10 万行数据，超过截断并在文件尾加 # truncated',
-    variesWith: ['单行 detail 的长度', '导出可接受的内存与等待时间'],
-  },
-  {
-    name: 'LOG_EXPORT_MAX_BYTES',
-    area: '降级日志',
-    ...chosen(() => LOG_EXPORT_MAX_BYTES, '取 10 MB；与 10 万行上限谁先到谁截断，两个都是产品决定的值'),
-    definedBy: { file: 'src/log/export.ts', name: 'LOG_EXPORT_MAX_BYTES' },
-    affects: '导出：CSV 最多 10 MB（含表头），超过截断并加 # truncated',
-    variesWith: ['单行 detail 的长度', '浏览器/编辑器打开大文件的承受度'],
-  },
   // ──────────────────────────── 校准样本（src/samples/）────────────────────────────
   //
   // 这一组的取值由用户决定，不是语料标定：样本库的容量与
   // 负样本分档取决于「一次会话里模型会反馈几次」，本仓库还没有这份实测。
   // 按本表纪律，如实写「未标定」，而不是编一个看起来有依据的场景。
-  {
-    name: 'SAMPLE_RETAIN_DAYS',
-    area: '校准样本',
-    ...chosen(
-      () => SAMPLE_RETAIN_DAYS,
-      '未标定：取 90 天，理由是「跨一个季度的对照仍有意义，再久语料族大概率已经变了」；' +
-        '这是判断而非实测，样本的实际衰减速率没有测过',
-    ),
-    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_RETAIN_DAYS' },
-    affects: '淘汰：写样本时删掉 created_at 早于「现在 - 90 天」的行',
-    variesWith: ['语料族的更新周期', '重标频率'],
-  },
-  {
-    name: 'SAMPLE_MAX_ROWS',
-    area: '校准样本',
-    ...chosen(
-      () => SAMPLE_MAX_ROWS,
-      '未标定：取 1 万条。10 万条向量约 200 MB 已明确不可行；1 万条是' +
-        '「够切点估计、又不超过一个普通库的量级」的判断，不是按样本量需求算出来的',
-    ),
-    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_MAX_ROWS' },
-    affects: '总量：超过 1 万条时按 created_at 淘汰最旧的（约 20 MB：512 维 x 4 B x 1 万）',
-    variesWith: ['切点估计所需的样本量', '愿意给的磁盘空间'],
-  },
-  {
-    name: 'SAMPLE_NEG_OBVIOUS_MAX',
-    area: '校准样本',
-    ...chosen(
-      () => SAMPLE_NEG_OBVIOUS_MAX,
-      '未标定：取 2000 条，理由是该档「对切点信息量低」，只需要少量代表；' +
-        '具体多少条够，要等 T46 的重标样本量与切点偏移实测',
-    ),
-    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_NEG_OBVIOUS_MAX' },
-    affects:
-      '「明显无关」负样本的上限：满了删最旧的、保留最近 2000 条。' +
-      '「不确定带」的那一档不设上限（它才是切点信息的来源）',
-    variesWith: ['切点扫描对负样本数量的敏感度', '总条数上限'],
-  },
-  {
-    name: 'SAMPLE_OBVIOUS_MAX_TOP1',
-    area: '校准样本',
-    ...chosen(
-      () => SAMPLE_OBVIOUS_MAX_TOP1,
-      '未标定：取 0.4 / 0.6 两条线，但没有说明依据；可对照的实测（view.ts 注释里的' +
-        '「无关查询 top1 上界」）量级相近但口径不同，不能当这条线的标定 —— 固定 0.4 在大库上' +
-        '会把「有点关系」的召回记成明显无关',
-      { guardedBy: ['test/samples.test.mjs'] },
-    ),
-    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_OBVIOUS_MAX_TOP1' },
-    affects: '负样本分档：top1 低于 0.4 记为「明显无关」（这一档有 2000 条上限）',
-    variesWith: ['库规模（无关 top1 随库长大上移）', '语料族', '编码模型'],
-  },
-  {
-    name: 'SAMPLE_UNCERTAIN_MAX_TOP1',
-    area: '校准样本',
-    ...chosen(
-      () => SAMPLE_UNCERTAIN_MAX_TOP1,
-      '未标定：取 0.6，与上一条同源 —— 两条线一起定，分开调没有意义；' +
-        '它们的位置应当由 T46 的切点扫描给出，本表只记录当前取值',
-      { guardedBy: ['test/samples.test.mjs'] },
-    ),
-    definedBy: { file: 'src/samples/store.ts', name: 'SAMPLE_UNCERTAIN_MAX_TOP1' },
-    affects: '负样本分档：top1 在 0.4~0.6 记为「不确定带」（优先保留，供切点扫描）',
-    variesWith: ['库规模', '语料族', '编码模型', '切点的目标位置'],
-  },
-  {
-    name: 'SAMPLE_QUEUE_MAX',
-    area: '校准样本',
-    ...chosen(
-      () => SAMPLE_QUEUE_MAX,
-      '未标定：按「一次召回最多入队一条」推算，64 条足以吸收事件循环被占住的一整轮' +
-        '（对照 LOG_QUEUE_MAX 的 200 条：日志一次召回可能同时产生三条事件）；不是测出来的队列深度',
-    ),
-    definedBy: { file: 'src/samples/index.ts', name: 'SAMPLE_QUEUE_MAX' },
-    affects: '缓冲：内存队列上限 64 条；满了丢最旧并计数，不阻塞召回、不抛错',
-    variesWith: ['事件循环被占住的时长', '单条样本的内存占用'],
-  },
-  {
-    name: 'FLAG_SPLIT_PENDING',
-    area: '写入',
-    ...chosen(
-      () => FLAG_SPLIT_PENDING,
-      '位定义来自设计报告对 flags 的命名（待拆分 / 歧义 / 未归类），位值一旦落库就不能改；置位判据是长度（review.ts 的 maxChars），不是自洽度评分 —— 候选按长度给出、不判断内容。任何测量都给不出位值',
-      { guardedBy: ['test/flags.test.mjs', 'test/split-pending.test.mjs', 'test/client-source.test.mjs'] },
-    ),
-    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_SPLIT_PENDING' },
-    affects:
-      'atom.flags 的 bit0：待拆分（T29）。写入侧**按长度切分**时置上（每段都置），召回时锚行标「疑似应拆分」，由人在界面上确认或忽略（两者都清这一位）',
-    variesWith: ['（不应变：改它等于把历史行解释错）'],
-  },
-  {
-    name: 'SPLIT_CONFIRMED_MAX',
-    area: '写入',
-    ...chosen(
-      () => SPLIT_CONFIRMED_MAX,
-      '未标定，是护栏：一次召回最多展示二十几条锚，清单比锚段还长时多出来的部分对任何一次召回都没有影响，却会让 meta 的值无限增长',
-      { guardedBy: ['test/split-pending.test.mjs'] },
-    ),
-    definedBy: { file: 'src/pipeline/split.ts', name: 'SPLIT_CONFIRMED_MAX' },
-    affects:
-      '「用户已确认应拆分」清单的条数上限（meta 的 split_confirmed，FIFO 淘汰最早的一条）。满了只影响更早的确认还能不能出现在锚行提示里，不改变任何召回与写入行为',
-    variesWith: ['锚段条数（topN 与实际预算）', '用户对候选的处理速度'],
-  },
-  {
-    name: 'SPLIT_SEGMENTS_MAX',
-    area: '写入',
-    ...chosen(
-      () => SPLIT_SEGMENTS_MAX,
-      '未标定，是护栏：一次写入最多切 8 段，这个上限容得下四次切分写入；比锚段还长时多出来的部分对召回没有影响，设它是为了让 meta 的值不无限增长',
-    ),
-    definedBy: { file: 'src/pipeline/split.ts', name: 'SPLIT_SEGMENTS_MAX' },
-    affects:
-      '「切分时共几段」映射的条数上限（meta 的 split_pending_segments，FIFO）。满了只影响更早的候选还能不能显示段数，段数未知时锚行退回不带段数的固定串',
-    variesWith: ['一次写入的切分段数上限（REVIEW_MAX_SEGMENTS）', '锚段条数（topN 与实际预算）'],
-  },
-  {
-    name: 'SPLIT_SCENE_CHARS',
-    area: '写入',
-    ...chosen(
-      () => SPLIT_SCENE_CHARS,
-      '未标定，是预算护栏：锚段按字符算预算，查询词可以是一整句，不截断会让一条锚多出几十上百字，同一段预算能装下的记忆随之变少；' +
-        '16 是保证单条锚文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）的取值',
-    ),
-    definedBy: { file: 'src/pipeline/view.ts', name: 'SPLIT_SCENE_CHARS' },
-    affects:
-      '锚行「用于：<查询词>」里查询词最多给几个字符（只对 flags 的 bit0 命中生效）。保证单条锚的文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）',
-    variesWith: ['查询词长度分布', '锚段预算', '「单锚增量 ≤ 40 字」这条判据'],
-  },
-  {
-    name: 'FLAG_AMBIGUOUS',
-    area: '写入',
-    ...chosen(
-      () => FLAG_AMBIGUOUS,
-      '同 FLAG_SPLIT_PENDING：位值不可变 —— bit1 是 flags 的位定义，换掉会把历史行解释错。语义是「落位时两个候选接近、没把握」',
-      { guardedBy: ['test/flags.test.mjs', 'test/archive.test.mjs'] },
-    ),
-    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_AMBIGUOUS' },
-    affects: 'atom.flags 的 bit1：落位时两个候选接近、没把握',
-    variesWith: ['（不应变）'],
-  },
-  {
-    name: 'FLAG_UNCLASSIFIED',
-    area: '写入',
-    ...chosen(
-      () => FLAG_UNCLASSIFIED,
-      '同 FLAG_SPLIT_PENDING：位值不可变 —— bit2 是 flags 的位定义，换掉会把历史行解释错。语义是「与任何已有主题都不像」',
-      { guardedBy: ['test/flags.test.mjs'] },
-    ),
-    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_UNCLASSIFIED' },
-    affects: 'atom.flags 的 bit2：与任何已有主题都不像（未归类）',
-    variesWith: ['（不应变）'],
-  },
-  {
-    name: 'FLAG_ARCHIVED',
-    area: '写入',
-    ...chosen(
-      () => FLAG_ARCHIVED,
-      '位值由设计文档对 flags 的命名确定（技术文档 §5），不可改；bit4 是 flags 的位定义，改它会把历史行解释错。归档不是删除：内容与边都还在，显式检索仍可见',
-      { guardedBy: ['test/archive.test.mjs', 'test/client-source.test.mjs'] },
-    ),
-    definedBy: { file: 'src/db/flags.ts', name: 'FLAG_ARCHIVED' },
-    affects:
-      'atom.flags 的 bit4：已归档（T26）。默认不召回、不进注入三段、列表默认不列；' +
-      '显式检索（lattice_list 给 flags、界面勾「显示已归档」）仍可见。不是删除：内容与边都还在',
-    variesWith: ['（不应变）'],
-  },
   // ──────────────────────── 重标触发（calibration/trigger.ts）────────────────────────
-  {
-    name: 'RECALIBRATE_COOLDOWN_MS',
-    area: '校准样本',
-    ...chosen(
-      () => RECALIBRATE_COOLDOWN_MS,
-      '无测量依据，是产品口味：12 小时对应「一次写作会话」量级；没有任何测量' +
-        '能回答「12 小时比 6 小时更合适」',
-    ),
-    display: () => `${displayNumber(RECALIBRATE_COOLDOWN_MS / 3600000)} 小时`,
-    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_COOLDOWN_MS' },
-    affects: '冷却：距上次判 S 不足 12 小时就不判、也不重标（省一次伪查询抽样）',
-    variesWith: ['用户的写作节奏', '库的变化速率'],
-  },
   {
     name: 'RECALIBRATE_MIN_ATOMS',
     area: '校准样本',
@@ -2186,57 +1506,6 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     refs: [{ file: 'src/calibration/trigger.ts', symbol: 'RECALIBRATE_MIN_ATOMS' }],
     affects: '闸①：库小于 192 条不重标（S 的抽样波动在这个规模下与漂移同量级）',
     variesWith: ['查询集', '语料构成'],
-  },
-  {
-    name: 'RECALIBRATE_MIN_POSITIVE',
-    area: '校准样本',
-    ...chosen(
-      () => RECALIBRATE_MIN_POSITIVE,
-      '未标定：与写入节奏匹配的经验数，没有测量能给出「少于几条算不够」',
-    ),
-    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_MIN_POSITIVE' },
-    affects: '闸④：正样本少于 10 条不重标（切点会被单条样本牵着走）',
-    variesWith: ['用户/模型的标注频率'],
-  },
-  {
-    name: 'RECALIBRATE_DRIFT',
-    area: '校准样本',
-    ...recheckable(() => RECALIBRATE_DRIFT, {
-      tool: '无脚本（U9 噪声实测）',
-      finding:
-        '192 维下 S 的 sd 约 0.0063，0.01 约 1.6σ —— 小于它的漂移分不清是库变了还是抽样噪声；' +
-        '「1.6σ」这个系数是取舍，不是测量',
-    }),
-    display: () => `${RECALIBRATE_DRIFT}（约 1.6σ@192 维）`,
-    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_DRIFT' },
-    affects: '闸②：S 与快照基准的差 ≤ 0.01 时不重标（噪声内不动）',
-    variesWith: ['采样伪查询条数 m', '库规模'],
-  },
-  {
-    name: 'RECALIBRATE_SAMPLE_LIMIT',
-    area: '校准样本',
-    ...recheckable(() => RECALIBRATE_SAMPLE_LIMIT, {
-      tool: '源码表达式（src/calibration/trigger.ts 的 `SAMPLE_MAX_ROWS / 5`）',
-      finding:
-        '由 SAMPLE_MAX_ROWS ÷ 5 算出 2000；改 SAMPLE_MAX_ROWS 后重新构建，派生值跟着变，不需要测量。' +
-        '「五分之一」这个比例是选择：切点只由靠近阈值的样本决定，多取无信息',
-      formula: true,
-    }),
-    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_SAMPLE_LIMIT' },
-    affects: '一次重标最多取多少条样本（分层取样的上限，不是样本库容量）',
-    variesWith: ['样本库容量', '阈值附近的样本密度'],
-  },
-  {
-    name: 'RECALIBRATE_OBVIOUS_LIMIT',
-    area: '校准样本',
-    ...chosen(
-      () => RECALIBRATE_OBVIOUS_LIMIT,
-      '未标定：该档的信息量在「它们离得很远」，多取只是重复同一件事；500 是按这一档信息量低' +
-        '给出的取舍，不确定带全取',
-    ),
-    definedBy: { file: 'src/calibration/trigger.ts', name: 'RECALIBRATE_OBVIOUS_LIMIT' },
-    affects: '「明显无关」那一档在一次重标里最多取多少条（不确定带全取）',
-    variesWith: ['库规模', '负样本的 top1 分布'],
   },
 ]
 

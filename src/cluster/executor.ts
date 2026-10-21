@@ -9,6 +9,7 @@
 // 本插件是单进程单实例，这个假设成立；多实例部署时这条要重写。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import {
   META_RECLUSTER_AT,
   META_RECLUSTER_PLANNED_AT,
@@ -27,7 +28,14 @@ import { runRecluster, type ReclusterResult } from './index.js'
  * 里「取消」是有效的，之后就只能等它跑完。3 秒是产品口味，不是标定值 —— 太长显得没反应，
  * 太短来不及取消。
  */
-export const RECLUSTER_PLAN_DELAY_MS = 3000
+export const RECLUSTER_PLAN_DELAY_MS = 3000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定，是产品口味：3 秒是「点错了还能撤」与「点了要立刻有反应」之间的取值；没有测量能回答 3 秒比 1 秒或 5 秒更合适 —— 它取决于人点下去之后多久会意识到自己点错了'
+    failsWhen: ['用户对整理耗时的容忍度', '库规模（跑得越久，越需要更长的反悔窗口）']
+    affects: '点「开始整理」之后等多久才真的开跑。这段时间里「取消」有效，之后只能等它跑完 —— 它决定了误点之后还有多长的反悔窗口'
+  }
+>
 
 /** 整理入口的四种状态。语句取自裁决：未规划 / 已规划 / 正在整理 / 失败可重试。 */
 export type ReclusterPhase = 'idle' | 'planned' | 'running' | 'failed'

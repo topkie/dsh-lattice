@@ -7,25 +7,67 @@
 // 不新增监听；冷却 12h、计数阈值 10、漂移 0.01。
 
 import { TIER_SCALE_STABLE_ATOMS } from '../pipeline/calibrate.js'
+import type { ThresholdValue } from '../threshold-types.js'
 import { SAMPLE_MAX_ROWS } from '../samples/store.js'
 
 /** 冷却期：12 小时。按「一次写作会话」量级取的，不是标定值。 */
-export const RECALIBRATE_COOLDOWN_MS = 12 * 3600 * 1000
+export const RECALIBRATE_COOLDOWN_MS = (12 * 3600 * 1000) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '无测量依据，是产品口味：12 小时对应「一次写作会话」量级；没有任何测量能回答「12 小时比 6 小时更合适」'
+    failsWhen: ['用户的写作节奏', '库的变化速率']
+    affects: '冷却：距上次判 S 不足 12 小时就不判、也不重标（省一次伪查询抽样）'
+    display: '{v} 小时'
+    unit: 'h'
+  }
+>
 
 /** 重标所需的最小库规模：沿用锚点表的稳定下限 192（T23-b 实测）。 */
 export const RECALIBRATE_MIN_ATOMS = TIER_SCALE_STABLE_ATOMS
 
 /** 正样本条数阈值。低于它切点会被单条样本牵着走。 */
-export const RECALIBRATE_MIN_POSITIVE = 10
+export const RECALIBRATE_MIN_POSITIVE = 10 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：与写入节奏匹配的经验数，没有测量能给出「少于几条算不够」'
+    failsWhen: ['用户/模型的标注频率']
+    affects: '闸④：正样本少于 10 条不重标（切点会被单条样本牵着走）'
+  }
+>
 
 /** S 漂移阈值：192 维下噪声 sd 约 0.0063，0.01 约 1.6σ。 */
-export const RECALIBRATE_DRIFT = 0.01
+export const RECALIBRATE_DRIFT = 0.01 satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '无脚本（U9 噪声实测）'
+    finding: '192 维下 S 的 sd 约 0.0063，0.01 约 1.6σ —— 小于它的漂移分不清是库变了还是抽样噪声；「1.6σ」这个系数是取舍，不是测量'
+    failsWhen: ['采样伪查询条数 m', '库规模']
+    affects: '闸②：S 与快照基准的差 ≤ 0.01 时不重标（噪声内不动）'
+    display: '{v}（约 1.6σ@192 维）'
+  }
+>
 
 /** 一次重标最多取多少条样本：样本库容量上限的五分之一（分层取样的上限，不是容量本身）。 */
-export const RECALIBRATE_SAMPLE_LIMIT = SAMPLE_MAX_ROWS / 5
+export const RECALIBRATE_SAMPLE_LIMIT = (SAMPLE_MAX_ROWS / 5) satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '源码表达式（src/calibration/trigger.ts 的 `SAMPLE_MAX_ROWS / 5`）'
+    finding: '由 SAMPLE_MAX_ROWS ÷ 5 算出 2000；改 SAMPLE_MAX_ROWS 后重新构建，派生值跟着变，不需要测量。「五分之一」这个比例是选择：切点只由靠近阈值的样本决定，多取无信息'
+    formula: true
+    failsWhen: ['样本库容量', '阈值附近的样本密度']
+    affects: '一次重标最多取多少条样本（分层取样的上限，不是样本库容量）'
+  }
+>
 
 /** 明显无关样本在一次重标里最多取多少条（不确定带全取，这一档只取最近 N 条）。 */
-export const RECALIBRATE_OBVIOUS_LIMIT = 500
+export const RECALIBRATE_OBVIOUS_LIMIT = 500 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：该档的信息量在「它们离得很远」，多取只是重复同一件事；500 是按这一档信息量低给出的取舍，不确定带全取'
+    failsWhen: ['库规模', '负样本的 top1 分布']
+    affects: '「明显无关」那一档在一次重标里最多取多少条（不确定带全取）'
+  }
+>
 
 export type GateReason = 'small_db' | 'no_positive' | 'no_negative' | 'cooldown' | 'no_drift'
 

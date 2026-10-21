@@ -17,6 +17,7 @@
 // 编码器关掉后每次召回都会 vectorMissing，若逐次记，日志库会被这一个已知状态刷满。
 
 import { CSV_HEADER, CSV_TRUNCATED, exportLogCsv, type LogExport } from './export.js'
+import type { ThresholdValue } from '../threshold-types.js'
 import { reasonCodeOf, sanitizeEvent, type LogLevel, type LogRow } from './policy.js'
 import {
   DEFAULT_LOG_LIMITS,
@@ -29,13 +30,34 @@ import {
 } from './store.js'
 
 /** 队列上限：200 条。满了丢最旧。 */
-export const LOG_QUEUE_MAX = 200
+export const LOG_QUEUE_MAX = 200 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '200 条在 50 ms 窗口下的吸收能力是按速率推算，本仓库没有降级事件速率的实测；取 200 条'
+    failsWhen: ['降级事件爆发速率', '批量窗口', '单条日志的内存占用']
+    affects: '缓冲：内存队列上限 200 条；满了丢最旧并计数，不阻塞、不抛错'
+  }
+>
 
 /** 批量窗口上界：50ms。正常路径由 setImmediate 立即 flush，这个值只在事件循环被占住时生效。 */
-export const LOG_FLUSH_WINDOW_MS = 50
+export const LOG_FLUSH_WINDOW_MS = 50 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '取值「setImmediate 或 50 ms」，实现取两者中更保守的上界；50 ms 是产品决定的窗口，没有测量出处'
+    failsWhen: ['事件产生速率', '崩溃时允许丢失的时间窗', '宿主的事件循环忙碌程度']
+    affects: '缓冲：批量窗口的**上界**。正常路径由 setImmediate 在下一轮事件循环 flush；只有事件循环被占住、队首已等满 50ms 时才当场 flush（不新增定时器）'
+  }
+>
 
 /** log.write_failed 的限频间隔：1 次/分钟（草案第三节）。 */
-export const LOG_WRITE_FAILED_MIN_INTERVAL_MS = 60 * 1000
+export const LOG_WRITE_FAILED_MIN_INTERVAL_MS = (60 * 1000) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '限频间隔来自设计草案第三节的规定（1 次/分钟），没有测量出处'
+    failsWhen: ['故障持续时间', '日志库的可用性', '用户对日志噪声的容忍度']
+    affects: '写失败降级：log.write_failed 的限频间隔（1 次/分钟）'
+  }
+>
 
 /**
  * 模块状态收在一个对象里（而不是一组模块级 let）。

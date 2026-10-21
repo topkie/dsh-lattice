@@ -14,6 +14,7 @@
 // 这正是探针里把 k 当敏感参数扫的原因（见 `graph.ts` 的 DEFAULT_KNN_K 注释）。
 
 import type { EdgeList } from './graph.js'
+import type { ThresholdValue } from '../threshold-types.js'
 
 /**
  * 缝合互不相连的分量时，桥边权重取「全图最大权重」的这个倍数。
@@ -27,7 +28,14 @@ import type { EdgeList } from './graph.js'
  * 反过来说，若桥边很便宜，λ = 1/边权就会很大，全局根会因此得到一个很大的稳定性，
  * 把那些本来孤立的小分量整片吸收进「一个巨大簇」—— 正是本项最典型的静默错法。
  */
-export const MST_BRIDGE_FACTOR = 2
+export const MST_BRIDGE_FACTOR = 2 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '无标定实验。取 2（即桥边比任何真实边都贵）是一个语义选择而不是拟合：分量之间一条边都没有（不是「边太贵」，是真的没有），任何取法都造不出真实的连接，只能保证桥边排在 Kruskal 顺序的最后'
+    failsWhen: ['k（k 越大分量越少，需要桥边的场合越少）', '语料的密度分布']
+    affects: 'k 近邻图不连通时，缝合分量所用的桥边权重 = 全图最大权重 × 本值。它决定那些孤立分量在层次树上「多晚」才被并进全局根'
+  }
+>
 
 /**
  * 并查集：**路径压缩 + 按大小合并**，不做 rank。

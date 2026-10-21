@@ -11,6 +11,7 @@
 // 归一化到同一尺度既不可靠也没必要 —— 排名天然可比。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { bigramTerms, jaccard } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
 import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
@@ -519,7 +520,15 @@ function affiliationFactor(secondary: boolean, onlyGraph: boolean): number {
  * 两个条件都严格 —— 同义换述被词面挡掉、纯噪声被 cos 挡掉，所以用摘要而不是全文就够。
  * 精度更高的 atom_pair 表由重聚类任务建立，接入后这里可以直接换成查表。
  */
-export const DUP_COS = 0.92
+export const DUP_COS = 0.92 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '0.92 沿用原设计 atom_pair 表的既有取值，改成词面判定后没有重测；没有一次「不同说法的同一件事」实测（DUP_LEX 才有）。几何票的门槛是旧接口留下的数'
+    failsWhen: ['换编码模型（余弦尺度会变）', '同义改写的相似度分布']
+    guardedBy: ['test/archive.test.mjs']
+    affects: '重复压制：余弦低于此值即不判重复（两票中的几何票）；仅在同主属 topic 桶内两两比较'
+  }
+>
 /**
  * 判定重复所需的词面重叠。
  *
@@ -531,7 +540,16 @@ export const DUP_COS = 0.92
  * 取 0.72：只有几乎逐字重复才会被压制。真正重复的（同一段文本）实测 Jaccard 为 1.0，
  * 稳过。宁可漏压（多出一条），也不误压（丢掉一条信息）。
  */
-export const DUP_LEX = 0.72
+export const DUP_LEX = 0.72 satisfies ThresholdValue<
+  'recheckable',
+  {
+    tool: '无脚本（构造的对照句对，直接算 bigram-Jaccard）'
+    finding: '0.5 时「系统代理必须走本地端口……」与「系统代理配置本地端口……」的 bigram-Jaccard 为 0.64，两者讲同一件事但各有信息、不该折叠；取 0.72 后只有几乎逐字重复才被压制（同一段文本 Jaccard 为 1.0）'
+    failsWhen: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）']
+    guardedBy: ['test/archive.test.mjs']
+    affects: '重复压制：词面重叠低于此值即不判重复（两票中的词面票）'
+  }
+>
 
 function suppressDuplicates(
   db: DatabaseSync,

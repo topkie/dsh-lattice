@@ -18,6 +18,7 @@
 // 本文件是唯一知道样本库文件名与目录名的地方。
 
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
+import type { ThresholdValue } from '../threshold-types.js'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { deriveResourceParams } from '../util/memory.js'
@@ -33,19 +34,56 @@ export const SAMPLE_DB_NAME = 'recall-sample.db'
 export const SAMPLE_SCHEMA_VERSION = 1
 
 /** 保留天数：90 天。 */
-export const SAMPLE_RETAIN_DAYS = 90
+export const SAMPLE_RETAIN_DAYS = 90 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：取 90 天，理由是「跨一个季度的对照仍有意义，再久语料族大概率已经变了」；这是判断而非实测，样本的实际衰减速率没有测过'
+    failsWhen: ['语料族的更新周期', '重标频率']
+    affects: '淘汰：写样本时删掉 created_at 早于「现在 - 90 天」的行'
+  }
+>
 
 /** 总量上限：1 万条。超出按时间淘汰最旧。 */
-export const SAMPLE_MAX_ROWS = 10000
+export const SAMPLE_MAX_ROWS = 10000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：取 1 万条。10 万条向量约 200 MB 已明确不可行；1 万条是「够切点估计、又不超过一个普通库的量级」的判断，不是按样本量需求算出来的'
+    failsWhen: ['切点估计所需的样本量', '愿意给的磁盘空间']
+    affects: '总量：超过 1 万条时按 created_at 淘汰最旧的（约 20 MB：512 维 x 4 B x 1 万）'
+  }
+>
 
 /** 「明显无关」负样本的上限：2000 条。 */
-export const SAMPLE_NEG_OBVIOUS_MAX = 2000
+export const SAMPLE_NEG_OBVIOUS_MAX = 2000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：取 2000 条，理由是该档「对切点信息量低」，只需要少量代表；具体多少条够，要等 T46 的重标样本量与切点偏移实测'
+    failsWhen: ['切点扫描对负样本数量的敏感度', '总条数上限']
+    affects: '「明显无关」负样本的上限：满了删最旧的、保留最近 2000 条。「不确定带」的那一档不设上限（它才是切点信息的来源）'
+  }
+>
 
 /** 「明显无关」的 top1 上界：低于它即明显无关。 */
-export const SAMPLE_OBVIOUS_MAX_TOP1 = 0.4
+export const SAMPLE_OBVIOUS_MAX_TOP1 = 0.4 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：取 0.4 / 0.6 两条线，但没有说明依据；可对照的实测（view.ts 注释里的「无关查询 top1 上界」）量级相近但口径不同，不能当这条线的标定 —— 固定 0.4 在大库上会把「有点关系」的召回记成明显无关'
+    failsWhen: ['库规模（无关 top1 随库长大上移）', '语料族', '编码模型']
+    guardedBy: ['test/samples.test.mjs']
+    affects: '负样本分档：top1 低于 0.4 记为「明显无关」（这一档有 2000 条上限）'
+  }
+>
 
 /** 「不确定带」的 top1 上界：落在 [明显无关上界, 它] 之内优先保留。 */
-export const SAMPLE_UNCERTAIN_MAX_TOP1 = 0.6
+export const SAMPLE_UNCERTAIN_MAX_TOP1 = 0.6 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：取 0.6，与上一条同源 —— 两条线一起定，分开调没有意义；它们的位置应当由 T46 的切点扫描给出，本表只记录当前取值'
+    failsWhen: ['库规模', '语料族', '编码模型', '切点的目标位置']
+    guardedBy: ['test/samples.test.mjs']
+    affects: '负样本分档：top1 在 0.4~0.6 记为「不确定带」（优先保留，供切点扫描）'
+  }
+>
 
 /** 失效标记：换编码模型后旧样本**标失效不删**。 */
 export const STALE_FLAG = 'stale_model'

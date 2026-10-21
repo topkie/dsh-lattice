@@ -209,6 +209,8 @@ function findAnywhere(name) {
  * 逐条给理由，没有理由的一律不豁免（理由不足时应当补登记，而不是补豁免）。
  */
 const EXEMPT = {
+  // 派生常量：值由别的常量算出，但扫描器现在能求值了（resolveValues），所以要按「已说明」登记在豁免里。
+  VEC_BYTES: '由 VEC_DIM 派生（VEC_DIM x 4）；AST 扫描不解析同名引用，改它等于改 VEC_DIM',
   SCHEMA_VERSION: '协议性：库的 schema 版本，改动要走迁移（MIGRATIONS），不是调参',
   NOISE_LABEL:
     '协议性：聚类标签里「未归类」的哨兵值（-1）。它不是一条线而是一个约定，改它只是把' +
@@ -370,6 +372,74 @@ function readThresholdOrigin(d, sf) {
   return { kind, meta }
 }
 
+/**
+ * 常量求值（T65 阶段 3）：扫到的声明里有一批是「靠别的常量算出来」的（`Math.floor(A / B)`、
+ * `A * B`、`= OTHER`）。只认字面量的求值器对它们一律返回 null，于是这些条目在搬到定义处之后
+ * 会从主表消失。这里做多轮求值：先能算的算出来，再把结果喂给下一轮。
+ */
+function evaluateExpr(node, values) {
+  if (ts.isSatisfiesExpression(node)) return evaluateExpr(node.expression, values)
+  const direct = numericValue(node)
+  if (direct !== null) return direct
+  if (ts.isIdentifier(node)) {
+    const v = values.get(node.text)
+    return typeof v === 'number' ? v : null
+  }
+  if (ts.isBinaryExpression(node)) {
+    const l = evaluateExpr(node.left, values)
+    const r = evaluateExpr(node.right, values)
+    if (l === null || r === null) return null
+    const k = node.operatorToken.kind
+    if (k === ts.SyntaxKind.PlusToken) return l + r
+    if (k === ts.SyntaxKind.MinusToken) return l - r
+    if (k === ts.SyntaxKind.AsteriskToken) return l * r
+    if (k === ts.SyntaxKind.SlashToken) return l / r
+    if (k === ts.SyntaxKind.PercentToken) return l % r
+    if (k === ts.SyntaxKind.AsteriskAsteriskToken) return l ** r
+    return null
+  }
+  if (ts.isParenthesizedExpression(node)) return evaluateExpr(node.expression, values)
+  if (ts.isPrefixUnaryExpression(node)) {
+    const v = evaluateExpr(node.operand, values)
+    if (v === null) return null
+    if (node.operator === ts.SyntaxKind.MinusToken) return -v
+    if (node.operator === ts.SyntaxKind.PlusToken) return v
+    return null
+  }
+  if (ts.isCallExpression(node)) {
+    const callee = node.expression.getText()
+    const args = node.arguments.map((a) => evaluateExpr(a, values))
+    if (args.some((a) => a === null)) return null
+    if (callee === 'Math.floor') return Math.floor(args[0])
+    if (callee === 'Math.ceil') return Math.ceil(args[0])
+    if (callee === 'Math.round') return Math.round(args[0])
+    if (callee === 'Math.min') return Math.min(...args)
+    if (callee === 'Math.max') return Math.max(...args)
+    return null
+  }
+  return null
+}
+
+/** 多轮求值：把「靠别的常量算出来」的值补上（最多 4 轮，够覆盖当前的依赖深度）。 */
+function resolveValues(list) {
+  const values = new Map()
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false
+    for (const d of list) {
+      if (d.initializer === undefined) continue
+      const v = evaluateExpr(d.initializer, values)
+      if (v === null || values.get(d.name) === v) continue
+      values.set(d.name, v)
+      changed = true
+    }
+    if (!changed) break
+  }
+  for (const d of list) {
+    const v = values.get(d.name)
+    if (typeof v === 'number' && d.value === null) d.value = v
+  }
+}
+
 function scanDeclarations() {
   // **不按名字去重**：同名常量可以在两个模块里各写一份（DEFAULT_TOP_N 就是），
   // 去重会让「扫到几个」少算，也会漏掉第二处可能被改坏的值。
@@ -417,6 +487,7 @@ for (const e of THRESHOLDS) {
 }
 
 const { list: decls, byName: declByName } = scanDeclarations()
+resolveValues(decls)
 const knownNames = new Set([...declByName.keys(), ...registered.keys()])
 for (const e of THRESHOLDS) if (e.external !== undefined) knownNames.add(e.name)
 for (const k of Object.keys(EXEMPT)) knownNames.add(k)
@@ -568,7 +639,7 @@ function displayNumber(x) {
  * 为什么不是函数：函数进不了类型参数。模板 + 单位能表达全部现有形态（含「库文件的 {v} 倍」
  * 这类前缀），而且值仍然活的 —— 模板里的 {v} 每次打印时按当前值替换。
  */
-function displayFrom(meta, value) {
+function displayFrom(meta, value, lookup) {
   const unit = typeof meta.unit === 'string' ? meta.unit : null
   const scaled =
     unit === 'MB'
@@ -579,7 +650,16 @@ function displayFrom(meta, value) {
           ? displayNumber(value * 100)
           : String(value)
   const tpl = typeof meta.display === 'string' ? meta.display : null
-  if (tpl !== null) return tpl.split('{v}').join(scaled)
+  if (tpl !== null) {
+    // {v} 是自己，{NAME} 是别的常量（打印时现查 —— 显示文本里的其他数也不能写死）。
+    return tpl
+      .split('{v}')
+      .join(scaled)
+      .replace(/\{([A-Z][A-Z0-9_]*)\}/g, (m, name) => {
+        const v = lookup.get(name)
+        return v === undefined ? m : String(v)
+      })
+  }
   if (unit === 'ms') return scaled + ' ms'
   if (unit === 'MB') return scaled + ' MB'
   if (unit === 'h') return scaled + ' 小时'
@@ -587,6 +667,9 @@ function displayFrom(meta, value) {
   if (unit === '%') return '内存的 ' + scaled + '%'
   return undefined
 }
+
+/** 常量名 → 当前值：display 模板里的 {NAME} 从这里查。 */
+const VALUE_BY_NAME = new Map(decls.filter((d) => d.value !== null).map((d) => [d.name, d.value]))
 
 const typeEntries = decls
   .filter((d) => d.origin !== null && d.value !== null)
@@ -610,7 +693,7 @@ const typeEntries = decls
       definedBy: { file: d.file, name: d.name },
       affects: typeof meta.affects === 'string' ? meta.affects : '',
       variesWith: Array.isArray(meta.failsWhen) ? meta.failsWhen : [],
-      display: displayFrom(meta, d.value),
+      display: displayFrom(meta, d.value, VALUE_BY_NAME),
       diverges: typeof meta.diverges === 'string' ? meta.diverges : undefined,
       calibration: {
         origin,

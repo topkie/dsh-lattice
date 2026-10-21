@@ -17,6 +17,7 @@
 // 「这一条有用」被记下来，而样本库首先是为这件事存在的。
 
 import { createHash } from 'node:crypto'
+import type { ThresholdValue } from '../threshold-types.js'
 import { existsSync } from 'node:fs'
 import { log } from '../log/index.js'
 import { reasonCodeOf } from '../log/policy.js'
@@ -37,7 +38,14 @@ import {
 export { sampleFilePath }
 
 /** 队列上限：64 条。一次召回最多入队一条，64 条足以吸收「事件循环被占住」的一整轮。 */
-export const SAMPLE_QUEUE_MAX = 64
+export const SAMPLE_QUEUE_MAX = 64 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定：按「一次召回最多入队一条」推算，64 条足以吸收事件循环被占住的一整轮（对照 LOG_QUEUE_MAX 的 200 条：日志一次召回可能同时产生三条事件）；不是测出来的队列深度'
+    failsWhen: ['事件循环被占住的时长', '单条样本的内存占用']
+    affects: '缓冲：内存队列上限 64 条；满了丢最旧并计数，不阻塞召回、不抛错'
+  }
+>
 
 /** 调用方给的样本语义（时间与模型名由本模块补齐，避免两处各写一份）。 */
 export interface SampleInput {

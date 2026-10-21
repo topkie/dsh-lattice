@@ -13,13 +13,28 @@
 // 而一个文件里的行一定比下一个文件里的行旧。
 
 import { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { logDirOf, logFilesIn } from './store.js'
 
 /** 导出行数上限：10 万行。 */
-export const LOG_EXPORT_MAX_ROWS = 100_000
+export const LOG_EXPORT_MAX_ROWS = 100_000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '取 10 万行；按单行约 60~120 字节估算 10 万行约 6~12 MB，与 10 MB 字节上限互为上界，没有导出规模的实测'
+    failsWhen: ['单行 detail 的长度', '导出可接受的内存与等待时间']
+    affects: '导出：CSV 最多 10 万行数据，超过截断并在文件尾加 # truncated'
+  }
+>
 
 /** 导出字节上限：10 MB。 */
-export const LOG_EXPORT_MAX_BYTES = 10 * 1024 * 1024
+export const LOG_EXPORT_MAX_BYTES = (10 * 1024 * 1024) satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '取 10 MB；与 10 万行上限谁先到谁截断，两个都是产品决定的值'
+    failsWhen: ['单行 detail 的长度', '浏览器/编辑器打开大文件的承受度']
+    affects: '导出：CSV 最多 10 MB（含表头），超过截断并加 # truncated'
+  }
+>
 
 /** CSV 表头。四列的顺序就是设计里定的顺序，导出侧与消费侧都不该自己改。 */
 export const CSV_HEADER = 'ts,level,event,detail'

@@ -1,3 +1,4 @@
+import type { ThresholdValue } from '../threshold-types.js'
 // 文本工具：CJK 切词、摘要抽取、token 估算。
 //
 // 切词规则：
@@ -85,7 +86,15 @@ export function stripMarkdown(text: string): string {
  * 后果是改一处不改另两处 —— 那正是 T45 批一要治的写法问题，不是阈值本身的问题。
  * 值的来源与标定依据见阈值登记表（SUMMARY_CHARS）。
  */
-export const SUMMARY_CHARS = 48
+export const SUMMARY_CHARS = 48 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '摘要按字符截断的上限由「一句话讲一件事」这条写入约定的实际长度决定，无实测标定记录；此前函数签名默认值与两个调用点各写一遍，T45 批一合并成一个常量'
+    failsWhen: ['一句话讲一件事这条写入约定的实际长度分布', '语言']
+    guardedBy: ['test/util.test.mjs', 'test/write.test.mjs']
+    affects: '写入时抽取摘要的字符上限（摘要进 atom.summary，参与注入与去重）'
+  }
+>
 
 /**
  * 抽取式摘要：取第一句，超长截断。

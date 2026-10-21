@@ -1,3 +1,4 @@
+import type { ThresholdValue } from '../threshold-types.js'
 // 迁移切分：把一张记忆卡切成若干 atom 候选。
 //
 // 切分单位选 H2 小节，不是段落也不是整卡：
@@ -10,9 +11,26 @@
 //   > MAX_ATOM_CHARS：过长。按句子边界再切（否则 FTS 索引膨胀，且落位会被平均掉）
 
 /** 小于这个字符数的小节并入相邻小节 —— 太短的内容没有独立检索价值。 */
-export const MIN_ATOM_CHARS = 80
+export const MIN_ATOM_CHARS = 80 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '无记录，源码也无注释：切分时一条 atom 的最小字符数是脚本取舍；它只影响一次性迁移脚本（本机卡片导入），不参与运行时管线'
+    failsWhen: ['「一句话讲一件事」这条写入约定的实际长度']
+    guardedBy: ['test/migrate.test.mjs']
+    affects: '切分时一条 atom 的最小字符数（低于它不再切）'
+    diverges: '文档的 autoSplit 是一期关闭的配置项'
+  }
+>
 /** 大于这个字符数的小节按句子边界再切 —— 受 FTS 索引体积与落位质量双重约束。 */
-export const MAX_ATOM_CHARS = 600
+export const MAX_ATOM_CHARS = 600 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '无记录（同 MIN_ATOM_CHARS）：切分时一条 atom 的最大字符数是 FTS 索引体积与落位质量之间的取舍，没有测量给出它'
+    failsWhen: ['同上']
+    guardedBy: ['test/migrate.test.mjs']
+    affects: '切分时一条 atom 的最大字符数（超过即按句子再切）'
+  }
+>
 
 export interface RawSection {
   /** H2 标题（`## ` 之后的部分）。引言块为空串。 */

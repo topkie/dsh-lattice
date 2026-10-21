@@ -12,6 +12,7 @@
 // 糊掉）。词面的区分度更高，两票都过才允许并入。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { FLAG_AMBIGUOUS, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from '../db/flags.js'
 import { type AtomKind, normalizeAtomKind, normalizeOrigin } from '../db/schema.js'
@@ -623,7 +624,14 @@ export function decidePlacement(
  * 截断只影响「很长的记忆里靠后的细节能不能被正文路搜到」，不改变摘要与入口；
  * 同一个数此前在同一个函数里写了两遍（判断与切片），改一处就会漏另一处。
  */
-export const SEARCH_BODY_MAX_CHARS = 1600
+export const SEARCH_BODY_MAX_CHARS = 1600 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '进 trigram 索引的正文字符上限是索引代价与长正文细节召回之间的取舍：注释只说明「摘要重复一次」的理由，无实测标定记录；同一函数内此前写了两遍（判断与切片），T45 批一合并为一个常量'
+    failsWhen: ['atom 正文长度分布', '长正文的细节召回是否重要']
+    affects: 'buildSearchBody 里进 trigram 索引的正文字符上限（超出即截断）'
+  }
+>
 
 /**
  * 组装检索正文。

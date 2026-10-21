@@ -15,6 +15,7 @@
 // 物理删除归用户，模型只能提议。那个边界在 `tools/index.ts` 里有注释说明。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { SUMMARY_CHARS, bigramTerms, extractSummary, jaccard } from '../util/text.js'
 import { VEC_DIM, cosine, decodeVec, encodeVec, isValidVecBlob } from '../util/vec.js'
 
@@ -28,10 +29,26 @@ import { VEC_DIM, cosine, decodeVec, encodeVec, isValidVecBlob } from '../util/v
  * 取 2 而不是另立一个数：bigram 的最小语义单位就是 2 个字符，
  * `entries.ts` 的 `MIN_TERM = 2` 已经把这条线定过一次。
  */
-export const FORGOTTEN_MIN_BIGRAMS = 2
+export const FORGOTTEN_MIN_BIGRAMS = 2 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '不是标定值，是一条有意义性下限：Jaccard 是两边一比算出来的，2 个 bigram 对 20 个也能得 0.09。取 2 是复用 entries.ts 的 MIN_TERM = 2（bigram 的最小语义单位就是 2 个字符），不是另立一个数。真正需要标定的是「多短算太短」，那要拿真实短记忆的分布来定，本轮没有这份分布'
+    failsWhen: ['写入约定里一条记忆的最短长度']
+    guardedBy: ['test/forget.test.mjs']
+    affects: '防写回判据的**可判下限**：两侧任一不足这么多 bigram 就不做判断（放行）'
+    diverges: '**不是阈值而是下限**，登记它是为了让「防写回在多短的文本上不生效」可被一条命令查出来'
+  }
+>
 
 /** 一次比对最多扫多少条墓碑。见 `forgottenSet` 里「为什么不是全表」的说明。 */
-export const FORGOTTEN_SCAN_LIMIT = 2000
+export const FORGOTTEN_SCAN_LIMIT = 2000 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '无记录，是资源上限而非质量阈值：墓碑数与用户删除过的条数同阶，正常到不了；取 2000 是为了让写入有界 —— 无上限的全表读会让写入随删除次数悄悄变慢'
+    failsWhen: ['用户删除的累计条数', '写入路径的延迟预算']
+    affects: '写入时最多比对多少条墓碑；超过时结果带 truncated，写入结果上会标出来'
+  }
+>
 
 /** `forgotten` 表的一行，按其实际列形状手写 —— 库里就是这些字段。 */
 interface ForgottenRow {

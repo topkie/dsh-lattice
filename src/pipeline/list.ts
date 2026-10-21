@@ -8,14 +8,32 @@
 // 行为是把能拿到的都拿上。所以这里**总是**分页，没有「一次给全部」的开关。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { atomKindFilterValues } from '../db/schema.js'
 import { FLAG_ARCHIVED } from '../db/flags.js'
 
 /** 一页最多给多少条。 */
-export const LIST_MAX_LIMIT = 50
+export const LIST_MAX_LIMIT = 50 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '上限是硬边界、防止调用方一次拉空整个库（D13-1）：50 本身无实测记录，它约束的是注意力稀释，不是某个分布'
+    failsWhen: ['一次注入能容纳的摘要条数', '库规模']
+    guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs']
+    affects: '一页最多给多少条；请求值被强制钳制到 [1, 50]'
+    diverges: '**zod schema 里也没有**（工具侧有测试守着钳制行为）'
+  }
+>
 
 /** 默认页大小。取值偏小：列目录是为了定位，不是为了读完。 */
-export const LIST_DEFAULT_LIMIT = 20
+export const LIST_DEFAULT_LIMIT = 20 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '`src/pipeline/list.ts` 的 `LIST_DEFAULT_LIMIT` 注释「取值偏小：列目录是为了定位，不是为了读完」：默认页大小是使用偏好选择，不是标定结果'
+    failsWhen: ['同上']
+    guardedBy: ['test/list.test.mjs', 'test/audit.test.mjs']
+    affects: '默认页大小'
+  }
+>
 
 /** 筛选条件。全部可选，全空即列出全部。 */
 export interface ListOptions {

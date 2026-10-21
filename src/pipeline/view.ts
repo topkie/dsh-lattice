@@ -10,6 +10,7 @@
 // 宁可少给几条线索，也不能让信息本体被挤掉。
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { ThresholdValue } from '../threshold-types.js'
 import { briefMinForDb } from './calibrate.js'
 import { DECLARED_ORIGIN, GRAPH_KINDS } from '../graph/infer.js'
 import type { RecallResult } from './search.js'
@@ -50,7 +51,14 @@ export const TRIM_PATHS_LIMIT = 5
  * 同一段预算下能装下的记忆随之变少。取 16 字足以认出「这是用来干什么的那次查询」，
  * 又保证单锚的文本增量不超过 40 字（本任务的判据 3）。
  */
-export const SPLIT_SCENE_CHARS = 16
+export const SPLIT_SCENE_CHARS = 16 satisfies ThresholdValue<
+  'chosen',
+  {
+    why: '未标定，是预算护栏：锚段按字符算预算，查询词可以是一整句，不截断会让一条锚多出几十上百字，同一段预算能装下的记忆随之变少；16 是保证单条锚文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）的取值'
+    failsWhen: ['查询词长度分布', '锚段预算', '「单锚增量 ≤ 40 字」这条判据']
+    affects: '锚行「用于：<查询词>」里查询词最多给几个字符（只对 flags 的 bit0 命中生效）。保证单条锚的文本增量不超过 44 字（候选标记 + 段数 + 使用场景的合计上限）'
+  }
+>
 
 export interface ViewOptions {
   /** 总字符预算。 */
