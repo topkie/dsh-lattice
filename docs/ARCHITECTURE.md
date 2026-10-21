@@ -116,6 +116,10 @@ SQLite 的 FTS5 `trigram` 分词器按 3 字符滑窗建索引，**对长度 ≤
 | `inferred` | 向量近邻（`near`）与 `atom_pair`（`duplicate`），由 `inferEdges` 全量重建 | 先删自己那批，再写新的 | `near` 进 |
 | `untyped` | 写入时记的「这条记忆当时最像哪个主题」（`atom → topic`） | 按主题身份对齐改写或删除 | 不进（另一端不是 atom） |
 
+`edges` **不收 `supersedes`**（2026-10-21 起）：取代关系用 `lattice_write` 的顶层参数
+`supersedes` —— 它才会写 `atom.superseded_by`，并在召回里让旧条让位给新条。走 `edges`
+声明取代会被拒，拒因随回执返回。
+
 **图路认哪些 kind**：`GRAPH_KINDS = near / co_occur / refines / requires / related`。
 `supersedes` 与 `duplicate` **刻意不在表里** —— 它们服务于「注入时只出一条更高分的」，
 不是邻居扩展信号；放进来会让「已被取代」的条目重新进入候选。

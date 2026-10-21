@@ -873,6 +873,17 @@ function commitWrite(
     let edgesDeclared = 0
     const edgesRejected: DeclaredEdgeNote[] = []
     for (const e of edges) {
+      // 取代不走声明边（2026-10-21）：edges 里的 supersedes 只写一行关系、不写
+      // superseded_by，等于「写了不生效」。留着只会让人踩，所以拒边并把调用方指到顶层
+      // 参数 supersedes —— 那条会真的标记旧条（T66 之后还决定它出不出现在召回里）。
+      if (e.type === 'supersedes') {
+        edgesRejected.push({
+          type: e.type,
+          target: e.target,
+          reason: '取代请用写入参数 supersedes；edges 里的 supersedes 不生效',
+        })
+        continue
+      }
       if (e.target === atomId) {
         edgesRejected.push({ type: e.type, target: e.target, reason: '不能指向自己' })
         continue

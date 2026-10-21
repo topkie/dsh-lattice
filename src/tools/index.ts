@@ -108,19 +108,21 @@ export const LOW_RELEVANCE_HINT = TIER_BRIEF_MIN satisfies ThresholdValue<
 export const DECLARED_EDGE_HINT = '关系可显式声明：lattice_write 的 edges。'
 
 /**
- * 声明 supersedes / duplicate 边时追加的一句。
+ * 声明 duplicate 边时追加的一句。
  *
- * 这两类边只写一行 edge 记录：它们**不写** atom.superseded_by，也不改去重判定 ——
- * 与写入参数 `supersedes`（那个会真的标记旧条）不是一回事。不说这一句，读回执的人
- * 会以为取代 / 去重已经生效。
+ * 这类边只写一行 edge 记录：它**不改**去重判定 —— 去重按余弦与词面算，与边无关。
+ * 不说这一句，读回执的人会以为「声明了重复」就等于「压制已经生效」。
+ *
+ * **supersedes 不在其列**（2026-10-21 起）：edges 里的 supersedes 写进去也不生效，
+ * 所以改为直接拒边（见 pipeline/write.ts 的拒绝分支）。这里只剩 duplicate 一类。
  */
-export const DECLARED_EDGE_ONLY_NOTE = '（只记录关系，不改变取代/去重状态）'
+export const DECLARED_EDGE_ONLY_NOTE = '（只记录关系，不改变去重状态）'
 
-/** 只记录关系、不改变状态的两类 kind（图路同样不认它们）。 */
-const ONLY_RECORDED_KINDS: readonly string[] = ['supersedes', 'duplicate']
+/** 只记录关系、不改变状态的 kind（图路同样不认它）。 */
+const ONLY_RECORDED_KINDS: readonly string[] = ['duplicate']
 
 /**
- * 本次声明里有没有**真的落库**的 supersedes / duplicate 边。
+ * 本次声明里有没有**真的落库**的 duplicate 边。
  *
  * 被拒的边不算：它们会在下一行逐条说「关系未建立」，再加一句「只记录关系」，
  * 等于把没发生的事说成发生了。
@@ -229,8 +231,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       edges: {
         type: 'array',
         description:
-          '关系边：[{type, target}]。type 推荐 related / refines / supersedes / duplicate / requires，' +
+          '关系边：[{type, target}]。type 推荐 related / refines / duplicate / requires，' +
           '自取须小写（字母、数字、下划线，≤32 字符）；target 是已有记忆 id。' +
+          '取代不走这里：用顶层参数 supersedes，edges 里的 supersedes 会被拒。' +
           '最多 ' +
           OUT_DEGREE_CAP +
           ' 条；不合法的边被跳过并逐条说明。',
@@ -336,8 +339,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         // 声明边（T38）：落库的与没落库的分开说。**只拒边、不拒记忆** ——
         // 拒因必须回显，否则调用方会以为关系已经建立（与防写回同一条纪律）。
         if (r.edgesDeclared !== undefined) {
-          // supersedes / duplicate 只记一行关系：不写 superseded_by、不改去重判定。
-          // 回执里点明，否则读的人会以为取代已经生效（与参数 supersedes 分开说）。
+          // duplicate 只记一行关系：不改去重判定。回执里点明，否则读的人会以为
+          // 声明了重复就等于压制生效。（supersedes 已被拒边，见 write.ts。）
           lines.push(
             '关系 ' +
               r.edgesDeclared +

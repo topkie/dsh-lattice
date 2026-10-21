@@ -165,8 +165,8 @@ describe('判据 1：写入声明两条边，展开能看到', () => {
   })
 })
 
-describe('关系边只记录不生效（supersedes / duplicate）', () => {
-  it('回执与展开都点明「只记录关系」，目标行的 superseded_by 仍为 null', async () => {
+describe('关系边：edges 不收 supersedes（2026-10-21 起）', () => {
+  it('声明 supersedes 的边被拒且回执说明改用顶层参数；duplicate 仍只记录关系', async () => {
     await withTools('c1b', async ({ cfg, tool }) => {
       const w = tool('lattice_write')
       const oldId = atomIdOf(await w.execute({ text: '旧说法：缓存击穿是热点 key 同时失效导致的。' }))
@@ -178,22 +178,21 @@ describe('关系边只记录不生效（supersedes / duplicate）', () => {
         ],
       })
       const fresh = atomIdOf(receipt)
-      // 声明一条 supersedes 边只写 edge 行，不写 atom.superseded_by —— 回执必须说出来。
-      assert.ok(receipt.includes('关系 2 条（声明）' + DECLARED_EDGE_ONLY_NOTE), receipt)
+      // 被拒的边必须回显原因：不说的话，调用方会以为取代关系已经建立。
+      assert.ok(receipt.includes('取代请用写入参数 supersedes'), receipt)
+      assert.ok(receipt.includes('supersedes → #' + oldId), receipt)
       const db = getRuntime(cfg).db
       const supersededBy = (id) =>
         db.prepare('SELECT superseded_by FROM atom WHERE id = ?').get(id).superseded_by
-      assert.equal(supersededBy(oldId), null, '声明 supersedes 边不该写旧条的 superseded_by')
+      assert.equal(supersededBy(oldId), null, '被拒的边更不该写 superseded_by')
       assert.equal(supersededBy(fresh), null)
-      assert.deepEqual(declaredRows(db, fresh), [
-        ['duplicate', oldId, 'declared', 1],
-        ['supersedes', oldId, 'declared', 1],
-      ])
+      // 只有 duplicate 落了库：supersedes 一行都不该有。
+      assert.deepEqual(declaredRows(db, fresh), [['duplicate', oldId, 'declared', 1]])
 
       const expanded = await tool('lattice_expand').execute({ atom_id: fresh })
+      assert.ok(!expanded.includes('supersedes → #' + oldId), '被拒的边不该出现在展开里：' + expanded)
       const noted = expanded.split('\n').filter((l) => l.includes(DECLARED_EDGE_ONLY_NOTE))
-      assert.equal(noted.length, 2, '两条只记录关系的边各带一句：' + expanded)
-      assert.ok(expanded.includes('supersedes → #' + oldId + ' '), expanded)
+      assert.equal(noted.length, 1, '只剩 duplicate 一条带「只记录关系」：' + expanded)
       assert.ok(expanded.includes('duplicate → #' + oldId + ' '), expanded)
     })
   })
@@ -461,13 +460,16 @@ describe('判据 6：edges 不写样本库', () => {
 })
 
 describe('判据 7：可发现性（工具描述 + 召回末尾提示）', () => {
-  it('lattice_write 的 edges 参数描述含 5 个推荐 type', async () => {
+  it('lattice_write 的 edges 参数描述含 4 个推荐 type，并写明取代不走 edges', async () => {
     await withTools('c7a', async ({ tool }) => {
       const spec = tool('lattice_write').parameters.properties.edges
       assert.ok(spec !== undefined, 'edges 参数必须存在')
-      for (const t of ['related', 'refines', 'supersedes', 'duplicate', 'requires']) {
+      for (const t of ['related', 'refines', 'duplicate', 'requires']) {
         assert.ok(spec.description.includes(t), 'edges 描述缺推荐值 ' + t + '：' + spec.description)
       }
+      // supersedes 已移出推荐值，但描述里要提到它 —— 否则读的人会照着旧习惯再试一次。
+      assert.ok(spec.description.includes('supersedes'), '要说明取代不走这里：' + spec.description)
+      assert.ok(spec.description.includes('会被拒'), spec.description)
       // 参数边界也要写出来：target 从哪取、条数上限、非法边的后果。
       assert.ok(spec.description.includes('target'), spec.description)
       assert.ok(spec.description.includes('跳过'), spec.description)
