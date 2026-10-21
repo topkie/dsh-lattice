@@ -329,6 +329,46 @@ function isDerived(node, known) {
  * 模块级变量声明（只认 sourceFile.statements，不进函数与块）。
  * 每个名字记下：位置、是否可静态求值成数字、初始化式节点。
  */
+/**
+ * 读常量定义处的来历（T65 阶段 1）：`export const X = 0.78 satisfies ThresholdValue<'recheckable', {...}>`。
+ *
+ * 纯语法树就够 —— 不需要 typeChecker。`satisfies` 的右边是 TypeReferenceNode，
+ * 第一个类型参数是 kind 的字面量类型，第二个是 TypeLiteralNode（字段名 → 字面量或元组类型）。
+ * 字段白名单与 kind 合法性由 thresholdOriginProblems 断言：类型参数里的 T 不受约束，
+ * 写错字段名不会编译报错，只能在这里抓。
+ */
+function readThresholdOrigin(d, sf) {
+  const init = d.initializer
+  if (init === undefined || !ts.isSatisfiesExpression(init)) return null
+  const t = init.type
+  if (!ts.isTypeReferenceNode(t)) return null
+  if (t.typeName.getText(sf) !== 'ThresholdValue') return null
+  const args = t.typeArguments ?? []
+  const first = args[0]
+  const kind =
+    first !== undefined && ts.isLiteralTypeNode(first) && ts.isStringLiteral(first.literal)
+      ? first.literal.text
+      : null
+  const meta = {}
+  const second = args[1]
+  if (second !== undefined && ts.isTypeLiteralNode(second)) {
+    for (const m of second.members) {
+      if (!ts.isPropertySignature(m) || m.name === undefined) continue
+      const key = m.name.getText(sf)
+      if (m.type !== undefined && ts.isLiteralTypeNode(m.type) && ts.isStringLiteral(m.type.literal)) {
+        meta[key] = m.type.literal.text
+      } else if (m.type !== undefined && ts.isTupleTypeNode(m.type)) {
+        meta[key] = m.type.elements.map((e) =>
+          ts.isLiteralTypeNode(e) && ts.isStringLiteral(e.literal) ? e.literal.text : e.getText(sf),
+        )
+      } else {
+        meta[key] = m.type === undefined ? null : m.type.getText(sf)
+      }
+    }
+  }
+  return { kind, meta }
+}
+
 function scanDeclarations() {
   // **不按名字去重**：同名常量可以在两个模块里各写一份（DEFAULT_TOP_N 就是），
   // 去重会让「扫到几个」少算，也会漏掉第二处可能被改坏的值。
@@ -347,6 +387,7 @@ function scanDeclarations() {
           file: rel,
           line: sf.getLineAndCharacterOfPosition(d.getStart(sf)).line + 1,
           value,
+          origin: readThresholdOrigin(d, sf),
           form:
             d.initializer !== undefined && ts.isNumericLiteral(d.initializer)
               ? 'literal'
@@ -397,7 +438,8 @@ for (const info of decls) {
     }
     continue
   }
-  if (registered.has(info.name)) continue
+  // 双来源（T65 阶段 1）：登记表里的一条，或常量自己带 `satisfies ThresholdValue<…>`，都算已登记。
+  if (registered.has(info.name) || info.origin !== null) continue
   if (Object.prototype.hasOwnProperty.call(EXEMPT, info.name)) {
     exempted.push({
       name: info.name,
@@ -513,7 +555,39 @@ const exprCount = scanned.filter((d) => d.form === 'expression').length
 //   2. 声明了 divergence.docValue 的，分叉必须真的存在（相等 = 这条该删）；
 //      条目有 design 时，docValue 还必须等于 design.default（同一事实的两份记录）；
 //   3. refs 指向的文件存在、符号在文件里出现 —— 行号会漂，符号不会。
-const assertionProblems = [...displayProblems(), ...divergenceProblems(), ...zodProblems()]
+const ORIGIN_FIELDS = new Set(['measured', 'decided', 'failsWhen', 'guardedBy', 'affects'])
+const ORIGIN_KINDS = new Set(['recheckable', 'chosen'])
+
+/** 类型参数里的字段白名单与 kind 合法性（T65 阶段 1）：写错字段名不会编译报错，只能在这里抓。 */
+function thresholdOriginProblems() {
+  const problems = []
+  for (const d of decls) {
+    if (d.origin === null) continue
+    const where = d.file + ':' + d.line
+    if (d.origin.kind === null || !ORIGIN_KINDS.has(d.origin.kind)) {
+      problems.push(d.name + '（' + where + '）：ThresholdValue 的第一个类型参数必须是 recheckable 或 chosen')
+    }
+    for (const key of Object.keys(d.origin.meta)) {
+      if (ORIGIN_FIELDS.has(key)) continue
+      problems.push(
+        d.name +
+          '（' +
+          where +
+          '）：类型参数里有不认识的字段 ' +
+          key +
+          ' —— 只允许 measured / decided / failsWhen / guardedBy / affects',
+      )
+    }
+  }
+  return problems
+}
+
+const assertionProblems = [
+  ...displayProblems(),
+  ...divergenceProblems(),
+  ...zodProblems(),
+  ...thresholdOriginProblems(),
+]
 const refSites = [
   ...THRESHOLDS.map((e) => [e.name, e.refs ?? []]),
   ...DESIGN_GAPS.map((g) => ['设计文档缺口 ' + g.key, g.refs ?? []]),
