@@ -64,7 +64,7 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 
 ## 4. 登记表怎么读
 
-跑 node scripts/print-thresholds.mjs 得到一张表。2026-10-21 的规模是 137 行（一行可能是一个键的多个取值，也可能是几个同类键排在同一行），分三类：可复算 22 行、由公式算出 10 行、选择 105 行。
+跑 node scripts/print-thresholds.mjs 得到一张表。2026-10-22 的规模是 128 行（一行可能是一个键的多个取值，也可能是几个同类键排在同一行），分三类：可复算 20 行、由公式算出 8 行、选择 100 行。
 
 「由公式算出」是可复算的子类，不是第三种来历：值由代码里的算式推出，算式里的量一变值就跟着变。所以它判可复算，要重跑的不是标定而是复算，字段里写 formula: true，--needs-review 会跳过它。
 
@@ -73,11 +73,12 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 | 名称 | 当前值 | 段 | 来历 | 可变条件 | 定义位置 |
 |---|---|---|---|---|---|
 | DEFAULT_THRESHOLDS.tauJoin | 0.78 | 落位 | 可复算 | 换编码模型；标定语料的领域混合度；误并与漏并的代价评估 | src/pipeline/write.ts:374 |
-| TIER_SCALE_ANCHORS | 12→0.466 / 24→0.47 / 48→0.492 / 96→0.514 / 192→0.514 / 384→0.514 / 768→0.514 / 1374→0.525 | 注入 | 可复算 | 查询集（人工挑的 20 条相关 + 20 条无关）；提问形态（标题式 vs 人工提问，实测差 0.064）；语料族（技术笔记→公开技术文档 +0.075，→社会新闻 +0.113）；换编码模型 | lattice-calib:src/anchors.ts（外部包） |
+| REFERENCE_QUANTILE | 0.9 | 召回判定 | 可复算 | 语料的内容分布（判空率随之变）；内置问句集的主题（用户库本身讲日常生活时线被抬高） | src/pipeline/refdist.ts:80 |
 
-上面 TIER_SCALE_ANCHORS 那一格的数值是副本，权威值是外部包 lattice-calib 里 src/anchors.ts 的锚点表。
-那份表重标之后这一格要跟着改。门禁的 thresholds 项读的是包导出的实际值（在 src/thresholds.ts 里登记、
-由 print-thresholds.mjs 打印），不读这格文字，所以文字过期不会让门禁变红，只会让读文档的人拿到旧数。
+REFERENCE_QUANTILE 是 0.5.0 改机制后新加的：召回判「这次有没有内容」不再比一个绝对分数，而是比
+「48 条与库无关的内置问句在本库各查一次，取各自最高余弦的 90 分位」。这个值由运行时的派生量决定，
+所以它的可变条件是「语料的内容分布」而不是「换编码模型」——换模型会让参考线与查询分数一起移动，
+比值反而稳定。
 
 表尾另有一节「不是数字，所以数值扫描本就捕不到」：SQL 文本、正则、类型枚举这类结构性常量逐条列出，并注明改名时要同步那一节。
 
@@ -85,11 +86,11 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 
 | 命令 | 查什么 | 在门禁里 | 2026-10-21 的结果 |
 |---|---|---|---|
-| node scripts/print-thresholds.mjs | 覆盖核对：有没有未登记的数值常量、定位不到定义处的登记项、写了分叉却没解释的项 | thresholds | 137 行 |
-| 同上加 --check-review | 评审基线：当前待评审条目是否都在基线里、基线里的名字是否仍是真实条目 | thresholds-review | 通过（needsReview 6 条 / unguarded 93 条；基线里已不在结果中的 0 条） |
+| node scripts/print-thresholds.mjs | 覆盖核对：有没有未登记的数值常量、定位不到定义处的登记项、写了分叉却没解释的项 | thresholds | 128 行 |
+| 同上加 --check-review | 评审基线：当前待评审条目是否都在基线里、基线里的名字是否仍是真实条目 | thresholds-review | 通过（needsReview 5 条 / unguarded 84 条；基线里已不在结果中的 0 条） |
 | 同上加 --undated | 可复算、但没有记录测量时间的条目（只是信息，不拦） | thresholds-query | 13 条 |
-| 同上加 --needs-review | 声明可复算、但缺编码模型与语料规模的条目 | 手工 | 6 条 |
-| 同上加 --unguarded | 没有测试按常量名断言默认值的条目 | 手工 | 93 条 |
+| 同上加 --needs-review | 声明可复算、但缺编码模型与语料规模的条目 | 手工 | 5 条 |
+| 同上加 --unguarded | 没有测试按常量名断言默认值的条目 | 手工 | 84 条 |
 | 同上加 --doc-keys | 设计说明的键名 → 代码常量 → 文档给的默认值 | 手工 | 19 条，其中 5 条标着分叉 |
 
 门禁里的三条（thresholds / thresholds-review / thresholds-query）读同一份扫描结果，只读源码，不需要模型与网络。整条门禁在仓库根跑 node scripts/check-all.mjs，**要带上当前分支名**：GIT_BRANCH 没传时脚本打印「分支：未知」，那不叫通过（bash 写法 GIT_BRANCH=$(git branch --show-current) node scripts/check-all.mjs；PowerShell 先设 $env:GIT_BRANCH）。退出码 0 = 全部通过，1 = 任一检查不通过；--undated 进 CI，但它只打印、不判红。
@@ -104,7 +105,7 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 
 ## 6. 评审基线只许变短
 
-待评审条目（缺条件的可复算项、没有测试守住默认值的项）现在共 6 + 93 条，记在 thresholds-review-baseline.json 里。这是一份**临时清单**，规则是只允许变短：
+待评审条目（缺条件的可复算项、没有测试守住默认值的项）现在共 5 + 84 条，记在 thresholds-review-baseline.json 里。这是一份**临时清单**，规则是只允许变短：
 
 1. 名字必须在冻结名册 thresholds-inventory.json 里 —— 凭空加一个名字会红；
 2. 名册里的名字必须仍是真实条目 —— 条目改名或删除，名册与基线要一起改；
@@ -135,8 +136,8 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 - **值本身对不对。** 检查的是「来历字段齐不齐、指得到不到」，不是「0.78 这个数标定得对不对」。标定错了而字段齐全，全绿。
 - **来历判得对不对。** 可复算与选择的划分是人做的。把一条该可复算的写成选择，机器看不出来 —— why 只查非空，不查里面有没有测量数字（第 2 节那个 why 里就写着 0.06，检查照样通过）。剩下的靠评审看。
 - **why 写得好不好。** 「历史如此」也能通过检查。
-- **外部包里的值能不能复算。** 标定包 lattice-calib 的锚点表以「外部包」的身分登记（定义位置写 lattice-calib:src/anchors.ts），本仓库不复算它；那边怎么守住是那个包自己的事，它的边界写在 lattice-calib 包的 src/anchors.ts 头注释与那个仓库 README 的「锚点表的适用边界」一节（2026-10 用公开语料复测：换语料族动 0.075–0.113、换提问形态动 0.064）。
-- **运行时实际生效的值。** 档位阈值登记的是锚点表（12 → 0.466 … 1374 → 0.525），运行时由 briefMinFor(db) 按库的 atom 数在锚点之间插值（log2 尺度、两端夹紧）。表里没有「当前这个库的实际阈值」这一列。
+- **运行时派生量。** 召回判空用的参考线（48 条内置问句在本库各查一次的最高余弦 90 分位）不进这张表：
+它随库现算，不是常量。表里只登记它的分位（REFERENCE_QUANTILE = 0.9），不登记某个库上的实际数值。
 - **非数值的结构性常量。** SQL 文本、正则、类型枚举只列名字，改不改变得靠人发现。
 
 ## 9. 新增一个阈值要做什么

@@ -130,7 +130,7 @@ export function quantile(values: readonly number[], p: number): number {
 }
 
 // 一条连接算一次就够。库变了的判据与向量缓存同源：atom 行数变了就重算。
-// 不在 meta 里落库：它是派生量，落库就又造了一个会漂的副本（见 T68 的教训）。
+// 不在 meta 里落库：它是派生量，落库就又造了一个会漂的副本（结构版本 5 改造时的教训：冗余副本必然漂）。
 const CACHE = new WeakMap<DatabaseSync, { atoms: number; dist: ReferenceDistribution }>()
 
 /** 编码一条文本成向量；编码器不可用时返回 null。 */

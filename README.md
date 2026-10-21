@@ -36,7 +36,7 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ## 特性
 
 - **本地优先**：单文件 SQLite，数据全在本地，无云端依赖
-- **零第三方依赖**：运行时只依赖本项目自研的 `lattice-calib`（标定工具链，自身也不含第三方包）；
+- **零第三方依赖**：运行时不 import 任何外部包（标定工具链 `lattice-calib` 已于 0.5.0 退役）；
   向量模型是**可选**依赖，没装就退回词面检索
 - **中文友好**：针对中文查询的两层检索索引，短词也能命中
 - **结构化**：记忆以「原子」为单位，主题由聚类派生，可随时重算
@@ -50,38 +50,29 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 ## 安装
 
-本插件还没有发布到 npm（它与运行时依赖 [`lattice-calib`](https://github.com/topkie/lattice-calib)
-都不在 npm 上），所以现在只有从源码装这一条路。需要 Node 22 以上、git 与 pnpm ≥ 9（与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。
+本插件还没有发布到 npm，所以现在只有从源码装这一条路。需要 Node 22 以上、git 与 pnpm ≥ 9
+（与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git
-git clone https://github.com/topkie/lattice-calib.git
-
-# 两个都要构建：插件运行时 import 标定包
-cd lattice-calib && pnpm install && pnpm run build && cd ..
-
 cd dsh-lattice
-# 标定包不在 npm 上，而 package.json 里写的是版本范围：直接装会去 registry 找它，报 404。
-# 所以先把这条依赖改成本地路径（会改写本地的 package.json），再装。
-pnpm pkg set "dependencies.lattice-calib=link:../lattice-calib"
 pnpm install --no-frozen-lockfile
 pnpm run build
 ```
 
-构建完把下面两组文件放进宿主 profile 的 `node_modules`（两个目录平级），然后重启宿主：
+构建完把下面一组文件放进宿主 profile 的 `node_modules`，然后重启宿主：
 
 | 目标目录 | 放什么 |
 |---|---|
 | `node_modules/dsh-lattice/` | `dist/`、`lib/`、`package.json`、`cordis.patch.yml` |
-| `node_modules/lattice-calib/` | `dist/`、`package.json` |
 
 profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<profile 名>/`；不确定就找宿主配置里 `profiles/` 所在的那一层。
 只复制 `dist/` 或只复制 `lib/` 会出现「后端是新版、设置页是旧版」，两样要一起复制。
 
 装好后用一次写入与一次召回确认：让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；
-也可以直接调 `lattice_ping`：它返回插件版本、标定状态、数据目录、编码器配置（`off` 或模型名），以及五处缓存的实时占用 —— 编码器是否真的加载成功看 `caches.encoder.state`。
+也可以直接调 `lattice_ping`：它返回插件版本、数据目录、编码器配置（`off` 或模型名），以及五处缓存的实时占用 —— 编码器是否真的加载成功看 `caches.encoder.state`。
 
-卸载：删掉 `node_modules/dsh-lattice/` 与 `node_modules/lattice-calib/`，重启宿主。
+卸载：删掉 `node_modules/dsh-lattice/`，重启宿主。
 记忆数据在独立的数据目录里，不会被这一步删掉。
 
 ## 配置
