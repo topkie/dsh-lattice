@@ -75,6 +75,10 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 | DEFAULT_THRESHOLDS.tauJoin | 0.78 | 落位 | 可复算 | 换编码模型；标定语料的领域混合度；误并与漏并的代价评估 | src/pipeline/write.ts:374 |
 | TIER_SCALE_ANCHORS | 12→0.466 / 24→0.47 / 48→0.492 / 96→0.514 / 192→0.514 / 384→0.514 / 768→0.514 / 1374→0.525 | 注入 | 可复算 | 查询集（人工挑的 20 条相关 + 20 条无关）；提问形态（标题式 vs 人工提问，实测差 0.064）；语料族（技术笔记→公开技术文档 +0.075，→社会新闻 +0.113）；换编码模型 | lattice-calib:src/anchors.ts（外部包） |
 
+上面 TIER_SCALE_ANCHORS 那一格的数值是副本，权威值是外部包 lattice-calib 里 src/anchors.ts 的锚点表。
+那份表重标之后这一格要跟着改。门禁的 thresholds 项读的是包导出的实际值（在 src/thresholds.ts 里登记、
+由 print-thresholds.mjs 打印），不读这格文字，所以文字过期不会让门禁变红，只会让读文档的人拿到旧数。
+
 表尾另有一节「不是数字，所以数值扫描本就捕不到」：SQL 文本、正则、类型枚举这类结构性常量逐条列出，并注明改名时要同步那一节。
 
 ## 5. 能跑的命令
