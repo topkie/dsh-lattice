@@ -98,6 +98,13 @@ export interface RecallMeta {
   vectorMissing: boolean
   /** 被标记为重复而压制的 atom 数。 */
   suppressed: number
+  /**
+   * 因「已被取代」而不出现在结果里的 atom 数（T66）。
+   *
+   * 与 `suppressed` 分开报：重复是两条讲同一件事、取分高的那条；取代是旧条的内容已被
+   * 新条替代、旧条不该再当答案。合成一个数时，「为什么少了一条」不可解释。
+   */
+  suppressedSuperseded: number
   /** 主属命中数 / 次属命中数。 */
   primaryHits: number
   secondaryHits: number
@@ -624,6 +631,36 @@ export const DUP_LEX = 0.72 satisfies ThresholdValue<
   }
 >
 
+/**
+ * 取代压制（T66）：一条记忆被另一条取代时，只要取代它的那条也在本次候选里，就不出被取代的那条。
+ *
+ * **为什么条件是「取代者在候选里」**：取代者这次没命中却把旧条压掉，等于这一组什么都不给 ——
+ * 用户看不到新条，也看不到旧条。旧条是唯一还能用的信息（注入层会标「已被取代」）。
+ *
+ * **为什么不管 final 高低**：重复压制（suppressDuplicates）是「两条讲同一件事」，所以取分高
+ * 的那条；取代是「旧条的内容已经过期」，旧条分再高也是过时答案 —— 只留新条。
+ *
+ * 只跳一跳：A→B→C 这种链只处理 A 被 B 取代，不再追到 C。链式取代目前没有写入方，
+ * 真出现时留给以后按证据处理，不在这里猜。
+ */
+function suppressSuperseded(items: RecallHit[]): { dropped: RecallHit[] } {
+  if (items.length === 0) return { dropped: [] }
+  const alive = new Set(items.map((h) => h.id))
+  const dropped: RecallHit[] = []
+  for (const h of items) {
+    const by = h.supersededBy
+    if (by === null || by === h.id) continue // 自指是数据损坏，不据此压制
+    if (!alive.has(by)) continue // 取代者不在候选里：保留旧条
+    dropped.push(h)
+  }
+  if (dropped.length === 0) return { dropped }
+  const drop = new Set(dropped.map((h) => h.id))
+  const kept = items.filter((h) => !drop.has(h.id))
+  items.length = 0
+  items.push(...kept)
+  return { dropped }
+}
+
 function suppressDuplicates(
   db: DatabaseSync,
   items: RecallHit[],
@@ -828,8 +865,24 @@ export function recall(
       if (c > topCosine) topCosine = c
     }
   }
+  // 先取代、后重复：取代是 O(n) 的一次扫，先跑能减少重复检测的输入（那个是组内 O(n²)）。
+  const superseded = suppressSuperseded(hits)
   const suppressed = suppressDuplicates(db, hits, vecMap)
-  const kept = hits.slice(0, topN)
+  let kept = hits.slice(0, topN)
+  // 取代者可能只在候选集里、没进最终的 topN（比如查询与那一组都不太相关）。那种时候把旧条
+  // 压掉等于这一组什么都不给 —— 恢复旧条，注入层会标「已被取代」，比「一条都没有」有用。
+  // 判据是「压掉之后取代者在不在结果里」，所以必须等 topN 截断之后才能判，不能在压制那一步判。
+  let suppressedSuperseded = superseded.dropped.length
+  if (superseded.dropped.length > 0) {
+    const keptIds = new Set(kept.map((h) => h.id))
+    const restore = superseded.dropped.filter((h) => h.supersededBy !== null && !keptIds.has(h.supersededBy))
+    if (restore.length > 0) {
+      hits.push(...restore)
+      hits.sort((a, b) => b.final - a.final)
+      kept = hits.slice(0, topN)
+      suppressedSuperseded -= restore.length
+    }
+  }
 
   // 命中的主题汇总：注入层据此生成「入口」段。
   const topicCount = new Map<number, number>()
@@ -856,6 +909,7 @@ export function recall(
       shortTermMiss,
       vectorMissing: queryVec === null,
       suppressed,
+      suppressedSuperseded,
       topCosine,
       primaryHits,
       secondaryHits,

@@ -539,6 +539,8 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   // 确认清单只在这里转成 Set 一次：它在三段渲染里每次 build() 都要查，而 hits 最多几十条。
   const splitConfirmed = new Set(recalled.meta.splitConfirmed ?? [])
   const splitSegments = new Map(recalled.meta.splitPendingSegments ?? [])
+  // 被取代而没有出现在结果里的条数（T66）。锚段末尾给一句，读者才知道「少的那条」不是丢了。
+  const supersededDropped = recalled.meta.suppressedSuperseded ?? 0
   const anchorQuota = Math.floor(budget * SEGMENT_RATIO.anchors)
   const entryQuota = Math.floor(budget * SEGMENT_RATIO.entries)
   const pathQuota = Math.floor(budget * SEGMENT_RATIO.paths)
@@ -625,6 +627,7 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
 
     const parts: string[] = ['【锚】', ...anchorLines]
     if (otherRelated > 0) parts.push('[该主题下另有 ' + otherRelated + ' 条相关记忆]')
+    if (supersededDropped > 0) parts.push('[另有 ' + supersededDropped + ' 条已被取代，未列出]')
     if (entryLines.length > 0) parts.push('', '【入口】', ...entryLines)
     if (kept.length > 0) parts.push('', '【路】', ...kept)
     return {
