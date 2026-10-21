@@ -61,8 +61,10 @@ git clone https://github.com/topkie/lattice-calib.git
 cd lattice-calib && pnpm install && pnpm run build && cd ..
 
 cd dsh-lattice
-# 标定包还没发到 npm，把刚构建的这份装成依赖（会写进本地的 package.json）
-pnpm add ../lattice-calib
+# 标定包不在 npm 上，而 package.json 里写的是版本范围：直接装会去 registry 找它，报 404。
+# 所以先把这条依赖改成本地路径（会改写本地的 package.json），再装。
+pnpm pkg set "dependencies.lattice-calib=link:../lattice-calib"
+pnpm install --no-frozen-lockfile
 pnpm run build
 ```
 

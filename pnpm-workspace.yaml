@@ -3,8 +3,17 @@
 # 下会装出空目录或缺失包。平铺方式牺牲少量隔离性，换取到处都能装。
 nodeLinker: hoisted
 
-# pnpm 默认忽略所有依赖的构建脚本；下面这些必须放行，否则原生二进制不可用。
+# pnpm 默认忽略依赖的构建脚本；下面这些必须放行，否则原生二进制不可用。
+# 放行清单要写两遍：pnpm 10 及以前读 onlyBuiltDependencies（列表），
+# pnpm 11 改成 allowBuilds（对象），旧字段会被静默忽略。两个都留着，各版本读各自认识的。
 onlyBuiltDependencies:
   - esbuild
   - onnxruntime-node
+  - protobufjs
   - sharp
+
+allowBuilds:
+  esbuild: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: true

@@ -45,6 +45,15 @@
 
 这一版不是「全部做完」。下面是使用者会遇到的限制，每条给出影响与一条自查命令。
 
+#### 安装时要先改一条依赖的写法
+
+标定包 `lattice-calib` 不在 npm 上，而仓库的 `package.json` 把它写成版本范围 `^0.1.0`，
+锁文件里也没有它的记录。照这个写法直接装，包管理器会去 registry 找它并返回 404。
+要先按 README 把那一条改成本地路径（`pnpm pkg set "dependencies.lattice-calib=link:../lattice-calib"`）
+再装。改的是 clone 下来的 `package.json`，不动仓库本身。
+
+自查：`grep lattice-calib package.json` 看到 `link:` 就对了，看到 `^0.1.0` 说明还没改。
+
 #### 检索质量只在中文上测过
 
 基准用的是内部中文库：1374 条记忆、44 条中文查询（其中 20 条有目标答案），Recall@5 0.75（15/20）、
