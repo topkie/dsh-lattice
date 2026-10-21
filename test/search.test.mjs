@@ -11,7 +11,14 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
 import { VEC_DIM } from '../dist/util/vec.js'
 import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
-import { invalidateVecCache, recall, fuse, CHANNEL_WEIGHT, AFFILIATION } from '../dist/pipeline/search.js'
+import {
+  invalidateVecCache,
+  recall,
+  fuse,
+  CHANNEL_WEIGHT,
+  AFFILIATION,
+  DUP_TEXT,
+} from '../dist/pipeline/search.js'
 
 let dbFile = ''
 let db = null
@@ -171,16 +178,39 @@ describe('召回：归属因子与重复压制', () => {
     assert.equal(hit.final, hit.score, '主属命中时 final 与 score 相等')
   })
 
-  it('同主题内高度重复的两条只留 final 高的一条', async () => {
+  it('真重复判据 DUP_TEXT 默认 0.7：逐字相同 1.000 过线，同篇不同小节 0.24–0.57 不过线', () => {
+    assert.equal(DUP_TEXT, 0.7)
+  })
+
+  it('同一来源内逐字重复只留 final 高的一条', async () => {
     const A = oneHot(9)
-    // 两条向量完全相同、正文几乎相同 => cos 1.0、词面重叠极高 => 判为重复
+    // 两条向量完全相同、正文逐字相同、来源相同 => 3-gram 覆盖度 1.0 => 判为真重复
+    const ids = await seed(db, [
+      ['系统代理必须走本地端口，否则访问境外源会直接超时。', A],
+      ['系统代理必须走本地端口，否则访问境外源会直接超时。', A],
+    ])
+    for (const id of ids) {
+      db.prepare('UPDATE atom SET source_ref = ? WHERE id = ?').run('同一篇.md', id)
+    }
+    invalidateVecCache(db)
+    const r = recall(db, '代理', null, {})
+    assert.equal(r.meta.suppressed, 1, '同一来源内应当压制掉一条')
+    assert.equal(r.hits.filter((h) => ids.includes(h.id)).length, 1)
+  })
+
+  it('来源为空时逐字重复也不压制：没有来源就证明不了同源', async () => {
+    // 旧实现按主题分桶，把「同主题」当成「可能重复」；实测三个库 59%–90% 的同篇条目
+    // 落在不同主题，同主题不是重复的依据。来源为空时更窄：没有来源，两条逐字相同也
+    // 分不清是同一篇被写了两遍，还是两个不同的人各写了一遍 —— 压制会把后者的信息
+    // 永久丢掉，而用户看不见。
+    const A = oneHot(9)
     const ids = await seed(db, [
       ['系统代理必须走本地端口，否则访问境外源会直接超时。', A],
       ['系统代理必须走本地端口，否则访问境外源会直接超时。', A],
     ])
     const r = recall(db, '代理', null, {})
-    assert.equal(r.meta.suppressed, 1, '应当压制掉一条')
-    assert.equal(r.hits.filter((h) => ids.includes(h.id)).length, 1)
+    assert.equal(r.meta.suppressed, 0, '来源为空时不得按内容互压')
+    assert.equal(r.hits.filter((h) => ids.includes(h.id)).length, 2)
   })
 
   it('同主题但内容不同则不压制', async () => {

@@ -12,7 +12,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
-import { bigramTerms, jaccard } from '../util/text.js'
+import { bigramTerms } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
 import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { FLAG_ARCHIVED } from '../db/flags.js'
@@ -60,6 +60,13 @@ export interface RecallOptions {
   scope?: string
   /** 融合后可再截断到更少（注入层预算不足时用），但要先做归属加权。 */
   dropInactive?: boolean
+  /**
+   * 判「这次召回有没有内容」的参考线与它的可用性（见 pipeline/refdist.ts）。
+   *
+   * 由调用方算好传入，不在这里算：参考线要把 48 条内置问句各编码一次（首次约 1 秒），
+   * 而 recall 是同步函数、本模块也不加载模型。不传时不做判定，meta.hasContent 为 null。
+   */
+  reference?: { line: number; usable: boolean; reason: string }
 }
 
 /** 一条命中。分数字段全部保留 —— 调参与事后复盘都要靠它们。 */
@@ -84,6 +91,8 @@ export interface RecallHit {
    * 位定义只有 write.ts 一处，读侧按位取用，不新造第二套状态字段。
    */
   flags: number
+  /** 来源标识，写入时给的那个值；没有则为 null。 */
+  source: string | null
 }
 
 /** 召回元数据。退化必须可观测，不允许静默失效。 */
@@ -146,6 +155,18 @@ export interface RecallMeta {
    * 缺项（老库没有这个键）按空数组处理，锚行退回不带段数的固定串。
    */
   splitPendingSegments: Array<[number, number]>
+  /**
+   * 这次召回有没有内容：`topCosine` 是否越过本库参考线。
+   *
+   * `null` 有三种来源（无参考线、库太小、线太高），区别在 `referenceReason` 里。
+   * 三态而不是布尔：把「判不了」和「判了没有」合成 false，回执就只能说「没有内容」，
+   * 而那正好是判不了时最不该说的话。
+   */
+  hasContent: boolean | null
+  /** 判定用的线；判不了时为 null。 */
+  referenceLine: number | null
+  /** 参考线的可用性：ok / no-encoder / library-too-small / line-too-high / none。 */
+  referenceReason: string
   elapsedMs: number
 }
 
@@ -171,6 +192,8 @@ interface AtomRow {
   origin: string
   supersededBy: number | null
   flags: number
+  /** 来源标识（同一份材料分几次写入时相同）。真重复压制按它分桶。 */
+  source: string | null
 }
 
 /**
@@ -209,7 +232,7 @@ export function vecCacheUsage(db: DatabaseSync): { cached: boolean; entries: num
   return { cached: true, entries: hit.ids.length }
 }
 
-function loadVecCache(db: DatabaseSync): VecCache {
+export function loadVecCache(db: DatabaseSync): VecCache {
   const hit = VEC_CACHE.get(db)
   if (hit !== undefined) {
     // 用行数做失效探测：写入侧可能绕过本模块（测试、迁移脚本、别的进程），
@@ -632,6 +655,55 @@ export const DUP_LEX = 0.72 satisfies ThresholdValue<
 >
 
 /**
+ * 召回层的真重复判据：字符 3-gram 覆盖度。
+ *
+ * 与上面的 `DUP_COS` / `DUP_LEX` 不是一回事 —— 那两个定义库里「两个 atom 算不算重复」，
+ * 是 `atom_pair` 表的判据，写入侧、图推断、聚类重建都在用。这条只服务召回时的压制，
+ * 它面对的条件更差：只看得见这次候选，且必须避免误压。
+ *
+ * 为什么用字符 3-gram 覆盖度而不是余弦：真重复对的余弦可以低到 0.42（同一段话被切成
+ * 两条、各自带进了不同的上下文），用余弦筛会全部漏掉。为什么用覆盖度而不是 Jaccard：
+ * 一条是另一条的前缀时（切分造成的重复常态），Jaccard 只有 0.5 上下，覆盖度接近 1.0。
+ *
+ * 取 0.7 的依据：逐字相同的两段实测 1.000；同一条记忆被切断、大半相同尾部不同 0.860；
+ * 「系统代理必须走本地端口……」对「系统代理配置本地端口……」0.242（它们各有一条信息，
+ * 不该折叠）；同一份材料里不同小节之间 0.24–0.57。0.7 落在「逐字重复」与「同一篇的
+ * 不同内容」之间，宁漏压不误压。
+ */
+export const DUP_TEXT = 0.7 satisfies ThresholdValue<
+  'recheckable',
+  {
+    area: '重排去重'
+    tool: '无脚本（构造的对照句对，直接算字符 3-gram 覆盖度）'
+    finding: '逐字相同 1.000、切断留尾 0.860、同一篇不同小节 0.24–0.57、各有信息的近义改写 0.242；0.7 落在逐字重复与同篇不同内容之间'
+    failsWhen: [
+      '语言与书写粒度（代码块、表格里 3-gram 的重复率与散文不同）',
+      '极短 atom（少于 3 个字符时没有 3-gram）',
+    ]
+    scale: '三个语料共 4216 个 atom（同来源组内 top3 比较）+ 5 组构造句对'
+    guardedBy: ['test/search.test.mjs']
+    affects: '召回压制：同一来源（source）桶内 3-gram 覆盖度达到此值即判为真重复；来源为空的条目不参与比较（没有来源证明不了同源）'
+  }
+>
+
+/**
+ * 全库最高余弦：给定查询向量，库内所有有向量的 atom 里最高的那个相似度。
+ *
+ * 与 `vecPath`（按 kVec 截断）不同，它不做截断 —— 判「有没有内容」要的就是这个数。
+ * 拿候选池内最高分代替它会把「库很大但这次候选少」错判成没内容，而候选池大小是
+ * 容量选择（topN），不该影响「库里有不有相关内容」这个事实。
+ */
+export function top1Cosine(db: DatabaseSync, queryVec: Float32Array): number {
+  const cache = loadVecCache(db)
+  let best = -1
+  for (let i = 0; i < cache.vecs.length; i++) {
+    const c = cosine(queryVec, cache.vecs[i]!)
+    if (c > best) best = c
+  }
+  return best < 0 ? 0 : best
+}
+
+/**
  * 取代压制：一条记忆被另一条取代时，只要取代它的那条也在本次候选里，就不出被取代的那条。
  *
  * **为什么条件是「取代者在候选里」**：取代者这次没命中却把旧条压掉，等于这一组什么都不给 ——
@@ -661,38 +733,85 @@ function suppressSuperseded(items: RecallHit[]): { dropped: RecallHit[] } {
   return { dropped }
 }
 
-function suppressDuplicates(
-  db: DatabaseSync,
-  items: RecallHit[],
-  vectors: Map<number, Float32Array>,
-): number {
-  const byTopic = new Map<number, RecallHit[]>()
+/** 字符 3-gram。中文没有空格可切，按字符切才对得上「几乎逐字重复」这个直觉。 */
+function trigramsOf(text: string): Set<string> {
+  const t = text.replace(/\s+/g, ' ')
+  const out = new Set<string>()
+  for (let i = 0; i + 3 <= t.length; i++) out.add(t.slice(i, i + 3))
+  return out
+}
+
+/** 覆盖度：小集合里有多大比例出现在大集合里。一条是另一条的前缀时接近 1.0。 */
+function coverageOf(a: Set<string>, b: Set<string>): number {
+  const [small, big] = a.size <= b.size ? [a, b] : [b, a]
+  if (small.size === 0) return 0
+  let n = 0
+  for (const g of small) if (big.has(g)) n++
+  return n / small.size
+}
+
+/** 只读候选集的正文。压制是唯一需要正文的环节（摘要太短，3-gram 比不出重复）。 */
+function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
+  const out = new Map<number, string>()
+  if (ids.length === 0) return out
+  const ph = ids.map(() => '?').join(', ')
+  const rows = db.prepare('SELECT id, text FROM atom WHERE id IN (' + ph + ')').all(...ids) as Array<{
+    id: number | bigint
+    text: string
+  }>
+  for (const r of rows) out.set(Number(r.id), String(r.text))
+  return out
+}
+
+/**
+ * 真重复压制：同一来源内逐字重复的两条只留一条。
+ *
+ * 分桶单位是 `source`（写入时给的那个值），不是主题：同一个主题下讲两件事是常态
+ * （实测三个库 59%–90% 的同篇条目落在不同主题），拿主题分桶会把它们放进同一组去比；
+ * 反过来同一来源才可能逐字重复。`source` 为空时**不进任何桶** —— 没有来源就证明不了
+ * 同源，而整库一个桶等于让全库互相比。实测后果：手写记忆里「系统代理必须走本地端口…」
+ * 与「系统代理配置本地端口…」的 3-gram 覆盖度是 0.800，会被判成真重复压掉一条，
+ * 而这两条在写入侧早就过了 `DUP_COS`/`DUP_LEX` 那一层。传了 `source` 的条目才参与比较。
+ *
+ * 判据只看文本重叠，不看余弦（见 DUP_TEXT 的说明）。
+ */
+function suppressDuplicates(db: DatabaseSync, items: RecallHit[]): number {
+  if (items.length < 2) return 0
+  const texts = loadTexts(
+    db,
+    items.map((h) => h.id),
+  )
+  const bySource = new Map<string, RecallHit[]>()
   for (const h of items) {
-    if (h.topicId <= 0) continue
-    const arr = byTopic.get(h.topicId) ?? []
+    if (h.source === null) continue
+    const arr = bySource.get(h.source) ?? []
     arr.push(h)
-    byTopic.set(h.topicId, arr)
+    bySource.set(h.source, arr)
   }
-  const lexOf = new Map<number, Set<string>>()
-  for (const h of items) lexOf.set(h.id, bigramTerms(h.summary))
   const dropped = new Set<number>()
-  for (const bucket of byTopic.values()) {
+  for (const bucket of bySource.values()) {
     if (bucket.length < 2) continue
     bucket.sort((a, b) => b.final - a.final)
-    for (let i = 0; i < bucket.length; i++) {
-      const a = bucket[i]!
-      if (dropped.has(a.id)) continue
-      const va = vectors.get(a.id)
-      if (va === undefined) continue
-      for (let j = i + 1; j < bucket.length; j++) {
-        const b = bucket[j]!
-        if (dropped.has(b.id)) continue
-        const vb = vectors.get(b.id)
-        if (vb === undefined) continue
-        if (cosine(va, vb) < DUP_COS) continue
-        if (jaccard(lexOf.get(a.id)!, lexOf.get(b.id)!) < DUP_LEX) continue
-        dropped.add(b.id) // final 更低的进「另有 N 条」
+    const kept: Array<{ id: number; grams: Set<string>; len: number }> = []
+    for (const h of bucket) {
+      if (dropped.has(h.id)) continue
+      const body = texts.get(h.id)
+      if (body === undefined) continue
+      const grams = trigramsOf(body)
+      if (grams.size === 0) continue
+      let dup = false
+      for (const prev of kept) {
+        // 长度预筛：覆盖度的上界是 min/max，长度差一倍以上时不可能达到 0.7，
+        // 直接跳过。候选多时这一条把 O(n²) 的比较砍掉大半。
+        const ratio = Math.min(prev.len, body.length) / Math.max(prev.len, body.length)
+        if (ratio < DUP_TEXT) continue
+        if (coverageOf(grams, prev.grams) >= DUP_TEXT) {
+          dup = true
+          break
+        }
       }
+      if (dup) dropped.add(h.id)
+      else kept.push({ id: h.id, grams, len: body.length })
     }
   }
   if (dropped.size === 0) return 0
@@ -709,7 +828,9 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
   const ph = ids.map(() => '?').join(', ')
   const rows = db
     .prepare(
-      'SELECT id, topic_id, fit, summary, origin, superseded_by, flags FROM atom WHERE id IN (' + ph + ')',
+      'SELECT id, topic_id, fit, summary, origin, superseded_by, flags, source_ref FROM atom WHERE id IN (' +
+        ph +
+        ')',
     )
     .all(...ids) as Array<{
     id: number | bigint
@@ -719,6 +840,7 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
     origin: string
     superseded_by: number | bigint | null
     flags: number | bigint | null
+    source_ref: string | null
   }>
   for (const r of rows) {
     out.set(Number(r.id), {
@@ -729,6 +851,7 @@ function loadAtomInfo(db: DatabaseSync, ids: number[]): Map<number, AtomRow> {
       origin: String(r.origin),
       supersededBy: r.superseded_by === null ? null : Number(r.superseded_by),
       flags: r.flags === null ? 0 : Number(r.flags),
+      source: r.source_ref === null ? null : String(r.source_ref),
     })
   }
   return out
@@ -784,6 +907,7 @@ export function recall(
   const kGraph = opts.kGraph ?? K_GRAPH
   const topN = opts.topN ?? RECALL_TOP_N
   const scope = opts.scope
+  const reference = opts.reference
 
   const q = String(query ?? '').trim()
   const terms = bigramTerms(q)
@@ -830,6 +954,7 @@ export function recall(
   const vecCache = loadVecCache(db)
   let primaryHits = 0
   let secondaryHits = 0
+  let maxCosine = 0
   for (const [id, acc] of rankOrdered) {
     const row = info.get(id)
     if (row === undefined) continue
@@ -840,10 +965,24 @@ export function recall(
     else primaryHits++
     const v = vecCache.vecs[vecCache.offset.get(id) ?? -1]
     if (v !== undefined) vecMap.set(id, v)
+    // 排序分就是余弦，不是融合分乘归属因子（决定记录 A1 / 第 17 条）。
+    //
+    // 为什么必须换成同一个量：融合分与「有多相关」不是一回事 —— 它是 w/(60+名次) 逐路
+    // 累加，top1 恒在 0.0164 附近，只携带「命中几路、排第几」，没有相关性的语义。原先
+    // 排序用融合分、判档用余弦，等于同一批结果被两把刻度量了两次。实测在技术笔记与新闻
+    // 上，融合分下相关查询的 p10 低于无关查询的 p90（分不开），余弦下三个库都分得开。
+    //
+    // 没有查询向量（纯词面召回）时退回融合分：那时余弦无从算起，meta.vectorMissing 会说明。
+    let final = acc.score
+    if (v !== undefined && queryVec !== null) {
+      const c = cosine(queryVec, v)
+      final = c
+      if (c > maxCosine) maxCosine = c
+    }
     hits.push({
       id,
       score: acc.score,
-      final: acc.score * aff,
+      final,
       topicId: row.topicId,
       fit: row.fit,
       summary: row.summary,
@@ -852,22 +991,17 @@ export function recall(
       flags: row.flags,
       ranks: acc.ranks,
       affiliation: aff,
+      source: row.source,
     })
   }
+  // 余弦降序。判定（分位线）与排序用同一个量，所以「装进来的第一条」就是判据看的那个分 ——
+  // 这也让分位线的含义可以被用户自己核对：他自己编码一句问句，算一遍库里的最高余弦即可。
   hits.sort((a, b) => b.final - a.final)
   // 最高余弦：只统计有向量的命中（词面命中也在列表里，但它们不带余弦）。
-  let topCosine = 0
-  if (queryVec !== null) {
-    for (const h of hits) {
-      const v = vecMap.get(h.id)
-      if (v === undefined) continue
-      const c = cosine(queryVec, v)
-      if (c > topCosine) topCosine = c
-    }
-  }
+  const topCosine = maxCosine
   // 先取代、后重复：取代是 O(n) 的一次扫，先跑能减少重复检测的输入（那个是组内 O(n²)）。
   const superseded = suppressSuperseded(hits)
-  const suppressed = suppressDuplicates(db, hits, vecMap)
+  const suppressed = suppressDuplicates(db, hits)
   let kept = hits.slice(0, topN)
   // 取代者可能只在候选集里、没进最终的 topN（比如查询与那一组都不太相关）。那种时候把旧条
   // 压掉等于这一组什么都不给 —— 恢复旧条，注入层会标「已被取代」，比「一条都没有」有用。
@@ -899,6 +1033,11 @@ export function recall(
   const lexicalDegraded = E.length === 0 && B.length === 0 && A.length > 0
   const shortTermMiss = E.length === 0 && shorts.length > 0
 
+  // 判定：这次召回有没有内容。判的是 `maxCosine`（全库最高），不是 `kept[0]` ——
+  // 后者受候选池与压制影响，会让「库里有相关内容但这次没选进来」看起来像「库里没有」。
+  // 判据不可用（库太小、线太高、没有参考线）时给 null，由回执说明判不了的原因。
+  const hasContent = reference === undefined || !reference.usable ? null : topCosine >= reference.line
+
   return {
     hits: kept,
     topics,
@@ -911,6 +1050,9 @@ export function recall(
       suppressed,
       suppressedSuperseded,
       topCosine,
+      hasContent,
+      referenceLine: reference !== undefined && reference.usable ? reference.line : null,
+      referenceReason: reference?.reason ?? 'none',
       primaryHits,
       secondaryHits,
       // 只读一次 meta（一个键）。它不进任何打分，只决定锚行那句提示的措辞。

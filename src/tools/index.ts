@@ -31,6 +31,7 @@ import {
   writeReviewed,
 } from '../pipeline/write.js'
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { referenceFor } from '../pipeline/refdist.js'
 import {
   getRuntime,
   maybeRecalibrate,
@@ -461,7 +462,14 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       // 之后才读，同一次召回就会「按旧参数召回、按新参数注入」，中间隔了一次换代。
       const calibParams = rt.calibration.params ?? null
       const vq = await runtimeEncode(cfg, q)
-      const recalled = recall(rt.db, q, vq, { topN: cfg.topN })
+      // 参考线：一个与库无关的问题在本库最高能拿到多少余弦。首次要把 48 条内置问句各
+      // 编码一次（约 1 秒），之后按 atom 行数缓存，稳态零成本。编码器不可用时它返回
+      // usable: false，判定随之为 null —— 那时不判，比按一条不存在的线判成「没内容」好。
+      const ref = await referenceFor(rt.db, (text) => runtimeEncode(cfg, text))
+      const recalled = recall(rt.db, q, vq, {
+        topN: cfg.topN,
+        reference: { line: ref.p90, usable: ref.usable, reason: ref.reason },
+      })
       // 降级留痕：只入队，不阻塞召回（见 src/log/index.ts 的队列与批量窗口）。
       noteRecallDegradations(recalled.meta)
       const view = assembleView(rt.db, recalled, {
