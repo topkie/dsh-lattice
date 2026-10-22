@@ -100,6 +100,10 @@ function missingTables(text, tables) {
 const NON_REPO = new Map([
   ['snapshot.json', '`snapshot-baseline.mjs` 的产物，落在 `.probe/snap/<名字>/` 下（`.probe/` 被忽略）'],
   ['AGENTS.local.md', '本机私有的开发约定补充，**不进版本控制**（`AGENTS.md` 第五节规定的载体）'],
+  [
+    'thresholds-review-baseline.json',
+    '0.9.0 起已删除：它记的 83 条待评审项按类写进了 CHANGELOG 的「已知限制」，文档在说明这次处置时仍会提到这个文件名',
+  ],
 ])
 
 /** 全仓库收集文件名（不含目录），用于「文档只写了文件名」的情形。 */

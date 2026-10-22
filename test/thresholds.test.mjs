@@ -6,6 +6,10 @@
 //   ② 三个查询按判据列条目，且只处理迁移过的（有 origin 的）条目；
 //   ③ 评审基线的规则各构造一次：凭空加名、已登记但不在冻结名册的条目写进基线、删理由、
 //      改名、删一条已解决的项。
+//
+// 基线文件 thresholds-review-baseline.json 已删除（它的 83 条按类写进了 CHANGELOG 的「已知限制」），
+// 所以第 ③ 部分用当前查询结果现构造一份等价基线 —— 测的是 reviewBaselineProblems 的四条规则，
+// 不是「某个文件里恰好有多少条」。冻结名册 thresholds-inventory.json 仍在，照旧读。
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +29,6 @@ import {
 } from '../dist/thresholds.js'
 
 const TYPES_FILE = fileURLToPath(new URL('./thresholds-origin.types.ts', import.meta.url))
-const BASELINE_FILE = fileURLToPath(new URL('../thresholds-review-baseline.json', import.meta.url))
 const INVENTORY = JSON.parse(
   readFileSync(fileURLToPath(new URL('../thresholds-inventory.json', import.meta.url)), 'utf8'),
 )
@@ -226,7 +229,12 @@ describe('阈值来历：分叉声明必须成立', () => {
 })
 
 describe('阈值来历：评审基线的四条规则', () => {
-  const baseline = JSON.parse(readFileSync(BASELINE_FILE, 'utf8'))
+  // 基线文件已删除（83 条按类写进了 CHANGELOG 的「已知限制」），这里用当前查询结果现构造一份
+  // 等价基线：当前待评审项就是「存量」，每条给一个测试用理由。
+  const baseline = {
+    needsReview: Object.fromEntries(needsReviewEntries(THRESHOLDS).map((e) => [e.name, '测试用理由'])),
+    unguarded: Object.fromEntries(unguardedEntries(THRESHOLDS).map((e) => [e.name, '测试用理由'])),
+  }
 
   it('规则 1：基线里凭空加一个名字 → 红', () => {
     const bad = { ...baseline, unguarded: { ...baseline.unguarded, NOT_A_THRESHOLD: '凑数' } }
@@ -282,7 +290,9 @@ describe('阈值来历：评审基线的四条规则', () => {
   it('规则 4：删掉一条当前不在结果中的基线项 → 绿（只允许变短）', () => {
     // 构造一条「已解决」项：名字是登记表里真实存在的条目，且不在当前 unguarded 结果里。
     const current = new Set(unguardedEntries(THRESHOLDS).map((e) => e.name))
-    const resolved = THRESHOLDS.find((e) => e.calibration?.origin !== undefined && !current.has(e.name))
+    const resolved = THRESHOLDS.find(
+      (e) => e.calibration?.origin !== undefined && !current.has(e.name) && INVENTORY.names.includes(e.name),
+    )
     if (resolved === undefined) return
     const withExtra = {
       ...baseline,

@@ -11,16 +11,21 @@
 //   node scripts/print-thresholds.mjs --needs-review   声明可复算、但缺编码模型与语料规模的条目
 //   node scripts/print-thresholds.mjs --unguarded      没有测试按常量名断言默认值的条目
 //   node scripts/print-thresholds.mjs --undated        可复算、非公式、但没有记录测量时间的条目（只是信息）
-//   node scripts/print-thresholds.mjs --check-review   评审基线检查（门禁调用；失败即非零退出）
+//   node scripts/print-thresholds.mjs --check-review   待评审条数（门禁调用）：基线文件已删除，
+//                                                      只打印当前条数并退出 0；基线文件若又出现，仍按存量比对
 //   node scripts/print-thresholds.mjs --doc-keys       设计说明键名 → 常量 → 文档默认值（文档改动后定位条目）
+//
+// 三个查询都可以加 --area=<段> 只看一类：段名就是输出里「｜」后那一段（入口 / 落位 / 召回融合 …）。
+// 例：node scripts/print-thresholds.mjs --unguarded --area=注入
 //
 // 三个查询只读登记表，不写库、不改源码；那次迁移完成后每条都有 origin。
 //
-// 用法：node scripts/print-thresholds.mjs [--md] [--quiet]
+// 用法：node scripts/print-thresholds.mjs [--md] [--quiet] [--area=<段>]
 //
-// 退出码：0 = 覆盖核对与评审基线都通过；
+// 退出码：0 = 覆盖核对通过。--check-review 在基线文件不存在时也返回 0：那份临时清单已按类写进
+//             CHANGELOG 的「已知限制」，新增常量仍由覆盖核对守；
 //         1 = 有未登记常量 / 默认值被藏进运行时对象 / 分叉未解释 /
-//             评审基线不满足（--check-review）。
+//             基线文件存在但存量比对不满足（--check-review）。
 //
 // 为什么用 AST 而不是一行正则：正则只认「整行恰好是 const X = 裸数字」，表达式型常量
 // （12 * 3600 * 1000、5 * 1024）完全隐身 —— 2026-10-20 实测过：追加一行表达式常量，脚本
@@ -75,9 +80,26 @@ const QUERIES = {
   undated: () => undatedEntries(ENTRIES).map((e) => ({ name: e.name, area: e.area, detail: '' })),
 }
 
+/** --area=<段>：三种查询都可以只看一类。段名从输出里抄，不另立一套名字。 */
+function areaOf() {
+  const arg = process.argv.find((a) => a.startsWith('--area='))
+  return arg === undefined ? undefined : arg.slice('--area='.length)
+}
+
 function renderQuery(mode) {
-  const rows = QUERIES[mode]()
-  console.log('# --' + mode + '：' + rows.length + ' 条')
+  const area = areaOf()
+  const all = QUERIES[mode]()
+  const rows = area === undefined ? all : all.filter((r) => r.area === area)
+  const label = area === undefined ? '' : ' --area=' + area
+  console.log(
+    '# --' +
+      mode +
+      label +
+      '：' +
+      rows.length +
+      ' 条' +
+      (area === undefined ? '' : '（全表 ' + all.length + ' 条）'),
+  )
   if (rows.length === 0) console.log('（空）')
   for (const r of rows) {
     console.log('- ' + r.name + ' ｜ ' + r.area + (r.detail === '' ? '' : ' ｜ ' + r.detail))
@@ -85,9 +107,14 @@ function renderQuery(mode) {
 }
 
 /**
- * 评审基线：把当前还没条件补的条目记成一份存量清单，只允许变短。
+ * 待评审条数：基线文件已删除时打印当前存量；文件又出现时仍按存量比对。
  *
- * 四条规则（任何一条不满足都非零退出）：
+ * 为什么默认动作不再是「文件不存在就红」：那份临时清单已经「转化」—— 83 条按管线分段归并成
+ * CHANGELOG 里对外可读的「已知限制」，每类带一条自查命令。文件删了就再没有存量可比对，
+ * 要它才能通过等于把已转化的债务留在门禁里；而门禁第 5 项（thresholds）仍然守着
+ * 「新增常量必须登记」，所以这一项现在的价值是**把存量条数报出来**，不是静默放行。
+ *
+ * 文件存在时的四条规则（任何一条不满足都非零退出）：
  * 1. 每条必须带理由 —— 空字符串不算理由；
  * 2. 基线里的名字必须是登记表里真实存在的条目 —— 「新增一个名字」与「条目删了、基线还在」
  *    都会在这里红（后者就是「删除时留转到哪去了」的机器检查面：条目真删了，基线要一起删）；
@@ -97,10 +124,20 @@ function renderQuery(mode) {
 function checkReviewBaseline() {
   const BASELINE = join(ROOT, 'thresholds-review-baseline.json')
   if (!existsSync(BASELINE)) {
-    console.error('评审基线不存在：' + 'thresholds-review-baseline.json')
-    console.error('修法：新建该文件，写 { "_note": "…", "needsReview": {}, "unguarded": {} }；')
-    console.error('去哪看：docs/DEVELOPMENT.md「阈值登记」一节。')
-    process.exit(1)
+    // 不静默通过：把当前条数打出来，读日志的人才知道存量是多少、去了哪里。
+    const current = { needsReview: QUERIES['needs-review'](), unguarded: QUERIES.unguarded() }
+    console.log('评审基线：已删除 —— 存量比对不再执行，只报当前待评审条数。')
+    console.log(
+      '  当前 --needs-review ' +
+        current.needsReview.length +
+        ' 条；--unguarded ' +
+        current.unguarded.length +
+        ' 条。这 ' +
+        (current.needsReview.length + current.unguarded.length) +
+        ' 条已按类写进 CHANGELOG 的「已知限制」（每类一条自查命令）。',
+    )
+    console.log('  新增常量仍由覆盖核对守（门禁第 5 项 thresholds）；重建基线文件才会恢复存量比对。')
+    return
   }
   let baseline
   try {
@@ -991,7 +1028,8 @@ say('')
 say('- 可复算 ' + recheckableCount + ' 行、公式 ' + formulaCount + ' 行、选择 ' + chosenCount + ' 行。')
 say(
   '- 缺编码模型或语料规模的见 --needs-review；没有按常量名断言的测试见 --unguarded；' +
-    '没有测量时间的见 --undated。补不上的条件记在 thresholds-review-baseline.json。',
+    '没有测量时间的见 --undated。三类都在 CHANGELOG 的「已知限制」里对外说明，各带一条自查命令；' +
+    '任一查询可加 --area=<段> 只看一类。',
 )
 
 // 表里只剩搬不动的条目（阶段 4）。这一节解释每一条为什么没搬走 —— 按理由分组，

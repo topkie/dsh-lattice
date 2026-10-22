@@ -5,7 +5,9 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.9.0] - 未发布
+
+> 发布时把这一行改成实际版本号与日期（`## [x.y.z] - YYYY-MM-DD`）。
 
 ### Breaking
 
@@ -27,6 +29,48 @@
 - `docs/INTEGRATION.md` 新增「调用与副作用的三条纪律」（判断类工具只收语义位置、跨会话无意义的数据不落库、
   写是副作用时须写明失败方向），每条带一个反例 —— 这三条与反馈工具是否启用无关，是留下的判断
 - `docs/ARCHITECTURE.md` 第八节改写为「反馈（工具定义保留，当前未启用）」，写明删它的直接原因与重启条件
+
+### 已知限制（0.9.0）
+
+这一版不是「全部做完」。下面这份表把代码里**待评审的阈值**按它们在管线里作用的位置归成 11 类：
+此前它们记在仓库内一份临时清单里（5 条缺测量条件 + 78 条没有按常量名断言的测试，按条目计 83 条），
+清单已删除，改为对外可读的限制说明 —— 每类给出条数、影响与一条自查命令。
+
+两点读表须知。**其一**，标着 `--unguarded` 的类别合计 78 条，共同点是：没有测试按常量名断言它们的
+默认值，所以改了默认值测试不会红，只能靠评审发现；这一层原来由门禁里的存量比对守着，现在换成了这张表。
+**其二**，11 类合计 82 个名字，比 83 条少 1 —— `WRITE_COST_MEASURED_MS` 同时属于「资源与等待」
+（没有测试断言）和「缺测量条件」两个集合，在原来的清单里各记一次。
+
+| 分类 | 影响 | 自查命令（在仓库根跑） |
+|---|---|---|
+| 落位判据（11 条 = `--unguarded` 8 + `--needs-review` 3） | 写一条记忆时「并入已有主题还是新建」的判定线与候选规模。三条并列阈值只在一次内部中文标定里定过，登记项缺编码模型与语料规模 —— 换编码模型或换领域时要重标，但仓库里推不出怎么重标 | `node scripts/print-thresholds.mjs --unguarded --area=落位`（8 条）；`node scripts/print-thresholds.mjs --needs-review`（5 条，其中 3 条的段为落位） |
+| 入口抽取与词项（20 条） | 哪些词能成为入口、词项权重、学习冷却与遗忘。含两个非纯数值常量（一个内联表达式、一条判据线），扫描器按定义处登记，不按数值。20 条都没有按常量名断言的测试 | `node scripts/print-thresholds.mjs --unguarded --area=入口`（20 条） |
+| 召回融合（8 条） | 三路各取多少条、RRF 的平滑常数、候选上限。改小会漏召，改大拖慢并稀释注入预算 | `node scripts/print-thresholds.mjs --unguarded --area=召回融合`（8 条） |
+| 注入组装（9 条） | 每段的字符预算与条数上限。改小会少给内容，改大可能超出宿主给的空间 | `node scripts/print-thresholds.mjs --unguarded --area=注入`（9 条） |
+| 写入与切分（8 条） | 审核扫描的时间预算与条数、长文切分的段数与长度、正文最大字符。只在开发机的规模上试过，超大文本或小内存机器上的行为没测 | `node scripts/print-thresholds.mjs --unguarded --area=写入`（8 条） |
+| 重聚类（6 条） | 近邻数、最小簇、桥边、批大小与计划延迟。整理的结果与耗时随之变；取值只在 1374 条基准库上定过 | `node scripts/print-thresholds.mjs --unguarded --area=重聚类`（6 条） |
+| 图扩展（5 条） | 近邻边数、余弦线、出度上限、声明边的置信度与类型长度。库越大，扩展耗时与孤立率越依赖这几条 | `node scripts/print-thresholds.mjs --unguarded --area=图扩展`（5 条） |
+| 降级日志（8 条） | 队列长度、导出上限、单文件与总量上限。决定日志占多少磁盘、失败窗口里丢多少条 | `node scripts/print-thresholds.mjs --unguarded --area=降级日志`（8 条） |
+| 资源与等待（5 条） | mmap 与页缓存比例、写锁等待的倍数、一次写入的实测耗时。小内存机器上页缓存会变小，等待时间也跟着变 | `node scripts/print-thresholds.mjs --unguarded --area=资源`（5 条） |
+| 重排去重（1 条，只出现在 `--needs-review`） | `DUP_LEX`：同一来源内按词面重叠判重复的线。只在构造的对照句对上定过，缺编码模型与语料规模记录 —— 换语言或换切分粒度时要重看 | `node scripts/print-thresholds.mjs --needs-review`（5 条，其中 1 条的段为重排去重） |
+| 显式删除（1 条） | `FORGOTTEN_SCAN_LIMIT`：一次删除扫描多少条。库很大时，一次调用可能漏掉超出上限的条目，需要再跑一次 | `node scripts/print-thresholds.mjs --unguarded --area=显式删除`（1 条） |
+
+门禁第 6 项 `thresholds-review` 现在报的就是上面这两组条数（`--check-review` 打印当前
+needsReview / unguarded 条数后正常退出），不再与一份存量文件比对；新增数值常量没登记仍由门禁
+第 5 项 `thresholds` 当场判红。
+
+#### 测量日期缺失（12 条，跨上面多类）
+
+`node scripts/print-thresholds.mjs --undated` 报出 12 条可复算、但没有记录测量日期的阈值：
+`DEFAULT_THRESHOLDS.tauJoin` / `tauLex` / `tauNew` / `tauLexOnly`（落位）、`DEFAULT_KNN_K`（重聚类）、
+`NEAR_K` / `NEAR_COS_MIN` / `GRAPH_INFER_MAX_ATOMS`（图扩展）、`REFERENCE_QUANTILE`（召回判定）、
+`DUP_LEX` / `DUP_TEXT`（重排去重）、`WRITE_COST_MEASURED_MS`（资源）。
+
+一条都没有补日期，原因一致：这些登记项的来历里记着标定方法、语料规模与结论，但没有一条写着测量是哪天做的；
+仓库的规矩是「原记录没有就留空，不猜」，而提交日期不是测量日期，填进去就是编造。
+其中 10 条已经按段落在上表的类里；`tauJoin` 与 `REFERENCE_QUANTILE` 不在这 83 条里 ——
+它们的条件与测试都齐，只缺日期，所以只在这一条里出现。要补日期得重跑各自的标定，
+有的要真实编码模型，有的要基准库，那一轮不在这版的范围内。
 
 ## [0.5.0] - 2026-10-22
 
@@ -338,6 +382,6 @@ Recall@12 0.95（19/20）。仓库里只有这一份结果文件，也没有 Lon
   只读接口与数据格式，外部用户无法使用。导入能力改为「由模型判决、脚本按来源临时编写」，
   设计约束见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「导入既有记忆」
 
-[Unreleased]: https://github.com/topkie/dsh-lattice/releases
+[0.9.0]: https://github.com/topkie/dsh-lattice/releases
 [0.5.0]: https://github.com/topkie/dsh-lattice/releases/tag/0.5.0
 [0.2.0]: https://github.com/topkie/dsh-lattice/releases/tag/0.2.0

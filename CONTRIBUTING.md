@@ -74,8 +74,9 @@ $env:GIT_BRANCH = (git branch --show-current); node scripts/check-all.mjs
 CI 对**所有分支**的 push 都会跑整条门禁 —— 与本地同一条命令 `node scripts/check-all.mjs`，
 不是另抄一份步骤清单（抄一次就会漏一项，2026-10-21 的审核正是这样发现 CI 少跑 5 项）。
 
-新增或改动阈值时，登记项要写清来历（`recheckable` / `chosen`）—— 写法、三个查询与评审基线见
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「阈值登记」一节。没有来历的新条目会让门禁红。
+新增或改动阈值时，登记项要写清来历（`recheckable` / `chosen`）—— 写法与三个查询见
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「阈值登记」一节。没有来历的新条目会让门禁红；
+已有的待评审项按类写在 [CHANGELOG.md](CHANGELOG.md) 的「已知限制」里，每类带一条自查命令。
 
 ### 门禁 11 项，各自的失败条件
 
@@ -89,7 +90,7 @@ CI 对**所有分支**的 push 都会跑整条门禁 —— 与本地同一条�
 | `lint` | `node node_modules/eslint/bin/eslint.js .` | eslint 对全仓（源码、测试、脚本、界面代码） | 在 `src/` 加一个没用到的局部变量 |
 | `format` | `node node_modules/prettier/bin/prettier.cjs --check 'src/**/*.ts' 'test/**/*.mjs' 'scripts/**/*.mjs' 'lib/**/*.js' '.github/**/*.yml'` | 源码、测试、脚本、界面代码、CI 配置五组文件的格式 | 写一行 `const a=1;export default a`（不换行、等号两侧无空格） |
 | `thresholds` | `node scripts/print-thresholds.mjs` | `src/` 里每个数值常量都登记了来历，或在豁免清单里 | 加一行模块级 `PROBE_MAGIC = 42` |
-| `thresholds-review` | `node scripts/print-thresholds.mjs --check-review` | 待评审清单只允许变短，新增条目不能靠往基线里塞消掉 | 往 `thresholds-review-baseline.json` 的 `unguarded` 加一个库里没有的键 |
+| `thresholds-review` | `node scripts/print-thresholds.mjs --check-review` | 把当前待评审条数报出来（基线文件已删除，存量比对只在文件被重建时执行） | 重建 `thresholds-review-baseline.json` 并往 `unguarded` 加一个库里没有的键 |
 | `thresholds-query` | `node scripts/print-thresholds.mjs --undated` | 三条来历查询的命令行分派真的能跑到 | 让脚本在分派处抛错（0.4.1 上的真实形态是 `ReferenceError`，而门禁只跑 `--check-review`，绕开了它） |
 | `docs` | `node scripts/check-docs.mjs` | 文档里提到的仓库内路径与表名能在仓库里找到 | 在 `docs/` 里写一个不存在的路径 |
 | `log-boundary` | `node scripts/check-log-boundary.mjs` | 除 `src/log/` 外没有别处写日志 | 在 `src/` 任一文件写一行 `INSERT INTO log` |

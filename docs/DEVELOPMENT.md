@@ -454,7 +454,7 @@ src/
 | `scripts/verify-disk-write.mjs` | 落盘写法：证明模板字符串承载会失败、单引号数组 + join 不会 |
 | `scripts/snapshot-baseline.mjs` | 另存对照库快照到 `.probe/snap/<标签>/`（改规则**之前**跑） |
 | `scripts/build-baseline.mjs` | 重建基准库（`--source <cards.json>`），自带三条自检 |
-| `scripts/print-thresholds.mjs` | 阈值总览：打印名称/值/来历/可变条件 + 与设计说明对照 + 覆盖核对（AST，两种来源）+ 三个来历查询 + `--doc-keys` + 评审基线检查（不需模型，可随时跑） |
+| `scripts/print-thresholds.mjs` | 阈值总览：打印名称/值/来历/可变条件 + 与设计说明对照 + 覆盖核对（AST，两种来源）+ 三个来历查询 + `--doc-keys` + 待评审条数（基线已删除，只报数；文件被重建时仍做存量比对；不需模型，可随时跑） |
 
 基准库由 `scripts/build-baseline.mjs` 生成、快照由 `scripts/snapshot-baseline.mjs` 另存
 （见上「标准验证库」）。**改入口规则类的验证脚本不再自带默认库路径**：要对比就显式给
@@ -484,7 +484,7 @@ export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
 答得出来，通常就意味着该搬到定义处。
 
 `print-thresholds.mjs` 负责打印、用 TypeScript 编译器 API 核对覆盖（两种来源都收）、
-跑三个来历查询、`--doc-keys`、评审基线检查与设计对照。新增或改动阈值时，**先跑它**看缺口。
+跑三个来历查询、`--doc-keys`、待评审条数与设计对照。新增或改动阈值时，**先跑它**看缺口。
 
 ### 阈值登记：来历与评审
 
@@ -533,25 +533,22 @@ export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
 **三个查询与一条定位命令**（前三个读「表 + 定义处」两种来源）：
 
 - `node scripts/print-thresholds.mjs --needs-review`：声明可复算、但缺编码模型与语料规模的条目。
-  条件补不上的，才写进评审基线。
+  条件补不上的，按类写进 CHANGELOG 的「已知限制」并说明为什么现在补不了。
 - `node scripts/print-thresholds.mjs --unguarded`：没有测试按常量名断言默认值的条目。
 - `node scripts/print-thresholds.mjs --undated`：可复算、但没有记录测量时间的条目。只是信息，不要求动作。
 - `node scripts/print-thresholds.mjs --doc-keys`：设计说明键名 → 常量 → 文档默认值。
   文档改了一条之后，用它定位受影响的条目。
 
-**评审基线**（`thresholds-review-baseline.json`）是临时清单，只允许变短：
+**待评审条目已转化**（0.9.0）：那两类条目（缺条件的可复算项、没有测试按常量名断言默认值的项，
+5 + 78 条）此前记在临时清单 `thresholds-review-baseline.json` 里，只允许变短。现在按管线分段
+归并进 [CHANGELOG.md](../CHANGELOG.md) 的「已知限制」，每类写明条数、影响与一条自查命令
+（`node scripts/print-thresholds.mjs --unguarded --area=<段>`），清单文件已删除。
 
-1. 基线里的名字必须在**冻结名册**（`thresholds-inventory.json`）里 —— 凭空加一个名字会红；
-2. 名册里的名字也必须仍是真实条目 —— 条目改名或删了，名册与基线要一起改、删；
-3. 每条必须写理由：为什么现在补不了；
-4. 当前查询结果必须都在基线里 —— 新增的待评审条目不能靠把它加进基线消掉；
-5. 基线里已经不在查询结果中的项不报错，删掉即可。
-
-**冻结名册**是一份不再自动增长的名单：它记的是「阈值迁移完成时已有的条目」。新写的阈值默认不在里面 ——
-要进基线，得先把名字加进名册，那一步在代码评审里看得见。拿「当前全部条目」当存量判据没用：
-新增条目也在里面，加进基线红就消了。
-
-门禁里的 `thresholds-review` 步骤跑这项检查。两个集合都空了，就删掉这个文件。
+门禁里的 `thresholds-review` 步骤保留：基线文件不存在时，`--check-review` 打印当前
+needsReview / unguarded 条数并退出 0（不静默通过）；文件若被重建，仍按原来的四条规则比对 ——
+名字必须在**冻结名册**（`thresholds-inventory.json`）里、每条写理由、当前结果必须是基线的子集、
+已不在结果中的项只计数。丢掉的一层是「登记了但缺测量条件 / 没有测试按常量名断言默认值」的文档质量守卫，
+它换成了对外可读的限制说明；「新增常量必须登记」仍由门禁第 5 项守。
 
 **档位阈值随标定包一起退役**。标定包（`lattice-calib`）随 0.5.0 退役，它服务的「按库规模
 插值精简档下界」那条线整体消失；两个档位常量（完整档 0.55、精简档 0.45）与判档函数一并删掉，
