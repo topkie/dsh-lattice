@@ -132,8 +132,11 @@ describe('写入管线：落位（向量 + 词面双票）', () => {
     assert.equal(r.action, 'created')
     assert.equal(r.created, 'ambiguous')
     assert.ok(Math.abs(r.evidence.sim1 - r.evidence.sim2) < 0.06)
+    // 钉的是「落位」那条边：atom → topic，写入时由落位逻辑写、不带 origin。
+    // 0.9 起写入路径还会给新 atom 补 inferred 的 atom → atom near 边（第 97 条），
+    // 不限定 dst_type 会把两类边数在一起。
     const edges = db
-      .prepare("SELECT COUNT(*) AS n FROM edge WHERE kind = 'near' AND src_id = ?")
+      .prepare("SELECT COUNT(*) AS n FROM edge WHERE kind = 'near' AND src_id = ? AND dst_type = 'topic'")
       .get(r.atomId)
     assert.equal(Number(edges.n), 1, 'ambiguous 必须留下 near 边，否则这条记忆彻底孤立')
 
@@ -142,7 +145,9 @@ describe('写入管线：落位（向量 + 词面双票）', () => {
     // 混用会让回执给的编号对不上 lattice_list / SQL。
     assert.equal(typeof r.nearId, 'number', 'D1：新建主题且指向候选时应带 nearId')
     assert.notEqual(r.evidence.secondId, null, 'D1：ambiguous 一定有次近候选')
-    const nearEdge = db.prepare("SELECT dst_id FROM edge WHERE kind = 'near' AND src_id = ?").get(r.atomId)
+    const nearEdge = db
+      .prepare("SELECT dst_id FROM edge WHERE kind = 'near' AND src_id = ? AND dst_type = 'topic'")
+      .get(r.atomId)
     assert.equal(Number(nearEdge.dst_id), r.nearId, 'D1：nearId 必须就是 near 边的目标')
 
     // 当时的判据是「只改回执、不写 flags」；**位标志落地后存储有意改变**（ambiguous 置歧义位）。
@@ -161,7 +166,9 @@ describe('写入管线：落位（向量 + 词面双票）', () => {
     const r = await writeAtom(ctx, { text: '棱镜色散实验的读数记录在实验本第三页。' })
     assert.equal(r.action, 'created')
     assert.equal(r.created, 'far')
-    const edges = db.prepare('SELECT COUNT(*) AS n FROM edge WHERE src_id = ?').get(r.atomId)
+    const edges = db
+      .prepare("SELECT COUNT(*) AS n FROM edge WHERE src_id = ? AND dst_type = 'topic'")
+      .get(r.atomId)
     assert.equal(Number(edges.n), 0)
   })
 })

@@ -261,7 +261,9 @@ describe('写入侧审核：产出只走返回值', () => {
       atom: atoms(),
       forgotten: tombstones(),
       topic: Number(db.prepare('SELECT COUNT(*) AS n FROM topic').get().n),
-      edge: Number(db.prepare('SELECT COUNT(*) AS n FROM edge').get().n),
+      // 只数审核可能写的那类边：写入路径自己会给新 atom 补 inferred 边（第 97 条），
+      // 那是写入的副作用，不属审核，混在总数里就分不清「审核写边」与「写入补边」。
+      edge: Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin <> 'inferred'").get().n),
     }
     const text = '删不掉的这条记忆会被写两次，第二次应得到一条提示。'
     await writeAtom(ctx, { text })
@@ -271,7 +273,11 @@ describe('写入侧审核：产出只走返回值', () => {
     // 「只走返回值」的可核验形态：审核唯一改变的是它写回的那段文本。
     assert.equal(atoms(), before.atom + 2)
     assert.equal(tombstones(), before.forgotten, '审核不产生墓碑')
-    assert.equal(Number(db.prepare('SELECT COUNT(*) AS n FROM edge').get().n), before.edge, '审核不产生边')
+    assert.equal(
+      Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin <> 'inferred'").get().n),
+      before.edge,
+      '审核不产生边',
+    )
     // 提示本身不在库里 —— 它只存在于返回值。
     const cols = db
       .prepare('PRAGMA table_info(atom)')

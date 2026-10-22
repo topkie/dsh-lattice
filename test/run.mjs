@@ -32,6 +32,15 @@ if (NOT_IMPORTED.length > 0 || GONE.length > 0) {
   process.exit(1)
 }
 
+// ── 钩子作用域 ──────────────────────────────────────────────
+//
+// 单进程里所有文件都注册到同一个 root suite，所以**文件顶层**的
+// beforeEach / afterEach 会对所有文件的用例生效（实测：A 文件顶层的
+// beforeEach 会被 B 文件的用例触发）。凡是调 configureLog / apply 的钩子
+// 必须写在自己的 describe 里 —— 日志与运行时都是模块级单例，挂在顶层会把
+// 全局数据目录切走，让先注册的文件读到空库。
+//
+
 import './plugin.test.mjs'
 import './db.test.mjs'
 import './schema-w1.test.mjs'
@@ -69,3 +78,8 @@ import './cache-usage.test.mjs'
 import './thresholds.test.mjs'
 import './supersede.test.mjs'
 import './unsupersede.test.mjs'
+import './w1-id-tx.test.mjs'
+import './w1-link-new-atom.test.mjs'
+import './w1-supersede-edges.test.mjs'
+import './w1-scope-topic.test.mjs'
+import './w1-dedupe-entry.test.mjs'
