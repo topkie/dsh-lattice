@@ -1,9 +1,13 @@
 // dsh-lattice 存储层 schema。
 //
 // 三条设计要点：
-//   1. **真相源唯一**：atom 本体、declared 边/归属/入口、learned 入口不可重算；而
-//      topic / domain / atom_pair / atom_search / 全部 FTS 索引 / inferred 边都能由
-//      atom 重算。因此备份只需覆盖前者，算法升级也不必做数据迁移。
+//   1. **真相源唯一**：atom 本体、declared 边、declared 入口、learned 入口不可重算；
+//      而 topic / atom_topic / 归属（atom.topic_id）/ domain / atom_pair / atom_search /
+//      全部 FTS 索引 / inferred 边都能由 atom 重算。因此备份只需覆盖前者，算法升级也
+//      不必做数据迁移。
+//      归属是派生物：整理时整表重写，所以不支持手工调整（见 docs/ARCHITECTURE.md 的
+//      「归属主题可以被重算改写」一节）。设计里预留过一条 atom_topic.origin='declared'
+//      的归属通道，从未实现 —— 别把这里读成「有 declared 归属可用」。
 //   2. **两层检索索引**：正文用 FTS5 的 trigram 分词器；但 trigram 按 3 字符滑窗，
 //      对长度 ≤2 的中文查询返回 0 命中，而中文技术查询里两字词极常见，所以 entry 层
 //      再叠一层 CJK bigram 索引（unicode61）兜底。

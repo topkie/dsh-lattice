@@ -43,6 +43,10 @@ describe('db', () => {
       assert.ok(!objs.some((o) => o.type === 'table' && o.name === 'calib_state'), 'calib_state 应已删除')
       // 版本号是声明；上面缺对象就抛的那一步（missingObjects）是证据。
       assert.equal(schemaVersion(db), SCHEMA_VERSION)
+      // 常量本身写死：拿 schemaVersion(db) 与 SCHEMA_VERSION 自比，两边一起动就永远相等，
+      // 拦不住「有人把常量改成 6 却只改了新建库、没改迁移」。公布的结构版本是 5，
+      // 改它必须同时改这一行 —— 那是发布动作，不该在重构里悄悄发生。
+      assert.equal(SCHEMA_VERSION, 5)
       db.close()
     })
 
