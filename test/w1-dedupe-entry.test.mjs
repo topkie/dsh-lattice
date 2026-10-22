@@ -333,8 +333,8 @@ describe('W1 写入侧派生验证', () => {
       // 之后一律走工具层：召回段真的会经过 tools/index.ts 的 recordRecall 与 feedLearned。
       const r = tool('lattice_recall')
       const q = '缓存 端口'
-      // 先召一次：召回内部会调 ensureGraphOnce，首次调用时它可能把推断边建起来 ——
-      // 那是召回路径上的既有写，不算「改真相层」要证的东西。所以先召一次把那一步消耗掉，
+      // 先召一次：召回会写第 3 层（recall_hits 与 learned 入口），那是允许的追加，
+      // 不属于这里要证的七列。第一次与第二次召回都会写，所以先把它消耗掉，
       // 再取快照、看第二次召回前后有没有变。
       await r.execute({ query: q })
       // 记下计数器的值：第二次召回之后它会变大，那就是「召回真的跑过」的证据 ——

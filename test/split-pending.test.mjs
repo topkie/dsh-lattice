@@ -416,9 +416,8 @@ describe('待拆分判据 6：召回不写库', () => {
     const ctx = createWriteCtx(db, {}, { encode: async (t) => hashVec(t) })
     const out = await writeReviewed(ctx, { text: longText(2) })
     assert.ok(out.results.length >= 2)
-    // 预热一次：图路的首次建边（ensureGraphEdges）是召回路径上的既有行为，
-    // 不属于「呈现」。先让它建完，再量「呈现」这一次有没有写库。
-    recall(db, '代理端口', null, {})
+    // 不预热：读路径不建边（推断边由写入路径与显式命令重建），所以第一次召回
+    // 本身就不该写库 —— 这一条不成立时，说明有东西又被接回了读路径。
     // 同连接读 PRAGMA data_version 看不到本连接自己的写，断言会恒真；
     // 观测因此换成操作前打开、全程不关的另一个只读连接。
     const ruler = openRuler(dbFile)

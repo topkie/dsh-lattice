@@ -163,7 +163,7 @@ export interface InferStats {
 }
 
 export interface InferOutcome {
-  status: 'built' | 'fresh' | 'too-large' | 'failed'
+  status: 'built' | 'too-large' | 'failed'
   detail: string
   stats: InferStats | null
 }
@@ -423,22 +423,6 @@ export function edgeOriginCounts(db: DatabaseSync): { declared: number; inferred
     else if (r.origin === INFERRED_ORIGIN) out.inferred = Number(r.n)
   }
   return out
-}
-
-/**
- * 确保库里有 inferred 边：已经建过就直接返回，否则重建一次。
- *
- * **判据只有「表里有没有 inferred 边」这一条**，不含新鲜度检查：新写入的 atom 由写入
- * 路径自己补边（见 linkNewAtom），这里不需要再判一次新鲜度。
- */
-export function ensureGraphEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
-  const row = db.prepare('SELECT COUNT(*) AS n FROM edge WHERE origin = ?').get(INFERRED_ORIGIN) as {
-    n: number | bigint
-  }
-  if (Number(row.n) > 0) {
-    return { status: 'fresh', detail: '库中已有 ' + Number(row.n) + ' 条 inferred 边，未重建', stats: null }
-  }
-  return inferEdges(db, opts)
 }
 
 /** 局部建边的选项。与全量重建共用两条线，重复判据不参与。 */

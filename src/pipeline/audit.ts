@@ -119,9 +119,9 @@ export interface AuditReport {
      * 图路能不能用，判据是**两类边的输入之和**：推断边（派生物，重建会整批换掉）
      * 与声明边（真相源，重建后仍在；声明进来的 kind 也在 GRAPH_KINDS 白名单里）。
      *
-     * 与 search.ts 的 graphStatus 报的是同一个事实，但**不触发建边**，所以状态词表
-     * 不同：那边报本次建边的结果（built / fresh / failed / too-large），这里报库里
-     * 现在的状态。两处不共用一套判定 —— 它们回答两个不同的问题。
+     * 与 search.ts 的 graphStatus 报的是同一个事实：两处都**只读**，都不建边。读路径
+     * 不负责补边 —— 推断边由写入路径（linkNewAtom）与显式命令（rebuild-graph）重建。
+     * 两处的词表仍不同：那边是给人看的一句话（边数），这里是体检用的三态。
      */
     status: 'not-built' | 'built' | 'too-large'
     /** inferred 边总数。 */
@@ -336,11 +336,11 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
       atoms +
       ' 超过全量推断上限 ' +
       GRAPH_INFER_MAX_ATOMS +
-      '：ensureGraphEdges 会拒绝重建，图路保持空。'
+      '：全量推断会拒绝执行，图路保持空。跑 scripts/rebuild-graph.mjs 也一样会拒绝。'
   } else {
     graphStatus = 'not-built'
     graphDetail =
-      '库里没有推断边也没有声明边：图路没有输入。召回第一次调用会尝试建一次；体检本身不建（只读）。'
+      '库里没有推断边也没有声明边：图路没有输入。召回只报这个状态、不建边；跑 scripts/rebuild-graph.mjs 可以补。'
   }
 
   // ── 入口噪声 ──────────────────────────────────────────────────────────

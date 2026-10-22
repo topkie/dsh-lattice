@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
-import { ensureGraphEdges, inferEdges } from '../dist/graph/infer.js'
+import { inferEdges } from '../dist/graph/infer.js'
 import { recall } from '../dist/pipeline/search.js'
 import { assembleView } from '../dist/pipeline/view.js'
 import { VEC_DIM } from '../dist/util/vec.js'
@@ -159,12 +159,15 @@ describe('图扩展：边推断与出度控制', () => {
     assert.equal(Number(rows[0].dst_id), b)
   })
 
-  it('库里已有推断边时 ensureGraphEdges 不重建', () => {
+  it('重复调用 inferEdges 是整批替换，不累加', () => {
     for (let i = 0; i < 3; i++) seedAtom(1, '第' + i + '条记忆的正文', unit([1, 0.9, 0.8]))
-    const first = ensureGraphEdges(db, { nearK: 2, nearCosMin: 0.5, ...DUP })
-    assert.equal(first.status, 'built')
-    const later = ensureGraphEdges(db, { nearK: 2, nearCosMin: 0.5, ...DUP })
-    assert.equal(later.status, 'fresh')
+    const inferred = () =>
+      Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin = 'inferred'").get().n)
+    inferEdges(db, { nearK: 2, nearCosMin: 0.5, ...DUP })
+    const first = inferred()
+    assert.ok(first > 0, '第一次调用应当建出推断边')
+    inferEdges(db, { nearK: 2, nearCosMin: 0.5, ...DUP })
+    assert.equal(inferred(), first, '第二次重建应当整批替换，不叠加')
   })
 })
 

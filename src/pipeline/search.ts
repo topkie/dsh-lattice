@@ -14,7 +14,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
 import { bigramTerms } from '../util/text.js'
 import { cosine, decodeVec, isValidVecBlob, VEC_DIM } from '../util/vec.js'
-import { edgeOriginCounts, ensureGraphEdges, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { edgeOriginCounts, GRAPH_KINDS, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { FLAG_ARCHIVED } from '../db/flags.js'
 import { readConfirmedSplits, readPendingSegments } from './split.js'
 
@@ -126,8 +126,8 @@ export interface RecallMeta {
    */
   topCosine: number
   /**
-   * 图路的输入状态：`<状态>（声明边 N 条，推断边 M 条）`。状态前缀是
-   * graph/infer.ts 的 InferOutcome.status 原值。
+   * 图路的输入现状：`声明边 N 条，推断边 M 条`。只报数，不带状态前缀 ——
+   * 读路径不建边，所以这里没有「本次建边的结果」可报。
    *
    * 为什么必须报出来：图路为空有两种完全不同的原因 —— 「库里还没有边」与
    * 「有边但这次没扩展出东西」。前者是接线问题，后者是数据性质。不区分就会让
@@ -403,31 +403,6 @@ function graphPath(db: DatabaseSync, seeds: number[], k: number, scope?: string)
     s: number
   }>
   return rows.map((r) => Number(r.id))
-}
-
-/**
- * 确保库里有推断边，每个连接只尝试一次。
- *
- * 为什么图路的建边挂在召回上：本次改动允许碰的文件里，只有 search.ts 是「每次召回都会
- * 经过」的那个。其余两个自然挂载点（写入路径 write.ts、工具入口 tools/index.ts）都在
- * 边界之外。不挂的话，图路在宿主里仍然是 0 —— 那等于没做这件事。
- *
- * 代价与边界：**只读连接建不了边**（诊断、对照实验都走只读）。那不是错误，是被允许的
- * 用法，所以这里捕获异常并把状态如实报进 meta，而不是让它变成一个安静的空结果。
- */
-const graphEnsureState = new WeakMap<DatabaseSync, string>()
-
-function ensureGraphOnce(db: DatabaseSync): string {
-  const known = graphEnsureState.get(db)
-  if (known !== undefined) return known
-  let status: string
-  try {
-    status = ensureGraphEdges(db, { dupCos: DUP_COS, dupLex: DUP_LEX }).status
-  } catch (err) {
-    status = 'unavailable: ' + (err instanceof Error ? err.message : String(err))
-  }
-  graphEnsureState.set(db, status)
-  return status
 }
 
 /** 向量路的中间结果：id + 余弦，按余弦降序。 */
@@ -929,13 +904,13 @@ export function recall(
   const A = vecHits.map((h) => h.id)
   const E = entryPath(db, q, kLex, scope)
   const B = bodyPath(db, q, kLex, scope)
-  // 图路的输入是推断边（src/graph/infer.ts）：库里还没有时先建一次。
-  // 建完再读 origin 分布，所以这一次重建的结果也在报出的数里。
+  // 图路的输入是推断边（src/graph/infer.ts）。这里**只读**：读路径不建边 —— 推断边是
+  // 几何派生物（设计 14 的分界），可由写入路径（linkNewAtom）与显式命令
+  // （scripts/rebuild-graph.mjs）重建，但不由读触发。读只报边表现状，缺口交给那两处。
   // 声明边（origin = declared）不是本模块的产出，但它同样进图路（GRAPH_KINDS 有 related）——
   // 分开报，读者才知道「图路有值」是来自真相源还是派生物。
   const graphEdges = edgeOriginCounts(db)
-  const graphStatus =
-    ensureGraphOnce(db) + '（声明边 ' + graphEdges.declared + ' 条，推断边 ' + graphEdges.inferred + ' 条）'
+  const graphStatus = '声明边 ' + graphEdges.declared + ' 条，推断边 ' + graphEdges.inferred + ' 条'
   const G = graphPath(db, A.slice(0, DEFAULT_SEED_COUNT), kGraph, scope)
 
   // 图路只负责**引入别处没有的候选**，不对已有候选重复计票。
