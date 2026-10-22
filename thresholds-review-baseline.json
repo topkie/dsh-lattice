@@ -63,7 +63,7 @@
     "FORGOTTEN_SCAN_LIMIT": "test/forget.test.mjs 覆盖 src/pipeline/forget.ts，但没有出现该常量名；墓碑扫描上限是资源上限，正常库用不到这个规模。",
     "RECLUSTER_PLAN_DELAY_MS": "test/recluster-plan.test.mjs 覆盖 src/cluster/executor.ts，但未出现该常量名，也没有 delay / 3000 字样；它是产品口味，测试走的是行为路径。",
     "DEFAULT_KNN_K": "聚类质量只在 T16 探针里对照过；测试用默认值跑聚类行为，断言的是簇的形状，没有按常量名钉住 k=2。",
-    "DEFAULT_MIN_CLUSTER_SIZE": "设计报告写死、没有标定实验的数；测试按簇行为覆盖，未按常量名断言 3。",
+    "DEFAULT_MIN_CLUSTER_SIZE": "早期按经验定死、没有标定实验的数；测试按簇行为覆盖，未按常量名断言 3。",
     "DEFAULT_ALIGN_COS": "test/recluster.test.mjs 导入 src/cluster/align.ts，但未出现该常量名；对齐效果靠探针观测，没有测试钉住默认值。",
     "MST_BRIDGE_FACTOR": "test/recluster.test.mjs 覆盖 src/cluster/mst.ts，但没有断言这个倍数；它只决定桥边在 Kruskal 顺序里的位置，行为测试不区分具体倍数。",
     "RECLUSTER_BATCH_ATOMS": "test/recluster.test.mjs 覆盖 src/cluster/rebuild.ts，但没有出现该常量名，也没有 batch 字样；一批多少条不改结果，只影响事务次数。",
