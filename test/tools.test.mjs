@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { setArchived } from '../dist/pipeline/archive.js'
-import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC } from '../dist/tools/index.js'
+import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC, referenceNote } from '../dist/tools/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 
 let dir = ''
@@ -397,5 +397,33 @@ describe('lattice_ping', () => {
     ])
     // 样本库只报条数，且没写过样本时不建库：三个数都是 0。
     assert.deepEqual(j.samples, { total: 0, positive: 0, negative: 0 })
+  })
+})
+
+describe('参考线判不了时的回执', () => {
+  // 这两种情形下 hasContent 都是 null：渲染层不会写「库里没有」，也不会写别的。
+  // 不说这句话，读的人会把「没判」当成「没有」。
+  it('库太小：有命中才说「判定还不可靠」', () => {
+    assert.equal(
+      referenceNote({ reason: 'library-too-small', atoms: 12 }, 3),
+      '库里只有 12 条，判定还不可靠；以下是按相关度列出的前几条。',
+    )
+    assert.equal(referenceNote({ reason: 'library-too-small', atoms: 12 }, 0), null)
+  })
+
+  it('线高过失效线：命中与否都说「判空关掉了」，措辞分开', () => {
+    assert.equal(
+      referenceNote({ reason: 'line-too-high', atoms: 5000 }, 4),
+      '这个库的内容面比判定用的参考问句宽，判空这一步关掉了；以下是按相关度列出的前几条。',
+    )
+    assert.equal(
+      referenceNote({ reason: 'line-too-high', atoms: 5000 }, 0),
+      '这个库的内容面比判定用的参考问句宽，判空这一步关掉了；这次没有相关度靠前的条目。',
+    )
+  })
+
+  it('线可用或编码器不可用时不补话', () => {
+    assert.equal(referenceNote({ reason: 'ok', atoms: 5000 }, 3), null)
+    assert.equal(referenceNote({ reason: 'no-encoder', atoms: 5000 }, 3), null)
   })
 })

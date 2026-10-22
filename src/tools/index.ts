@@ -455,9 +455,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       // 不再报「最高相似度 0.47」这类分数：分数是本插件内部的刻度，用户拿不到对照，
       // 报出来只会让人以为它能跨库比较（实测同一句无关问句在三个库上差 0.079）。
       // 判据改成与本库自己的参考分布比，结论只有两态，见 pipeline/refdist.ts。
-      if (ref.reason === 'library-too-small' && recalled.hits.length > 0) {
-        notes.push('库里只有 ' + ref.atoms + ' 条，判定还不可靠；以下是按相关度列出的前几条。')
-      }
+      const refNote = referenceNote(ref, recalled.hits.length)
+      if (refNote !== null) notes.push(refNote)
       // 记一次命中。召回本身是只读语义，这一步失败不该让召回失败 —— 但也绝不假装成功：
       // 库里的命中计数会因此偏低，这是刻意选的失败方向。
       try {
@@ -753,4 +752,27 @@ export function describeForgetRejection(err: ForgottenError): string {
   ]
   if (err.truncated) lines.push('  注意：墓碑较多，本次只比对了最近 ' + err.scanned + ' 条。')
   return lines.join('\n')
+}
+
+/**
+ * 参考线「判不了」时要补的那句话。返回 null 表示没有要补的。
+ *
+ * 判不了有两种，原因相反，措辞必须不同：
+ *   - 库太小（atom 数不到内置问句数）：参考线估不准，但线本身还成立；
+ *   - 库的内容面太宽（p90 越过失效线）：参考线自己失效，判空这一步整体关掉。
+ *
+ * 为什么一定要说：这两种情形下 `hasContent` 都是 null，渲染层不会写「库里没有」，
+ * 但也不会写任何别的 —— 不说话时，读的人分不清「没内容」和「没判」，会把前者当结论。
+ * 第二种的两种措辞按有没有命中分开：命中为空时「以下是」指向空气。
+ */
+export function referenceNote(ref: { reason: string; atoms: number }, hitCount: number): string | null {
+  if (ref.reason === 'library-too-small') {
+    return hitCount > 0 ? '库里只有 ' + ref.atoms + ' 条，判定还不可靠；以下是按相关度列出的前几条。' : null
+  }
+  if (ref.reason === 'line-too-high') {
+    return hitCount > 0
+      ? '这个库的内容面比判定用的参考问句宽，判空这一步关掉了；以下是按相关度列出的前几条。'
+      : '这个库的内容面比判定用的参考问句宽，判空这一步关掉了；这次没有相关度靠前的条目。'
+  }
+  return null
 }
