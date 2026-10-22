@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
-import { TIER_BRIEF_MIN, TIER_FULL_MIN, assembleView, tierOf } from '../dist/pipeline/view.js'
+import { assembleView } from '../dist/pipeline/view.js'
 
 let dbFile = ''
 let db = null
@@ -106,41 +106,6 @@ function hit(id, topicId, summary, score) {
     source: null,
   }
 }
-
-describe('注入组装：档位', () => {
-  it('tierOf 的边界是闭区间下界', () => {
-    assert.equal(tierOf(TIER_FULL_MIN), 'full')
-    assert.equal(tierOf(TIER_FULL_MIN - 0.01), 'brief')
-    assert.equal(tierOf(TIER_BRIEF_MIN), 'brief')
-    assert.equal(tierOf(TIER_BRIEF_MIN - 0.01), 'excerpt')
-  })
-  it('档位只作观测，不改变呈现内容', () => {
-    const ids = []
-    for (let i = 0; i < 12; i++) {
-      ids.push(
-        seedAnim(db, 1, '构建', '第' + i + '条足够长的正文内容，用来把三个档位的输出规模撑开。', ['词' + i]),
-      )
-    }
-    const hits = ids.map((id, i) => ({ ...hit(id, 1, '摘要' + i, 1 - i * 0.01), origin: 'model' }))
-    const topics = [{ topicId: 1, label: '构建', hits: 12 }]
-    const at = (cos) => {
-      const r = recallOf(hits, topics)
-      r.meta.vectorMissing = false
-      r.meta.topCosine = cos
-      return assembleView(db, r, {})
-    }
-    const full = at(0.8)
-    const brief = at(0.5)
-    const excerpt = at(0.2)
-    // 档位字段仍然如实反映最高余弦（供观测用），但三档的内容与条数完全一样：
-    // 旧形态按档位收缩锚条数与入口数，新形态只按预算装，档位不再是呈现的输入。
-    assert.equal(full.tier, 'full')
-    assert.equal(brief.tier, 'brief')
-    assert.equal(excerpt.tier, 'excerpt')
-    assert.equal(full.text, brief.text, '档位不该改变呈现内容')
-    assert.equal(brief.text, excerpt.text, '档位不该改变呈现内容')
-  })
-})
 
 describe('注入组装：状态标记', () => {
   it('用户说的与导入的会标记，模型写的且未被取代的不标', () => {

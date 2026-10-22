@@ -54,16 +54,9 @@ export interface ViewOptions {
   entryLineMaxChars?: number
   pathLines?: number
   scope?: string
-  /** 旧形态的档位与精简档下界。保留只为结果里的观测字段，不参与呈现。 */
-  tier?: ViewTier
-  briefMin?: number
 }
 
 export interface ViewResult {
-  /** 本次算出的档位。仅供观测，不参与呈现（收口阶段删）。 */
-  tier: ViewTier
-  /** 本次生效的精简档下界。仅供观测（收口阶段删）。 */
-  briefMin: number
   /** 完整文本，直接注入。两段：【入选】与未入选说明。 */
   text: string
   /**
@@ -179,66 +172,6 @@ export const DEMOTED_ANCHOR_CHARS = (15 * TERM_CHARS) satisfies ThresholdValue<
   }
 >
 
-/**
- * 注入档位：按匹配质量决定这次给多少。
- *
- * 为什么是分档而不是门槛：边界判错时，分档最坏只是相邻档位的效率损失；门槛判错
- * 要么全给要么全不给 —— 而「全不给」正是最坏的那种（模型什么也没看到，却以为自己查过了）。
- *
- * 完整档的线来自实测（279 条基准库、20 条 gold 查询 + 4 条无关查询）：
- *   相关 top1  min 0.524 / p50 0.683 ｜ 无关 top1  max 0.398
- * 两者之间是空的，所以取值本身不敏感；取空隙中间是为了容错，不是为了拟合。
- *
- * 精简档的线曾经是库规模的函数（发生在标定包还在的时候）：那次标定用的 0.45 依赖
- * 「无关 top1 上界 0.398」这个前提，而该上界随库长大单调上移（1374 条库上已是 0.515），
- * 于是 0.45 会落进无关分布内部。标定包退役后这条路整条消失 —— 判定改用相对分位
- * （refdist.ts），档位只作观测值，不再决定呈现内容。
- */
-export type ViewTier = 'full' | 'brief' | 'excerpt'
-
-/** 完整档的下界。不参与按库规模重标，理由见 calib 的说明与重标报告。 */
-export const TIER_FULL_MIN = 0.55 satisfies ThresholdValue<
-  'recheckable',
-  {
-    area: '注入'
-    tool: '无脚本（D15-2 标定，未点名脚本路径）'
-    finding: '相关 top1 min 0.524 / p50 0.683，无关 top1 max 0.398，两类之间是空的；取空隙中间只为容错，不是为了拟合'
-    scale: '20 条 gold 查询 + 4 条无关查询'
-    failsWhen: ['换编码模型（余弦尺度直接变）', '库规模与来源分布', '语料的领域混合度']
-    guardedBy: ['test/view.test.mjs']
-    affects: 'tierOf：最高余弦 >= 此值走完整档（只作观测值，不再决定呈现内容）'
-    diverges: '**标定语料与运行库不一致**：标定在基准库上，而插件跑在宿主库上（评审指出的同一类问题）。本表不再记语料规模与来源分布 —— 是否仍适用，看对应重标报告；没有报告时按「无记录」处理，不猜'
-  }
->
-/** 精简档下界的值。标定包退役后它不再按库规模变，也不决定呈现内容（见 tierOf 的说明）。 */
-export const TIER_BRIEF_MIN = 0.45 satisfies ThresholdValue<
-  'recheckable',
-  {
-    area: '注入'
-    tool: '无脚本（D15-2 与 2026-10-17 重标定，均未点名脚本路径）'
-    finding: '两段来历：① 原标定无关上界 0.398、相关下界 0.524，0.45 夹在中间；② 2026-10-17 重标定在扩容后的基准库上，无关 top1 上界升到 0.515、相关下界 0.525，0.45 落进无关分布内部，故降级为默认值（生效值改由 calib 锚点表按规模给出），扫描读数 0.466 / 0.470 / 0.492 / 0.514 / 0.514 / 0.514 / 0.514 / 0.525；2026-10-18 复核：24 条无关查询、1 次误通过时 conformal 可认证上限 (1+1)/(24+1)=8.0%，Clopper-Pearson 95% 区间 [0.11%, 21.12%]'
-    scale: '原标定 20 gold + 4 无关；重标定 8 个规模点各 30 次降采样、20 gold + 20 无关'
-    at: '2026-10-17'
-    failsWhen: ['换编码模型', '库规模（历史依据里的上界随库长大上移）', '语料的领域混合度']
-    guardedBy: ['test/view.test.mjs']
-    affects: 'tierOf 的第二个分界。标定包退役后它不再按库规模变，也不决定呈现内容：判定改用「最高余弦对固定问句集在本库实算的 90 分位」，本常量只作为回执里的观测值带出来'
-    diverges: '**标定语料与运行库不一致**（同 TIER_FULL_MIN），且真机语料上相关/无关两组重叠。本表不记语料规模与来源分布；是否仍适用看对应重标报告，没有报告时按「无记录」处理'
-    refs: [{ file: 'src/pipeline/view.ts'; symbol: 'TIER_BRIEF_MIN' }]
-  }
->
-
-/**
- * 按最高余弦判档。
- *
- * `briefMin` 省略时用 TIER_BRIEF_MIN —— 纯函数口径，测试与对照用；
- * 生产路径由 inferTier 传入按库规模标定出的值。
- */
-export function tierOf(topCosine: number, briefMin: number = TIER_BRIEF_MIN): ViewTier {
-  if (topCosine >= TIER_FULL_MIN) return 'full'
-  if (topCosine >= briefMin) return 'brief'
-  return 'excerpt'
-}
-
 /** 一条锚的正文，按需从库里取。 */
 function loadTexts(db: DatabaseSync, ids: number[]): Map<number, string> {
   const out = new Map<number, string>()
@@ -259,11 +192,6 @@ function clip(s: string, max: number): string {
   return chars.slice(0, Math.max(1, max - 1)).join('') + '…'
 }
 
-/**
- * 把召回结果组装成三段式文本。
- *
- * 只需 db + 召回结果：不读配置、不碰编码器，便于单测直接喂构造好的 RecallResult。
- */
 /**
  * 锚段行里的状态标记。
  *
@@ -320,23 +248,6 @@ function sceneText(scene: string | undefined): string {
 }
 
 /**
- * 按召回结果推断档位。
- *
- * 纯词面模式（无查询向量）没有余弦可依，**不降档** —— 宁可多给几条，也不要因为
- * 「测不出来」而少给：降档是真的丢信息，多给只是多花一点预算。
- */
-function inferTier(recalled: RecallResult, override?: number): { tier: ViewTier; briefMin: number } {
-  // 纯词面模式没有余弦可依，档位用不到精简档的线；这里仍把值填出来，是为了让结果里的
-  // briefMin 始终有值，不至于两种情形下语义不同。
-  //
-  // 标定包退役后这里只剩常量：原先按库规模插值的那条线已经不决定呈现内容，判定改用
-  // 「最高余弦对固定问句集在本库实算的 90 分位」（见 refdist.ts），briefMin 只作观测值带出。
-  const briefMin = override ?? TIER_BRIEF_MIN
-  if (recalled.meta.vectorMissing) return { tier: 'full', briefMin }
-  return { tier: tierOf(recalled.meta.topCosine, briefMin), briefMin }
-}
-
-/**
  * 把召回结果组装成两段式文本。
  *
  * 为什么是两段而不是三段：旧形态按 55/20/25 给锚、入口、路各分一份配额，实测预算只用到 76%
@@ -349,9 +260,6 @@ function inferTier(recalled: RecallResult, override?: number): { tier: ViewTier;
 export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: ViewOptions = {}): ViewResult {
   const budget = opts.budget ?? DEFAULT_BUDGET
   const anchorMax = opts.anchorMaxChars ?? DEFAULT_ANCHOR_MAX
-  // 档位与精简档下界只为结果里的观测字段保留，不参与装填（收口阶段一起删）。
-  const inferred = inferTier(recalled, opts.briefMin)
-  const tier = opts.tier ?? inferred.tier
 
   // 判空：库里没有针对这个问题的内容时，一条都不装。
   //
@@ -361,8 +269,6 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   // 仍是满额文本，结论与文本自相矛盾。
   if (recalled.meta.hasContent === false) {
     return {
-      tier,
-      briefMin: inferred.briefMin,
       text: '',
       anchorIds: [],
       anchors: 0,
@@ -446,8 +352,6 @@ export function assembleView(db: DatabaseSync, recalled: RecallResult, opts: Vie
   }
 
   return {
-    tier,
-    briefMin: inferred.briefMin,
     text: textOf(overBudget),
     anchorIds: ids,
     anchors: lines.length,
