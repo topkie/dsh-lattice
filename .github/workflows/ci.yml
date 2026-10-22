@@ -10,6 +10,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # 门禁第一行会打印分支名。不传时它显示「分支：未知」—— 按仓库约定，那不叫通过。
+      # push 时 ref_name 是分支名；pull_request 时是「<编号>/merge」，同样不是 main。
+      GIT_BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -23,7 +27,8 @@ jobs:
       # 直接跑脚本而不是 `pnpm <script>`：本机实测 `pnpm run` 会因 pnpm 自身的
       # 依赖预检查而失败，换成显式命令可以绕开这一类不确定性。
       # dist/ 被 .gitignore 忽略，而测试 import 的是它 —— 不先构建，干净检出上测试必报模块找不到。
-      # 与本地门禁**同一条命令**（10 项），包括测试的替身参数 —— 否则两边跑的降级路径不同。
+      # 与本地门禁**同一条命令**（11 项，项数以 scripts/check-all.mjs 的 STEPS 为准），
+      # 包括测试的替身参数 —— 否则两边跑的降级路径不同。
       # 为什么不再逐条重列：2026-10-21 审核发现这里原本只跑了 5 步，阈值登记（thresholds）、
       # 阈值来历评审（thresholds-review）、来历查询（thresholds-query）、文档一致性（docs）、
       # 日志边界（log-boundary）五项从未在 CI 上跑过。逐条复制清单早晚会再漏一项。
