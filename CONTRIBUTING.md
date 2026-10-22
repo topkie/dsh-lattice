@@ -77,6 +77,27 @@ CI 对**所有分支**的 push 都会跑整条门禁 —— 与本地同一条�
 新增或改动阈值时，登记项要写清来历（`recheckable` / `chosen`）—— 写法、三个查询与评审基线见
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「阈值登记」一节。没有来历的新条目会让门禁红。
 
+### 门禁 11 项，各自的失败条件
+
+一条命令跑完 11 项，但排查时要知道是哪一项、怎么单独跑、什么样的改动会让它红。
+下表 2026-10-22 逐项实测过一次：11 项都以非零码退出，跑完都还原了原文件。
+
+| 步骤 | 单独跑 | 守什么 | 让它变红 |
+|---|---|---|---|
+| `build` | `node node_modules/typescript/bin/tsc -p tsconfig.json` | 编译到 `dist/`。测试与 verify 脚本 import 的是 `dist/`，跳过它会在旧产物上变绿 | 在 `src/` 任一文件写一行 `const broken: number = 'a'` |
+| `typecheck` | `node node_modules/typescript/bin/tsc --noEmit` | 类型错误，不产出 `dist/` | 同上 |
+| `lint` | `node node_modules/eslint/bin/eslint.js .` | eslint 对全仓（源码、测试、脚本、界面代码） | 在 `src/` 加一个没用到的局部变量 |
+| `format` | `node node_modules/prettier/bin/prettier.cjs --check 'src/**/*.ts' 'test/**/*.mjs' 'scripts/**/*.mjs' 'lib/**/*.js' '.github/**/*.yml'` | 源码、测试、脚本、界面代码、CI 配置五组文件的格式 | 写一行 `const a=1;export default a`（不换行、等号两侧无空格） |
+| `thresholds` | `node scripts/print-thresholds.mjs` | `src/` 里每个数值常量都登记了来历，或在豁免清单里 | 加一行模块级 `PROBE_MAGIC = 42` |
+| `thresholds-review` | `node scripts/print-thresholds.mjs --check-review` | 待评审清单只允许变短，新增条目不能靠往基线里塞消掉 | 往 `thresholds-review-baseline.json` 的 `unguarded` 加一个库里没有的键 |
+| `thresholds-query` | `node scripts/print-thresholds.mjs --undated` | 三条来历查询的命令行分派真的能跑到 | 让脚本在分派处抛错（0.4.1 上的真实形态是 `ReferenceError`，而门禁只跑 `--check-review`，绕开了它） |
+| `docs` | `node scripts/check-docs.mjs` | 文档里提到的仓库内路径与表名能在仓库里找到 | 在 `docs/` 里写一个不存在的路径 |
+| `log-boundary` | `node scripts/check-log-boundary.mjs` | 除 `src/log/` 外没有别处写日志 | 在 `src/` 任一文件写一行 `INSERT INTO log` |
+| `candidate-recall` | `node scripts/check-candidate-recall.mjs` | 目标在余弦上排到十几名时仍能进候选池 | 把 `scripts/check-candidate-recall.mjs` 里的 `WANT = 20` 改成 5 |
+| `test` | `node --import ./test/stubs/register.mjs test/run.mjs` | 单元测试，编码器用替身 | 在任一测试文件末尾加一句 `assert.equal(1, 2)` |
+
+`--import` 那一段不能漏：漏了编码器会真加载，降级路径的用例在联网机器上全部变红。
+
 ## 提交信息
 
 采用约定式提交（Conventional Commits），首行格式：

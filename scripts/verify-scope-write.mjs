@@ -343,31 +343,19 @@ check(
     ' 条',
 )
 
-// ── 判据 10：三处输出路径口径一致 ──
-// 锚段：逐条对 hits（且与 assembleView 返回的 anchorIds 一致，不让实现自述等于证据）。
-// 入口段：主题标签是写入时从某条 atom 摘要前 16 字派生的（write.ts 的 TOPIC_LABEL_CHARS），
-//   所以入口段必然带 atom 的痕迹 —— 要判的不是「带不带」，而是「只来自命中的主题」。
-//   入口段的**词条**是按主题全域取的（view.ts 的 topicEntries 只按 topic_id 查，不看 scope）：
-//   这是代码上真实存在的口径差异，本判据不覆盖它（构造时需要跨域词条挤进每主题前 N 条，
-//   当前五条卡的规模下挤不进去；见交付记录「未确定项」）。
-// 路段：**有意**展示 hits 之外的一跳邻居，所以「一致」只能是「同一条 scope 规则」，
-//   不是「集合等于 hits」。断言的是：路段里出现的每一条都在允许的 scope 内。
-// 显式传 tier = 'full'：本判据测过滤口径，不测预算降级 —— 档位一旦落到 brief/excerpt，
-// 路段会被 pathsOff 关掉，判据就变成「没测到却通过」。
-const HEADS = ['【锚】', '【入口】', '【路】']
-function sections(text) {
-  const out = { anchor: [], entry: [], path: [] }
-  let cur = null
-  for (const line of String(text).split('\n')) {
-    if (HEADS.includes(line)) {
-      cur = line === '【锚】' ? 'anchor' : line === '【入口】' ? 'entry' : 'path'
-      continue
-    }
-    if (cur !== null) out[cur].push(line)
-  }
-  return out
+// ── 判据 10：注入文本只有入选段，逐条对 hits ──
+// 入选段：逐条对 hits，且与 assembleView 返回的 anchorIds 一致 —— 不让实现自述等于证据。
+// 入口段与路段已随机制替换删除，这条同时钉住「文本里不许再出现旧段标题」：
+// 残留的段头会让接入方以为还有这两段，而它们已经没有内容可放。
+// 入选段为空时这条会退化成「没测到也通过」，所以先要求 hits 与 anchorIds 都非空。
+const HEADER = '【入选】'
+const LEGACY_HEADS = ['【锚】', '【入口】', '【路】']
+const anchorLines = (text) => {
+  const lines = String(text).split('\n')
+  const at = lines.indexOf(HEADER)
+  return at === -1 ? [] : lines.slice(at + 1)
 }
-const anchorIdsIn = (lines) =>
+const idsIn = (lines) =>
   lines
     .filter((l) => l.startsWith('- ['))
     .map((l) => {
@@ -375,68 +363,26 @@ const anchorIdsIn = (lines) =>
       return m === null ? -1 : Number(m[1])
     })
     .filter((n) => n >= 0)
-// 指纹 = 摘要前 8 个码点。摘要是正文的第一句（首句即全文时就是去掉句末标点），
-// 因此它既是锚段正文的前缀，也是路段摘要的前缀。五条卡的指纹互不相同。
-const fpOf = (id) =>
-  Array.from(stored.get(id)?.summary ?? '')
-    .slice(0, 8)
-    .join('')
-const tagsIn = (lines) => info.filter((c) => lines.join('\n').includes(fpOf(c.id))).map((c) => c.tag)
-const scopeAllowed = (tag) => {
-  const s = stored.get(idOfTag(tag)).scope
-  return s === PROJ_X || s === 'global'
-}
 const recalledX = recall(db, QUERY, qv, { topN: 24, scope: PROJ_X })
-const viewX = assembleView(db, recalledX, { scope: PROJ_X, tier: 'full' })
-// 对照：同一份召回结果，注入侧**不传** scope。这是 tools/index.ts 今天的形态
-// （assembleView 的调用只给 budget 与 briefMin），用来证明本判据确实能测到「不过滤会泄漏」。
-const viewNoScope = assembleView(db, recalledX, { tier: 'full' })
-const SX = sections(viewX.text)
-const SN = sections(viewNoScope.text)
-const anchorIn = anchorIdsIn(SX.anchor)
+const viewX = assembleView(db, recalledX, { scope: PROJ_X })
+const idsX = idsIn(anchorLines(viewX.text))
 const hitsX = new Set(recalledX.hits.map((h) => h.id))
-// 入口段：只允许展示「命中主题」的标签（主题 label 只来自 recalled.topics）。
-const entryLabels = SX.entry
-  .filter((l) => l.startsWith('['))
-  .map((l) => {
-    const m = /^\[([^\]]*)\]/.exec(l)
-    return m === null ? '' : m[1]
-  })
-const labelOfHits = recalledX.topics.map((t) => Array.from(t.label).slice(0, 16).join(''))
-const entryLabelsOk =
-  entryLabels.length > 0 && entryLabels.every((lbl) => labelOfHits.some((full) => full.startsWith(lbl)))
-const pathTags = tagsIn(SX.path)
-const wholeTags = tagsIn(String(viewX.text).split('\n'))
-const leakTags = wholeTags.filter((t) => !scopeAllowed(t))
-// 路段的前提：**对照**里（同一份召回、注入侧不传 scope）跨域邻居出现了 —— 那才证明
-// 这条链被测到。过滤生效时路段本身可以为空，那不是「没测到」。
-const noScopePathTags = tagsIn(SN.path)
+const legacyHeads = LEGACY_HEADS.filter((h) => String(viewX.text).includes(h))
 check(
-  '10 三处输出路径口径一致（锚对 hits、入口只来自命中主题、路段只出现同域邻居）',
-  // 锚段：文本里的 id 与返回值一致，且每一条都来自 hits。
-  eqList(anchorIn, [...viewX.anchorIds]) &&
-    anchorIn.every((id) => hitsX.has(id)) &&
-    // 入口段：只展示命中主题的标签。
-    entryLabelsOk &&
-    // 路段：对照里有内容（输入证据），且本视图里出现的每一条都同域。
-    noScopePathTags.length > 0 &&
-    leakTags.length === 0 &&
-    pathTags.every((t) => scopeAllowed(t)),
-  '锚段 id [' +
-    anchorIn.join(',') +
+  '10 注入文本只有入选段（逐条对 hits、与 anchorIds 一致、不出现旧段标题）',
+  recalledX.hits.length > 0 &&
+    viewX.anchorIds.length > 0 &&
+    eqList(idsX, [...viewX.anchorIds]) &&
+    idsX.every((id) => hitsX.has(id)) &&
+    legacyHeads.length === 0,
+  '入选段 id [' +
+    idsX.join(',') +
+    '] / anchorIds [' +
+    viewX.anchorIds.join(',') +
     '] / hits ' +
     recalledX.hits.length +
-    ' 条；入口段主题标签 ' +
-    entryLabels.length +
-    ' 个（都来自命中主题）；路段 ' +
-    SX.path.filter((l) => l !== '').length +
-    ' 行（' +
-    (pathTags.join(' ') || '空') +
-    '）；域外 ' +
-    leakTags.length +
-    ' 条；对照（注入侧不传 scope）路段：' +
-    (noScopePathTags.join(' ') || '（空）') +
-    ' —— 对照非空才说明路段这条链被测到',
+    ' 条；旧段标题 ' +
+    (legacyHeads.join(' ') || '未出现'),
 )
 
 db.close()
