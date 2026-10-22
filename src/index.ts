@@ -63,7 +63,6 @@ import {
   readReclusterState,
   resumeIfPending,
 } from './cluster/executor.js'
-import { configureSamples, sampleStats } from './samples/index.js'
 import { buildTools } from './tools/index.js'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -288,13 +287,6 @@ export const Config = z.object({
   cacheSize: z.number().min(0).default(0),
   /** 写锁等待上限毫秒；0 = 自动 */
   busyTimeout: z.number().min(0).default(0),
-  /**
-   * 校准样本的自动收集（默认开）。
-   *
-   * 关掉的是**自动收集**（负样本按纯度规则收集）；显式 `lattice_feedback` 照常记录 ——
-   * 那是模型对本次召回的显式判断，不是抽样。
-   */
-  samplesEnabled: z.boolean().default(true),
 })
 
 /**
@@ -361,7 +353,6 @@ export function apply(ctx: Context, config: unknown): void {
     },
     viewBudget: Number(cfg.viewBudget ?? DEFAULT_BUDGET),
     topN: Number(cfg.topN ?? CONFIG_TOP_N_DEFAULT),
-    samplesEnabled: cfg.samplesEnabled !== false,
     resources: {
       mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,
       cacheSize: Number(cfg.cacheSize ?? 0) > 0 ? Number(cfg.cacheSize) : undefined,
@@ -522,14 +513,7 @@ export function apply(ctx: Context, config: unknown): void {
           version: VERSION,
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
-          tools: [
-            'lattice_ping',
-            'lattice_write',
-            'lattice_recall',
-            'lattice_expand',
-            'lattice_list',
-            'lattice_feedback',
-          ],
+          tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list'],
           encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
           thresholds: {
             tauJoin: cfg.tauJoin,
@@ -547,18 +531,6 @@ export function apply(ctx: Context, config: unknown): void {
           // 五处模块级缓存的实时占用：只报数，且**每次现读**。口径与「为什么
           // 不触发重建」写在 cache-usage.ts 的文件头 —— 这里只负责把读数摆出来。
           caches: cacheUsage(rt.db),
-          // 样本库只报条数：原文（哪怕一条摘录）都不该出现在健康检查里。
-          //
-          // 先按与运行时相同的口径登记一次目录：ping 可能先于任何业务工具被调用，
-          // 不登记就会静默报 0 —— 而「库里有样本、健康检查说 0」正是最难查的那类假象。
-          // 这里**不调用 getRuntime**：健康检查不该顺手建记忆库。
-          samples: (() => {
-            configureSamples(resolveDataDir(runtimeCfg.dataDir), {
-              enabled: runtimeCfg.samplesEnabled,
-              model: runtimeCfg.encoderModel,
-            })
-            return sampleStats()
-          })(),
         })
       },
     }),

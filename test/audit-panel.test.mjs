@@ -370,7 +370,6 @@ describe('健康面板（只读体检路由的展示端）', () => {
     const names = tools.map((t) => t.name).sort()
     assert.deepEqual(names, [
       'lattice_expand',
-      'lattice_feedback',
       'lattice_list',
       'lattice_ping',
       'lattice_recall',

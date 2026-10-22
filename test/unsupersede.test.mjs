@@ -20,7 +20,7 @@ import { apply } from '../dist/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 
-/** 每个用例一份独立目录：库文件、样本库、日志都落在里面，结束时整个删掉。 */
+/** 每个用例一份独立目录：库文件与日志都落在里面，结束时整个删掉。 */
 function tmpDir(tag) {
   return mkdtempSync(join(tmpdir(), 'dsh-lattice-unsupersede-' + tag + '-'))
 }

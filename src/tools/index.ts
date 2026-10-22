@@ -1,27 +1,23 @@
-// 暴露给宿主的五个业务工具（`lattice_ping` 在 index.ts 注册，共六个）。
+// 暴露给宿主的四个业务工具（`lattice_ping` 在 index.ts 注册，共五个）。
 //
 // 只有工具，没有 hook —— 这是设计决定：禁用 LLM 后「轮次结束自动沉淀」那条路必然
 // 要调 LLM 做结构化，与本插件的定位冲突。写入与召回都必须是**显式动作**。
 //
-// 五个工具对应记忆行动的五个环节：
+// 四个工具对应记忆行动的四个环节：
 //   lattice_write     记住一件事
 //   lattice_recall    按需取回（返回组装好的三段式文本，不是裸数组）
 //   lattice_expand    展开某条记忆的全文或它的兄弟
 //   lattice_list      列目录（「库里有什么」，只读、分页、可过滤）
-//   lattice_feedback  对上次召回给出「第几条有用 / 无用」
 //
-// **还有第六个动作，但没有第六个工具**：删除。`lattice_forget` 刻意不在下面这个数组里
-// —— 理由见文件尾 `forgetTool` 上方那段注释。
-//
-// `lattice_feedback` 为什么是独立工具而不是挂在 write 上：写入是高频路径
-// （现在已经 8 个参数），反馈是低频动作；挂上去等于每次写入都替反馈付一次参数成本。
+// **还有两个动作，但没有对应工具**，两个定义都写在文件尾：
+//   - `lattice_forget`：物理删除归用户，模型只能提议 —— 见 `FORGET_TOOL_SPEC` 上方。
+//   - `lattice_feedback`：当前未启用（样本库已删）—— 见 `FEEDBACK_TOOL_SPEC` 上方。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { feedLearned } from '../pipeline/entries.js'
 import { LIST_DEFAULT_LIMIT, listAtoms, type ListRow } from '../pipeline/list.js'
 import { RECALL_TOP_N, recall, recordRecall } from '../pipeline/search.js'
 import { assembleView } from '../pipeline/view.js'
-import { collectAutoNegative, noteLastRecall, recordSample, resolveFeedbackRef } from '../samples/index.js'
 import {
   FLAG_ARCHIVED,
   type DeclaredEdgeInput,
@@ -140,14 +136,6 @@ function str(v: unknown, fallback = ''): string {
 }
 function num(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
-}
-
-/** 拒因里回显入参：把 undefined / 字符串 / 数字混成同一句话，调用方就改不对。 */
-function describeArg(v: unknown): string {
-  if (v === undefined) return '（未提供）'
-  if (typeof v === 'string') return '"' + v + '"'
-  if (typeof v === 'number') return String(v)
-  return typeof v
 }
 
 /** 构造三个工具的定义。cfg 在闭包里，apply 时解析一次。 */
@@ -445,19 +433,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         // 该拆的记忆连同它被用来解决什么一起给出来」。其他锚行不受影响。
         scene: q,
       })
-      // 会话级「最近一次召回」：只留在内存里，lattice_feedback 的 ref 靠它解析。
-      // 记的是 view.anchorIds（真正展示给模型的那批），不是融合后的全部候选。
-      noteLastRecall({ ids: view.anchorIds, top1: recalled.meta.topCosine, vec: vq })
-      // 负样本自动收集：分类是纯逻辑，落盘由样本模块延后到下一轮事件循环 ——
-      // 召回路径上仍然没有同步 IO。开关关掉时这一步整体跳过，召回结果不受影响。
-      if (cfg.samplesEnabled !== false) {
-        collectAutoNegative({
-          query: q,
-          meta: recalled.meta,
-          vec: vq,
-          hitIds: recalled.hits.map((h) => h.id),
-        })
-      }
+
       const notes: string[] = [libraryLine(rt)]
       if (recalled.meta.vectorMissing) notes.push('（编码器不可用，本次为纯词面召回）')
       if (recalled.meta.lexicalDegraded) notes.push('（词面两路均未命中，仅向量路有结果）')
@@ -663,55 +639,35 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     },
   })
 
-  /**
-   * 校准样本的**唯一人工入口**。
-   *
-   * 只写独立样本库，**不写 edge、不写主库、不触发重标**（正样本是
-   * 「查询↔记忆」，edge 是「记忆↔记忆」，不是同一条数据）。`ref` 是上次召回的 1-based
-   * 序号，由插件映射回 atom id —— 模型管语义位置，插件管结构。
-   */
-  const feedbackTool = defineTool({
-    name: 'lattice_feedback',
-    description:
-      '对上次召回给出反馈：第几条有用（positive）或无关（negative）。ref 是【锚】段的 1-based 序号，不是记忆 id。只记录判断，不改记忆与排序；拿不准时不调。',
-    parameters: {
-      kind: {
-        type: 'string',
-        description: 'positive 或 negative',
-        required: true,
-      },
-      ref: {
-        type: 'number',
-        description: '【锚】段第几条（1-based）；越界会被拒并说明原因',
-        required: true,
-      },
-    },
-    output: textOutput(),
-    async execute(args: Record<string, unknown>) {
-      // 先确保运行时与样本库已配置：样本的落盘依赖 configureSamples。这一步不写主库
-      // （getRuntime 的写只发生在首次建库与迁移时）。
-      getRuntime(cfg)
-      const kind = str(args?.kind).trim()
-      if (kind !== 'positive' && kind !== 'negative') {
-        return '反馈被拒：kind 只能是 positive 或 negative，收到 ' + describeArg(args?.kind) + '。'
-      }
-      const resolved = resolveFeedbackRef(args?.ref)
-      if (!resolved.ok) return '反馈被拒：' + resolved.reason
-      const recorded = await recordSample({
-        kind,
-        source: 'feedback',
-        top1: resolved.top1,
-        vec: resolved.vec,
-        hitIds: [resolved.atomId],
-      })
-      const head = '第 ' + String(args?.ref) + ' 条（atom #' + resolved.atomId + '）判为 ' + kind + '。'
-      if (recorded) return '已记下反馈：' + head
-      return '反馈未写入样本库：' + head + '（样本库写失败，这条反馈已丢弃；记忆与召回不受影响。）'
-    },
-  })
-
-  return [writeTool, recallTool, expandTool, listTool, feedbackTool]
+  return [writeTool, recallTool, expandTool, listTool]
 }
+
+/**
+ * `lattice_feedback` 的**定义**：它存在，但**当前未启用**，不进工具表。
+ *
+ * 它记录的是「模型对上次召回的判断」—— 当初是校准样本的唯一人工入口，用来找判定线的切点。
+ * 那条链在 0.5.0 之后整体退役：判定线改成「本库无关问句分数的 p90」（pipeline/refdist.ts），
+ * 那是**分布**问题，不需要标签；样本库、四道闸、重标与切点扫描一起删掉了。
+ * 判断数据仍可用于离线评估与人工审计，但不参与运行期行为。
+ *
+ * 那为什么还留着定义？因为「判断信号能改变什么」这个问题问过一次、答过一次，答案固定在
+ * 代码里比只留在提交历史里更容易找到。将来要启用，前提是先重新论证这一点（见
+ * docs/INTEGRATION.md 的「调用与副作用的三条纪律」）。
+ *
+ * 与 `FORGET_TOOL_SPEC` 同一个形态：名字与参数在，不进 `buildTools` 的返回数组 ——
+ * 「模型可见的工具表」在本仓库里就是那个数组。宿主对未注册的名字回 UNKNOWN_TOOL。
+ */
+export const FEEDBACK_TOOL_NAME = 'lattice_feedback'
+
+export const FEEDBACK_TOOL_SPEC = {
+  name: FEEDBACK_TOOL_NAME,
+  description:
+    '对上次召回给出反馈：第几条有用（positive）或无关（negative）。ref 是【锚】段的 1-based 序号，不是记忆 id。**当前未启用**：模型侧看不到这个工具，定义留下只为固定参数契约。',
+  parameters: {
+    kind: { type: 'string', description: 'positive 或 negative', required: true },
+    ref: { type: 'number', description: '【锚】段第几条（1-based）', required: true },
+  },
+} as const
 
 /**
  * `lattice_forget` 的**定义**：它存在，但**不进工具表**。

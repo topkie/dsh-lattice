@@ -223,8 +223,6 @@ const EXEMPT = {
     '协议性：日志库的 PRAGMA user_version，改它等于换日志库格式（实现上是**重建**，不迁移），不是调参',
   DETAIL_MAX_CHARS:
     '结构性上限：detail 序列化后的字符数护栏。白名单字段本就短，改它不改变任何判断，只影响「异常大的 detail 被整条丢弃」',
-  SAMPLE_SCHEMA_VERSION:
-    '协议性：样本库的 PRAGMA user_version，改它等于换样本库格式（实现上是**重建**，不迁移），不是调参',
 }
 
 /**
@@ -249,7 +247,6 @@ const EXEMPT_NON_NUMERIC = {
     '正则：声明边 type 的字符集（小写字母 / 数字 / 下划线）。长度上限另有变量 —— ' +
     'DECLARED_EDGE_TYPE_MAX 已登记进阈值表',
   VERSION: '插件版本（读自 package.json）',
-  SAMPLE_DDL: 'SQL 文本（样本库的建表语句，只此一份）',
   Config: 'zod schema 定义体，不是数值常量（其默认值在阈值表里逐项登记）',
 }
 

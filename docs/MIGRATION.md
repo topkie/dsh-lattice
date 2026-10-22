@@ -23,8 +23,7 @@
 **[agent 检查表 0]**
 
 - [ ] 确认目标库版本：`lattice_ping` 的 `version`
-- [ ] 确认自己手里只有 `lattice_*` 六个工具，其中**没有** forget / delete
-      （`lattice_feedback` 是样本反馈：它只写独立样本库，不改动任何记忆）
+- [ ] 确认自己手里只有 `lattice_*` 五个工具，其中**没有** forget / delete
 - [ ] 确认源库能**全量导出**（只能翻界面的库不要迁）
 
 ---

@@ -12,7 +12,13 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { setArchived } from '../dist/pipeline/archive.js'
-import { FORGET_TOOL_NAME, FORGET_TOOL_SPEC, referenceNote } from '../dist/tools/index.js'
+import {
+  FEEDBACK_TOOL_NAME,
+  FEEDBACK_TOOL_SPEC,
+  FORGET_TOOL_NAME,
+  FORGET_TOOL_SPEC,
+  referenceNote,
+} from '../dist/tools/index.js'
 import { resetEncoder } from '../dist/encoder/index.js'
 
 let dir = ''
@@ -83,20 +89,19 @@ describe('工具注册与执行', () => {
   })
 
   describe('工具注册', () => {
-    // 模型侧工具数 = 6（ping + write / recall / expand / list / feedback）。
-    // 2026-10-18 增加 `lattice_feedback`：它只写独立样本库，
-    // 所以「多一个工具」不等于「多一个写主库的入口」—— 见 test/samples.test.mjs。
-    it('注册了 ping 与五个业务工具（共六个）', () => {
+    // 模型侧工具数 = 5（ping + write / recall / expand / list）。
+    // 2026-10-18 曾增加 `lattice_feedback`；2026-10-22 它随样本库退役，
+    // 定义留在 tools/index.ts 的 FEEDBACK_TOOL_SPEC 里，不进工具表。
+    it('注册了 ping 与四个业务工具（共五个）', () => {
       const names = tools.map((t) => t.name).sort()
       assert.deepEqual(names, [
         'lattice_expand',
-        'lattice_feedback',
         'lattice_list',
         'lattice_ping',
         'lattice_recall',
         'lattice_write',
       ])
-      assert.equal(names.length, 6)
+      assert.equal(names.length, 5)
     })
 
     /**
@@ -117,14 +122,20 @@ describe('工具注册与执行', () => {
       )
     })
 
+    /**
+     * 反馈同理，但原因不同：它不是「归用户」，而是**当前未启用**。
+     *
+     * 定义留着的用处是把「判断信号能改变什么」这个问题的答案固定在代码里；
+     * 模型侧看不到它，也就不会拿它当可用能力去试。
+     */
+    it('模型可见的工具表不含 lattice_feedback（当前未启用）', () => {
+      assert.equal(FEEDBACK_TOOL_SPEC.name, FEEDBACK_TOOL_NAME)
+      assert.equal(FEEDBACK_TOOL_NAME, 'lattice_feedback')
+      assert.ok(!tools.some((t) => t.name === FEEDBACK_TOOL_NAME))
+    })
+
     it('每个业务工具都有 description / parameters / execute', () => {
-      for (const n of [
-        'lattice_write',
-        'lattice_recall',
-        'lattice_expand',
-        'lattice_list',
-        'lattice_feedback',
-      ]) {
+      for (const n of ['lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list']) {
         const t = tool(n)
         assert.equal(typeof t.execute, 'function', n + ' 缺少 execute')
         assert.ok(String(t.description).length > 20, n + ' 的 description 太短，模型无法判断何时用')
@@ -138,7 +149,8 @@ describe('工具注册与执行', () => {
       assert.deepEqual(tool('lattice_write').parameters.required, ['text'])
       assert.deepEqual(tool('lattice_recall').parameters.required, ['query'])
       assert.deepEqual(tool('lattice_expand').parameters.required, ['atom_id'])
-      assert.deepEqual(tool('lattice_feedback').parameters.required, ['kind', 'ref'])
+      // 定稿但未启用的规格：参数契约照样钉住，否则将来加回工具表时没人知道它该收什么。
+      assert.deepEqual(Object.keys(FEEDBACK_TOOL_SPEC.parameters).sort(), ['kind', 'ref'])
     })
   })
 
@@ -421,10 +433,10 @@ describe('工具注册与执行', () => {
         'lattice_recall',
         'lattice_expand',
         'lattice_list',
-        'lattice_feedback',
       ])
-      // 样本库只报条数，且没写过样本时不建库：三个数都是 0。
-      assert.deepEqual(j.samples, { total: 0, positive: 0, negative: 0 })
+      // 样本库退役后健康检查不再报 samples 字段：一个永远是 0 的字段
+      // 会让人以为样本还在收集、只是碰巧没有。
+      assert.equal('samples' in j, false)
     })
   })
 

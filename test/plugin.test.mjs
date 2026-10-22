@@ -88,23 +88,22 @@ describe('插件契约', () => {
   /**
    * 模型侧的工具表是**闭集**，改它要先有裁决。
    *
-   * 2026-10-18：新增第 6 个工具 `lattice_feedback`（样本反馈），
-   * 本条断言因此从「四个业务工具 + ping」改为「五个业务工具 + ping = 6」。
-   * 改这条的理由只该是「裁决表里多了一条」，不该是「代码里顺手多加了一个」。
+   * 2026-10-18：新增第 6 个工具 `lattice_feedback`（样本反馈），本条断言随之改为 6。
+   * 2026-10-22：它随样本库一起退役，工具表回到 5 个（四个业务 + ping）。
+   * 改这条的理由只该是「裁决表里多了一条 / 少了一条」，不该是「代码里顺手改了一个」。
    */
-  it('激活时注册五个业务工具与一个健康检查（共六个，含 feedback）', () => {
+  it('激活时注册四个业务工具与一个健康检查（共五个）', () => {
     const ctx = fakeCtx()
     apply(ctx, baseConfig)
     const names = ctx.registered.map((t) => t.name).sort()
     assert.deepEqual(names, [
       'lattice_expand',
-      'lattice_feedback',
       'lattice_list',
       'lattice_ping',
       'lattice_recall',
       'lattice_write',
     ])
-    assert.equal(names.length, 6)
+    assert.equal(names.length, 5)
     // 判据 8：audit 是内部模块 + 只读路由，绝不进模型侧。
     assert.ok(!names.includes('lattice_audit'), '体检不得注册成工具')
     for (const t of ctx.registered) assert.equal(typeof t.output.render, 'function')
@@ -513,7 +512,7 @@ describe('插件契约', () => {
     }
   })
 
-  it('宿主没有 webServer 时不注册路由、不抛，六个工具照常在', () => {
+  it('宿主没有 webServer 时不注册路由、不抛，五个工具照常在', () => {
     const ctx = fakeCtx()
     assert.doesNotThrow(() => apply(ctx, baseConfig))
     assert.deepEqual(ctx.injected, [['webServer']], '依赖照样声明，只是不会执行')
@@ -521,7 +520,6 @@ describe('插件契约', () => {
     // 与上一条合起来钉死「静默跳过」：不报错，但也不能什么都不做。
     assert.deepEqual(ctx.registered.map((t) => t.name).sort(), [
       'lattice_expand',
-      'lattice_feedback',
       'lattice_list',
       'lattice_ping',
       'lattice_recall',

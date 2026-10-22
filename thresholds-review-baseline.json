@@ -80,10 +80,7 @@
     "LOG_WRITE_FAILED_MIN_INTERVAL_MS": "限频间隔没有测试按常量名断言；「1 次/分钟」是设计草案的规定，不是测量。",
     "LOG_EXPORT_MAX_ROWS": "导出行数上限没有测试按常量名断言；test/log.test.mjs 有 export 相关断言，但没有引用这个常量名。",
     "LOG_EXPORT_MAX_BYTES": "导出字节上限没有测试按常量名断言；同一处断言也没有导入 src/log/export.ts 的这个常量。",
-    "SAMPLE_RETAIN_DAYS": "test/samples.test.mjs 以显式 retainDays: 90 构造，未引用常量名；裁决值，没有测试按常量名断言。",
-    "SAMPLE_MAX_ROWS": "test/samples.test.mjs 以显式 maxRows: 10000 构造，未引用常量名。",
-    "SAMPLE_NEG_OBVIOUS_MAX": "test/samples.test.mjs 以显式 negObviousMax: 2 构造（断言的是淘汰机制），未引用常量名。",
-    "SAMPLE_QUEUE_MAX": "test/samples.test.mjs 覆盖 src/samples/index.ts，但没有 queueMax 字样；队列满时丢最旧，测试走不到这个上限。",
+
     "MMAP_MEMORY_DIVISOR": "T65 阶段 2 搬到常量定义处之后，--unguarded 只查登记表，漏掉了这一条；批 2 让查询覆盖两种来源，它才出现。补要按常量名写断言（现在的测试按行为覆盖，不钉默认值）。",
     "MMAP_GROWTH": "同上：查询以前只覆盖登记表，这条在定义处，漏了。补要按常量名写断言。",
     "CACHE_RATIO": "同上：查询以前只覆盖登记表，这条在定义处，漏了。补要按常量名写断言。",

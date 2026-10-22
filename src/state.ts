@@ -16,7 +16,6 @@ import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './
 import { closeLog, configureLog, log } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
 import type { RecallMeta } from './pipeline/search.js'
-import { closeSamples, configureSamples } from './samples/index.js'
 import { createWriteCtx, type WriteCtx, type WriteThresholds } from './pipeline/write.js'
 
 /** 插件传给运行时的配置（已解析默认值的形状）。 */
@@ -29,8 +28,7 @@ export interface RuntimeConfig {
   thresholds: WriteThresholds
   viewBudget: number
   topN: number
-  /** 校准样本的**自动收集**开关（默认开）。显式 lattice_feedback 不受它影响。 */
-  samplesEnabled: boolean
+
   resources: { mmapSize?: number; cacheSize?: number; busyTimeout?: number }
 }
 
@@ -67,9 +65,7 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
   // 日志库与记忆库同目录、不同文件。这里只登记 dataDir，不碰磁盘 ——
   // 建日志库要等第一条降级事件（见 src/log/index.ts 的 LogStore 懒打开）。
   configureLog(dir)
-  // 样本库同目录、不同文件（<dataDir>/samples/recall-sample.db）：同样只登记目录，
-  // 建库推迟到第一条样本（见 src/samples/index.ts 的懒打开）。
-  configureSamples(dir, { enabled: cfg.samplesEnabled !== false, model: cfg.encoderModel })
+
   const file = join(dir, 'lattice.db')
   const { db } = openVault(file, { resources: cfg.resources })
   stampVault(db)
@@ -177,7 +173,5 @@ export function closeRuntime(): void {
   // 游标随运行时一起复位：换库后「第一次失败」必须能重新留下痕迹。
   lastEncoderFailure = null
   lastRecallDegraded = { vectorMissing: false, lexicalDegraded: false, shortTermMiss: false }
-  // 样本库先关：它与会话级「最近一次召回」一起复位，给下一次运行时一个干净的起点。
-  closeSamples()
   closeLog()
 }

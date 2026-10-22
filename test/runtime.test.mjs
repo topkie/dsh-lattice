@@ -29,7 +29,6 @@ describe('运行时可变状态', () => {
       thresholds: { tauJoin: 0.78, tauLex: 0.05, tauLexOnly: 0.1, tauNew: 0.5 },
       viewBudget: 6000,
       topN: 24,
-      samplesEnabled: true,
       resources: {},
     }
   }

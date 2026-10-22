@@ -53,7 +53,6 @@ describe('atom-detail', () => {
       tauNew: 0.38,
       viewBudget: 6000,
       topN: 24,
-      samplesEnabled: false,
     }
   }
 

@@ -192,7 +192,9 @@ describe('降级日志', () => {
      * 白名单是**闭集**：多一个事件就是多一条「什么东西可能落进磁盘」的路径。
      *
      * 2026-10-18 增 `samples.unavailable`（样本库）：它与 `log.write_failed` 同形 ——
-     * 旁路写不进时只记原因码。改这里的每一条都要能说出「为什么它必须落盘」，
+     * 旁路写不进时只记原因码。2026-10-22 删：样本库随反馈链退役，这个事件没有发送方了；
+     * 白名单只留还有写入方的事件，留着它等于给一个不存在的旁路留落盘通道。
+     * 改这里的每一条都要能说出「为什么它必须落盘」，
      * 否则下次就该删掉它而不是给测试打补丁。
      *
      * 2026-10-19 增 `split.ignored`（待拆分）：用户忽略候选**没有别的留痕处** ——
@@ -220,7 +222,6 @@ describe('降级日志', () => {
         'recall.lexical_degraded',
         'recall.short_term_miss',
         'recall.vector_missing',
-        'samples.unavailable',
         'split.confirmed',
         'split.evicted',
         'split.ignored',

@@ -5,6 +5,26 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Breaking
+
+- **模型侧工具从 6 个减到 5 个**：`lattice_feedback` 的定义还留在 `src/tools/index.ts`（`FEEDBACK_TOOL_SPEC`），
+  但不再注册进工具表。它写的是「模型判断哪条有用」这类标签，而判定线自 0.5.0 起只吃分布、不吃标签；
+  整条链的另一端（样本库 871 行、四道闸、重标、切点扫描）随之拆除。实测依据：真机样本库自 10-18 起
+  只积累到 1 条（`source=feedback` 1 条、`source=auto` 0 条），四道闸里「正样本 ≥ 10」那道永远不满足，
+  重标从未发生
+- **删除 `samplesEnabled` 配置项**：它只控制样本的自动收集，样本库删除后没有作用。旧配置里留着它不报错，
+  但不再有任何效果
+- **`lattice_ping` 不再报 `samples` 字段**：一个永远为 0 的字段会让人以为样本还在收集、只是碰巧没有
+- **数据目录不再创建 `samples/`**：`<dataDir>` 下只有 `lattice.db` 与 `logs/`
+
+### Added（文档）
+
+- `docs/INTEGRATION.md` 新增「调用与副作用的三条纪律」（判断类工具只收语义位置、跨会话无意义的数据不落库、
+  写是副作用时须写明失败方向），每条带一个反例 —— 这三条与反馈工具是否启用无关，是留下的判断
+- `docs/ARCHITECTURE.md` 第八节改写为「反馈（工具定义保留，当前未启用）」，写明删它的直接原因与重启条件
+
 ## [0.5.0] - 2026-10-22
 
 ### Breaking

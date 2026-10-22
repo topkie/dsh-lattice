@@ -8,7 +8,7 @@
 // 钩子只写在自己的辅助函数里 —— 顶层 before/after 是全局的，会与其他文件串。
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -20,7 +20,6 @@ import { edgeOriginCounts, inferEdges } from '../dist/graph/infer.js'
 import { recall } from '../dist/pipeline/search.js'
 import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
 import { assembleView } from '../dist/pipeline/view.js'
-import { SAMPLE_DB_NAME, SAMPLES_DIR_NAME } from '../dist/samples/store.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { DECLARED_EDGE_HINT, DECLARED_EDGE_ONLY_NOTE } from '../dist/tools/index.js'
 import { VEC_DIM } from '../dist/util/vec.js'
@@ -28,7 +27,7 @@ import { openRuler } from './ro-ruler.mjs'
 
 const DUP = { dupCos: 0.92, dupLex: 0.72 }
 
-/** 每个用例一份独立目录：库文件、样本库、日志都落在里面，结束时整个删掉。 */
+/** 每个用例一份独立目录：库文件与日志都落在里面，结束时整个删掉。 */
 function tmpDir(tag) {
   return mkdtempSync(join(tmpdir(), 'dsh-lattice-declared-' + tag + '-'))
 }
@@ -118,19 +117,6 @@ function originDistribution(db) {
     .prepare('SELECT origin, COUNT(*) AS n FROM edge GROUP BY origin ORDER BY origin')
     .all()
     .map((r) => [String(r.origin), Number(r.n)])
-}
-
-/** 读样本库的行数：库文件可能还没建（从没写过样本），那也算 0 行。 */
-function sampleRows(dir) {
-  const file = join(dir, SAMPLES_DIR_NAME, SAMPLE_DB_NAME)
-  if (!existsSync(file)) return 0
-  const db = new DatabaseSync(file, { readOnly: true })
-  try {
-    if (!db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'recall_sample'").get().n) return 0
-    return Number(db.prepare('SELECT COUNT(*) AS n FROM recall_sample').get().n)
-  } finally {
-    db.close()
-  }
 }
 
 describe('判据 1：写入声明两条边，展开能看到', () => {
@@ -434,32 +420,27 @@ describe('判据 5：声明边不被自动提权（名次不变）', () => {
   })
 })
 
-describe('判据 6：edges 不写样本库', () => {
-  it('声明边只落主库 edge（origin = declared），样本库行数不变', async () => {
-    // samplesEnabled=false 只关「自动收集」，不关样本库本身 —— 用它让 feedback 的写入
-    // 成为这一组里唯一的样本来源，行数才是确定的。
-    await withTools(
-      'c6',
-      async ({ cfg, dir, tool }) => {
-        const w = tool('lattice_write')
-        await tool('lattice_ping').execute({})
-        const a = atomIdOf(await w.execute({ text: '系统代理必须走本地端口，否则访问境外源会超时。' }))
-        await tool('lattice_recall').execute({ query: '系统代理' })
-        const fb = await tool('lattice_feedback').execute({ kind: 'positive', ref: 1 })
-        assert.ok(fb.includes('已记下反馈'), '样本库要先有一条真实样本：' + fb)
-        assert.equal(sampleRows(dir), 1)
-
-        const before = sampleRows(dir)
-        const receipt = await w.execute({
-          text: '依赖解析失败时先看解析策略，再看锁文件。',
-          edges: [{ type: 'related', target: a }],
-        })
-        const c = atomIdOf(receipt)
-        assert.equal(sampleRows(dir), before, '声明边不得写样本库')
-        assert.deepEqual(declaredRows(getRuntime(cfg).db, c), [['related', a, 'declared', 1]])
-      },
-      { samplesEnabled: false },
-    )
+describe('判据 6：一次写入只产生一个库文件', () => {
+  it('声明边只落主库 edge（origin = declared），数据目录里没有第二个库', async () => {
+    // 原判据是「edges 不写样本库」。样本库退役后它变成了更强的形式：
+    // 插件只允许有一个库文件 —— 多出一个 .db 就说明有旁路又在偷偷落盘，
+    // 而这正是当年 samples/ 造成的形状（一个不参与召回、只在后台累积的库）。
+    await withTools('c6', async ({ cfg, dir, tool }) => {
+      const w = tool('lattice_write')
+      await tool('lattice_ping').execute({})
+      const a = atomIdOf(await w.execute({ text: '系统代理必须走本地端口，否则访问境外源会超时。' }))
+      await tool('lattice_recall').execute({ query: '系统代理' })
+      const receipt = await w.execute({
+        text: '依赖解析失败时先看解析策略，再看锁文件。',
+        edges: [{ type: 'related', target: a }],
+      })
+      const c = atomIdOf(receipt)
+      assert.deepEqual(declaredRows(getRuntime(cfg).db, c), [['related', a, 'declared', 1]])
+      const dbFiles = readdirSync(dir)
+        .filter((f) => f.endsWith('.db'))
+        .sort()
+      assert.deepEqual(dbFiles, ['lattice.db'], '数据目录里只应有主库，实有：' + dbFiles.join(', '))
+    })
   })
 })
 
