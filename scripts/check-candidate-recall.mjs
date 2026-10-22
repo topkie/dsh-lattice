@@ -49,7 +49,7 @@ function seed(text, vec, terms) {
   const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength)
   const r = db
     .prepare(
-      "INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key, source, source_ref, polarity, flags, created_at, updated_at) VALUES ('结论', ?, ?, ?, 1, 0.8, 'global', NULL, NULL, NULL, NULL, 0, ?, ?)",
+      "INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, source, source_ref, polarity, flags, created_at, updated_at) VALUES ('结论', ?, ?, ?, 1, 0.8, 'global', NULL, NULL, NULL, 0, ?, ?)",
     )
     .run(text, text.slice(0, 40), blob, now, now)
   const id = Number(r.lastInsertRowid)

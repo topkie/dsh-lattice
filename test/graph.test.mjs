@@ -70,11 +70,11 @@ function seedAtom(topicId, text, vec, scope = 'global') {
   }
   const r = db
     .prepare(
-      'INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key, source, source_ref, polarity, flags, created_at, updated_at) VALUES (' +
+      'INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, source, source_ref, polarity, flags, created_at, updated_at) VALUES (' +
         Q +
         '结论' +
         Q +
-        ', ?, ?, ?, ?, 0.8, ?, NULL, NULL, NULL, NULL, 0, ?, ?)',
+        ', ?, ?, ?, ?, 0.8, ?, NULL, NULL, NULL, 0, ?, ?)',
     )
     .run(text, String(text).slice(0, 40), blobOf(vec), topicId, scope, now, now)
   const id = Number(r.lastInsertRowid)

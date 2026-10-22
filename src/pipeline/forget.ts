@@ -478,7 +478,7 @@ export function forgetAtom(db: DatabaseSync, input: ForgetInput): ForgetResult |
   if (!Number.isInteger(atomId) || atomId <= 0) throw new Error('atom_id 必须是正整数')
 
   const atom = db
-    .prepare('SELECT id, kind, text, summary, embedding, scope, project_key, origin FROM atom WHERE id = ?')
+    .prepare('SELECT id, kind, text, summary, embedding, scope, origin FROM atom WHERE id = ?')
     .get(atomId) as
     | {
         id: number | bigint
@@ -487,7 +487,6 @@ export function forgetAtom(db: DatabaseSync, input: ForgetInput): ForgetResult |
         summary: string
         embedding: Uint8Array
         scope: string
-        project_key: string | null
         origin: string
       }
     | undefined
@@ -519,8 +518,8 @@ export function forgetAtom(db: DatabaseSync, input: ForgetInput): ForgetResult |
     tombstoneId = Number(
       db
         .prepare(
-          'INSERT INTO forgotten(atom_id, fingerprint, embedding, kind, scope, project_key, origin, summary, deleted_at)' +
-            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO forgotten(atom_id, fingerprint, embedding, kind, scope, origin, summary, deleted_at)' +
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         )
         .run(
           atomId,
@@ -528,7 +527,6 @@ export function forgetAtom(db: DatabaseSync, input: ForgetInput): ForgetResult |
           normalizeVecBlob(atom.embedding),
           String(atom.kind),
           String(atom.scope ?? 'global'),
-          atom.project_key ?? null,
           String(atom.origin ?? 'model'),
           String(atom.summary ?? extractSummary(String(atom.text), SUMMARY_CHARS)),
           now,

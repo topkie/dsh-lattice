@@ -35,14 +35,13 @@ afterEach(() => {
 function seed(id, o = {}) {
   const text = o.text ?? '正文'
   db.prepare(
-    'INSERT INTO atom(id, kind, text, summary, embedding, scope, project_key, origin, created_at, updated_at) VALUES (?, ?, ?, ?, zeroblob(2048), ?, ?, ?, ?, ?)',
+    'INSERT INTO atom(id, kind, text, summary, embedding, scope, origin, created_at, updated_at) VALUES (?, ?, ?, ?, zeroblob(2048), ?, ?, ?, ?)',
   ).run(
     id,
     o.kind ?? '结论',
     text,
     o.summary ?? '摘要' + id,
     o.scope ?? 'global',
-    o.projectKey ?? null,
     o.origin ?? 'model',
     id,
     id,
@@ -123,8 +122,8 @@ describe('目录：按 id 批量取（搜索结果的归属显示要用）', () 
 describe('目录：项目级 scope', () => {
   it('看某个项目时同时看到全局，看不到别的项目', () => {
     seed(1, { scope: 'global' })
-    seed(2, { scope: 'proj-a', projectKey: 'proj-a' })
-    seed(3, { scope: 'proj-b', projectKey: 'proj-b' })
+    seed(2, { scope: 'proj-a' })
+    seed(3, { scope: 'proj-b' })
     assert.deepEqual(
       listAtoms(db, { scope: 'proj-a' }).rows.map((r) => r.id),
       [2, 1],

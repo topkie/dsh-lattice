@@ -88,7 +88,6 @@ const SNAPSHOT_V5: readonly string[] = [
     topic_id         INTEGER REFERENCES topic(id) ON DELETE SET NULL,
     fit              REAL    NOT NULL DEFAULT 0,
     scope            TEXT    NOT NULL DEFAULT 'global',
-    project_key      TEXT,
     source           TEXT,
     source_ref       TEXT,
     polarity         INTEGER,
@@ -102,7 +101,7 @@ const SNAPSHOT_V5: readonly string[] = [
   )`,
   `CREATE INDEX idx_atom_topic   ON atom(topic_id)`,
   `CREATE INDEX idx_atom_created ON atom(created_at DESC)`,
-  `CREATE INDEX idx_atom_scope   ON atom(scope, project_key)`,
+  `CREATE INDEX idx_atom_scope   ON atom(scope)`,
   `CREATE INDEX idx_atom_origin  ON atom(origin)`,
   `CREATE INDEX idx_atom_flags   ON atom(flags) WHERE flags <> 0`,
   `CREATE TABLE atom_topic (
@@ -190,13 +189,12 @@ const SNAPSHOT_V5: readonly string[] = [
     embedding   BLOB    NOT NULL,
     kind        TEXT    NOT NULL,
     scope       TEXT    NOT NULL DEFAULT 'global',
-    project_key TEXT,
     origin      TEXT    NOT NULL DEFAULT 'model',
     summary     TEXT    NOT NULL DEFAULT '',
     deleted_at  INTEGER NOT NULL
   )`,
   `CREATE INDEX idx_forgotten_deleted ON forgotten(deleted_at DESC)`,
-  `CREATE INDEX idx_forgotten_scope ON forgotten(scope, project_key)`,
+  `CREATE INDEX idx_forgotten_scope ON forgotten(scope)`,
 
   // ── 状态：四件事各一张单行/队列表（v5 新增，取代原来的 meta 键值表）──
   //

@@ -34,7 +34,6 @@ export interface AtomDetail {
   textLength: number
   origin: string
   scope: string
-  projectKey: string | null
   topicId: number | null
   /** 被谁取代过。非空时界面必须说出来 —— 否则人会把旧条文当现行条文读。 */
   supersededBy: number | null
@@ -51,7 +50,7 @@ export interface AtomDetail {
  * 共用一份列表就意味着改一边会悄悄改另一边 —— 而「列表不带正文」本身是判据。
  */
 const DETAIL_COLUMNS =
-  'id, kind, summary, text, origin, scope, project_key, topic_id, superseded_by, created_at, ' +
+  'id, kind, summary, text, origin, scope, topic_id, superseded_by, created_at, ' +
   'recall_hits, last_recalled_at, flags, length(text) AS text_length'
 
 /**
@@ -73,7 +72,6 @@ export function atomDetail(db: DatabaseSync, id: number): AtomDetail | null {
     textLength: Number(r.text_length),
     origin: String(r.origin),
     scope: String(r.scope),
-    projectKey: r.project_key === null || r.project_key === undefined ? null : String(r.project_key),
     topicId: r.topic_id === null || r.topic_id === undefined ? null : Number(r.topic_id),
     supersededBy: r.superseded_by === null || r.superseded_by === undefined ? null : Number(r.superseded_by),
     createdAt: Number(r.created_at),

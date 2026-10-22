@@ -197,7 +197,6 @@ export interface WriteInput {
   text: string
   kind?: string
   scope?: string
-  projectKey?: string
   source?: string
   sourceRef?: string
   /** 写入方显式声明的入口词（原样保留，权重 1.0）。 */
@@ -766,7 +765,6 @@ interface CommitRow {
   newTopic: boolean
   fit: number
   scope: string
-  projectKey: string | null
   source: string | null
   sourceRef: string | null
   origin: string
@@ -801,9 +799,9 @@ function commitWrite(
     `UPDATE topic SET sum_vec = ?, n_atoms = n_atoms + 1, rebuilt_at = ? WHERE id = ?`,
   )
   const insertAtom = db.prepare(
-    `INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key,
+    `INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope,
                       source, source_ref, origin, polarity, flags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
   )
   const insertAtomTopic = db.prepare(
     'INSERT INTO atom_topic(atom_id, topic_id, weight, origin) VALUES (?, ?, ?, ?)',
@@ -840,7 +838,6 @@ function commitWrite(
         topicId,
         row.fit,
         row.scope,
-        row.projectKey,
         row.source,
         row.sourceRef,
         row.origin,
@@ -1115,7 +1112,6 @@ export async function writeAtom(
       newTopic,
       fit,
       scope: String(input.scope ?? 'global'),
-      projectKey: input.projectKey ?? null,
       source: input.source ?? null,
       sourceRef: input.sourceRef ?? null,
       origin: normalizeOrigin(input.origin),

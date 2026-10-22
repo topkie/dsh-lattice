@@ -34,10 +34,11 @@
 //   8. 列表路径的 scope 过滤：listAtoms 给 scope 时「同项目 + global」可见、别的项目不可见。
 //      改红：把 list.ts 的 \"(scope = ? OR scope = 'global')\" 改成 \"scope = ?\"（global 条目消失）；
 //      或删掉整个 if (opts.scope …) 分支（global 列表里出现项目域条目）。
-//   9. project_key 维度：写入侧如实落库，读取侧**不参与过滤**（同 scope 两个不同键都可见）。
-//      这是按现状如实断言，不是钉愿望 —— 现在 search.ts / list.ts 都只看 scope。
-//      改红：把 write.ts 的 project_key 一律写成 NULL（落库断言红）；
-//      或给 search.ts 的 scope SQL 追加 \"AND a.project_key = a.scope\"（P3 从项目域视图里消失）。
+//   9. 结构里没有 project_key 列：scope 是唯一的域维度（atom / forgotten / 两个 scope 索引）。
+//      这一列曾经存在但不参与召回，与 scope 语义重复，已从 DDL 删除 —— 断言结构而不是
+//      断言「没人读它」：列还在时前者能红，后者写不出来。
+//      改红：把 project_key 列加回 SNAPSHOT_V5 的 atom（结构断言红）；
+//      或给 search.ts 的 scope SQL 追加 \"AND a.scope = 'global'\"（P3 从项目域视图里消失）。
 //  10. 三处输出路径口径一致：锚段 / 入口段 / 路段与 recall 的 hits 在同一 scope 语义下过滤。
 //      锚段逐条对 hits，入口段不引入 atom，路段只出现同域邻居（路段**有意**展示 hits 之外的
 //      一跳邻居，所以「一致」的口径是「同一条 scope 规则」，不是「集合相等」）。
@@ -71,8 +72,6 @@ import { assembleView } from '../dist/pipeline/view.js'
 const MODEL = 'Xenova/bge-small-zh-v1.5'
 const PROJ_X = 'proj-x'
 const PROJ_Y = 'proj-y'
-// 刻意与 PROJ_X 不同：用来测「读取侧看不看 project_key」。
-const OTHER_KEY = 'other-key'
 
 function arg(name, fallback) {
   const i = process.argv.indexOf('--' + name)
@@ -87,8 +86,8 @@ const KEEP = process.argv.includes('--keep')
  * 「隔离」就测不出来了。这组文本是设计时先量过的量，不是随手挑的：
  * P3 与其余四条的 Jaccard 实测为 0.000（见本任务交付记录），下面四条的既有取值不变。
  *
- * P3 是判据 9 的装置：与 P1 **同 scope、不同 project_key**。现实里调用方一般让
- * projectKey 等于 scope，这里刻意错开 —— 只有错开才能看出读取侧到底看不看这一列。
+ * P3 是判据 9 的装置：与 P1 **同 scope、同项目域**、内容不同。它能证明「一个域里可以有
+ * 多条彼此无关的记忆」，也证明读取侧只按 scope 分域（不引入第二层键）。
  *
  * 不写 topicHint：本脚本要顺带走一遍真实的落位路径；五条分到的主题在下面打印出来，
  * 谁和谁并入同一主题不影响判据（判据只看 scope）。
@@ -98,7 +97,7 @@ const CARDS = [
   { tag: 'P1', scope: PROJ_X, text: 'pnpm 的依赖解析策略需要 hoisted，不然包链接会失败。' },
   { tag: 'P2', scope: PROJ_Y, topicHintTag: 'P1', text: '包管理器符号链接创建失败时，先检查依赖解析策略。' },
   { tag: 'G2', scope: 'global', text: 'TypeScript 只在构建期生效，运行期看到的是 dist 里的 JS。' },
-  { tag: 'P3', scope: PROJ_X, projectKey: OTHER_KEY, text: '锁文件与清单不一致时，先跑一次安装再看差异。' },
+  { tag: 'P3', scope: PROJ_X, text: '锁文件与清单不一致时，先跑一次安装再看差异。' },
 ]
 
 /** 查询：与 G1/P1/P2 同域，用来把它们拉出来；G2 是异域对照。 */
@@ -124,8 +123,6 @@ for (const c of CARDS) {
     text: c.text,
     kind: '结论',
     scope: c.scope,
-    // 不给 projectKey 的卡按「项目键 = scope」的惯例写；P3 例外（见 CARDS 注释）。
-    projectKey: c.projectKey ?? (c.scope === 'global' ? undefined : c.scope),
     // P2 强行并入 P1 的主题（topicHint 跳过几何定位）：判据 10 要测「入口段的词条」，
     // 而 topicEntries 按主题全域取词、不看 scope。不把两个域放进同一个主题，那一处
     // 就构造不出来（见判据 10 的注释：这是如实断言现状，不是期望）。
@@ -135,16 +132,15 @@ for (const c of CARDS) {
   info.push({ ...c, id: r.atomId, topicId: r.topicId, action: r.action })
 }
 
-say('写入（真实编码器）：' + CARDS.length + ' 条 —— 落库后的 scope 与 project_key 由库自己回答，不问写入方')
+say('写入（真实编码器）：' + CARDS.length + ' 条 —— 落库后的 scope 由库自己回答，不问写入方')
 const stored = new Map(
   db
-    .prepare('SELECT id, scope, project_key, topic_id, summary FROM atom ORDER BY id')
+    .prepare('SELECT id, scope, topic_id, summary FROM atom ORDER BY id')
     .all()
     .map((r) => [
       Number(r.id),
       {
         scope: String(r.scope),
-        projectKey: r.project_key === null || r.project_key === undefined ? null : String(r.project_key),
         topic: Number(r.topic_id),
         summary: String(r.summary),
       },
@@ -161,8 +157,6 @@ for (const v of info) {
       v.scope.padEnd(7) +
       ' 落库 scope=' +
       row.scope.padEnd(7) +
-      ' 落库 project_key=' +
-      String(row.projectKey).padEnd(9) +
       ' atom=' +
       v.id +
       ' topic=' +
@@ -302,45 +296,42 @@ check(
     listFmt(L.y),
 )
 
-// ── 判据 9：project_key 维度 ──
-// 如实断言现状，不是断言愿望：写入侧把 project_key 落库了，读取侧（search.ts 四路与 list.ts）
-// 都**不看**这一列。所以「同 scope、不同 project_key」的两条在项目域视图里都可见。
-// 哪天真按 project_key 过滤了，这条会红 —— 那时应当改的是判据（换成「按 project_key 分组」），
-// 而不是把新行为绕过去：判据的价值在于钉住真实行为。
-const keyOf = new Map([...stored].map(([id, v]) => [id, v.projectKey]))
-const byKey = db
-  .prepare('SELECT id FROM atom WHERE project_key = ?')
-  .all(OTHER_KEY)
-  .map((r) => Number(r.id))
-const p3Row = L.x.rows.find((row) => row.id === idOfTag('P3'))
+// ── 判据 9：结构里没有 project_key 列 ──
+// scope 是唯一的域维度。project_key 曾经存在但不参与召回（search.ts 四路与 list.ts 都只看
+// scope），语义与 scope 重复，已从 DDL 删除。这里断言**结构**而不是断言「没人读它」：
+// 列还在时前者能红，后者写不出来。
+const atomCols = db
+  .prepare('PRAGMA table_info(atom)')
+  .all()
+  .map((r) => String(r.name))
+const forgetCols = db
+  .prepare('PRAGMA table_info(forgotten)')
+  .all()
+  .map((r) => String(r.name))
+const scopeIdx = db
+  .prepare(
+    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name IN ('idx_atom_scope', 'idx_forgotten_scope')",
+  )
+  .all()
+  .map((r) => String(r.name) + '=' + String(r.sql))
 check(
-  '9 project_key 维度：写入侧如实落库，读取侧不参与过滤（同 scope 两个不同键都可见）',
-  keyOf.get(idOfTag('P1')) === PROJ_X &&
-    keyOf.get(idOfTag('P3')) === OTHER_KEY &&
-    keyOf.get(idOfTag('G1')) === null &&
-    keyOf.get(idOfTag('G2')) === null &&
-    // 直接按列查得到：数据确实在库里，缺的是管线里的过滤，不是写入。
-    byKey.length === 1 &&
-    byKey[0] === idOfTag('P3') &&
-    // 召回侧不区分：同 scope 的两个不同 project_key 都在项目域视图里。
+  '9 project_key 已从结构删除：atom 与 forgotten 都没有该列，两个 scope 索引只含 scope（同 scope 两条仍都可见）',
+  !atomCols.includes('project_key') &&
+    !forgetCols.includes('project_key') &&
+    scopeIdx.length === 2 &&
+    scopeIdx.every((s) => !s.includes('project_key')) &&
     has(asX, 'P1') &&
-    has(asX, 'P3') &&
-    // 列表行如实映射这一列（界面要显示它）。
-    p3Row !== undefined &&
-    p3Row.projectKey === OTHER_KEY,
-  'P1.project_key=' +
-    keyOf.get(idOfTag('P1')) +
-    '  P3.project_key=' +
-    keyOf.get(idOfTag('P3')) +
-    '  G1.project_key=' +
-    keyOf.get(idOfTag('G1')) +
+    has(asX, 'P3'),
+  'atom 列数=' +
+    atomCols.length +
+    '  forgotten 列数=' +
+    forgetCols.length +
+    '  |  scope 索引：' +
+    scopeIdx.join(' ; ') +
     '  |  scope=' +
     PROJ_X +
     ' 下命中：' +
-    tags(asX) +
-    '  |  按列直查 other-key：' +
-    byKey.length +
-    ' 条',
+    tags(asX),
 )
 
 // ── 判据 10：注入文本只有入选段，逐条对 hits ──

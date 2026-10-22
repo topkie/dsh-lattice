@@ -63,7 +63,6 @@ export interface ListRow {
   summary: string
   origin: string
   scope: string
-  projectKey: string | null
   topicId: number | null
   supersededBy: number | null
   createdAt: number
@@ -83,7 +82,7 @@ export interface ListResult {
 
 /** 目录行的 SELECT 列表：listAtoms 与 listAtomsByIds 共用，免得两处字段慢慢分叉。 */
 const LIST_COLUMNS =
-  'id, kind, summary, origin, scope, project_key, topic_id, superseded_by, created_at, ' +
+  'id, kind, summary, origin, scope, topic_id, superseded_by, created_at, ' +
   'recall_hits, last_recalled_at, flags'
 
 /** 一行原始记录 → 目录行。字段映射只有这一处（列名 → 驼峰字段）。 */
@@ -94,7 +93,6 @@ function toListRow(r: Record<string, unknown>): ListRow {
     summary: String(r.summary),
     origin: String(r.origin),
     scope: String(r.scope),
-    projectKey: r.project_key === null || r.project_key === undefined ? null : String(r.project_key),
     topicId: r.topic_id === null || r.topic_id === undefined ? null : Number(r.topic_id),
     supersededBy: r.superseded_by === null || r.superseded_by === undefined ? null : Number(r.superseded_by),
     createdAt: Number(r.created_at),

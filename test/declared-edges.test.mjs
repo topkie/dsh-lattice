@@ -327,8 +327,8 @@ describe('判据 4：graphStatus 分开报数，且只有声明边的库图路�
     ).run('T1', now, now)
     const r = db
       .prepare(
-        'INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key, source, source_ref,' +
-          " polarity, flags, created_at, updated_at) VALUES ('结论', ?, ?, ?, 1, 0.8, 'global', NULL, NULL, NULL, NULL, 0, ?, ?)",
+        'INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, source, source_ref,' +
+          " polarity, flags, created_at, updated_at) VALUES ('结论', ?, ?, ?, 1, 0.8, 'global', NULL, NULL, NULL, 0, ?, ?)",
       )
       .run(text, summary, blobOf(vec), now, now)
     const id = Number(r.lastInsertRowid)

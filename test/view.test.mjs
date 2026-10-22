@@ -41,7 +41,7 @@ function seedAnim(db, topicId, label, text, terms) {
   }
   const r = db
     .prepare(
-      'INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, project_key, source, source_ref, polarity, flags, created_at, updated_at) VALUES (' +
+      'INSERT INTO atom(kind, text, summary, embedding, topic_id, fit, scope, source, source_ref, polarity, flags, created_at, updated_at) VALUES (' +
         String.fromCharCode(39) +
         '结论' +
         String.fromCharCode(39) +
@@ -49,7 +49,7 @@ function seedAnim(db, topicId, label, text, terms) {
         String.fromCharCode(39) +
         'global' +
         String.fromCharCode(39) +
-        ', NULL, NULL, NULL, NULL, 0, ?, ?)',
+        ', NULL, NULL, NULL, 0, ?, ?)',
     )
     .run(text, String(text).slice(0, 40), topicId, now, now)
   const id = Number(r.lastInsertRowid)

@@ -60,15 +60,14 @@ function config() {
 function seed(id, o = {}) {
   const { db } = openVault(dbFile)
   db.prepare(
-    'INSERT INTO atom(id, kind, text, summary, embedding, scope, project_key, origin, created_at, updated_at, superseded_by) ' +
-      'VALUES (?, ?, ?, ?, zeroblob(2048), ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO atom(id, kind, text, summary, embedding, scope, origin, created_at, updated_at, superseded_by) ' +
+      'VALUES (?, ?, ?, ?, zeroblob(2048), ?, ?, ?, ?, ?)',
   ).run(
     id,
     o.kind ?? '结论',
     o.text ?? '正文' + id,
     o.summary ?? '摘要' + id,
     o.scope ?? 'global',
-    o.projectKey ?? null,
     o.origin ?? 'model',
     id,
     id,
