@@ -6,7 +6,7 @@
 //
 // **这里不再记 schema 版本**：版本号的唯一真相源是 PRAGMA user_version。
 // 旧实现另存了一份 schema_version 键，结果它与 user_version 漂成了两个值（库里 4、
-// meta 里 3）—— 一个可以被读到的副本，只要没人负责同步，就一定会漂。
+// 那份副本里 3）—— 一个可以被读到的副本，只要没人负责同步，就一定会漂。
 
 import type { DatabaseSync } from 'node:sqlite'
 

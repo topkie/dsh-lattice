@@ -139,16 +139,16 @@ export interface RecallMeta {
    */
   graphStatus: string
   /**
-   * 用户已确认「这条应当拆分」的 atom id。来自 meta 的 split_confirmed 清单，
+   * 用户已确认「这条应当拆分」的 atom id。来自 split_queue 里 confirmed = 1 的行，
    * 上限由 SPLIT_CONFIRMED_MAX 夹住（FIFO）。注入层据此把锚行提示换成「已确认」的说法。
    *
-   * 为什么由召回带出来而不是让注入层自己读：meta 是库里的东西，注入层只该认识
+   * 为什么由召回带出来而不是让注入层自己读：库是这一层的东西，注入层只该认识
    * RecallResult —— 它连 getMeta 都不该 import（依赖方向是 tools → pipeline：读库的
    * 决定在这里做一次，而不是每个渲染分支各做一次）。
    */
   splitConfirmed: number[]
   /**
-   * 待拆分候选的段数：`[atomId, 切成了几段]`。来自 meta 的 split_pending_segments，
+   * 待拆分候选的段数：`[atomId, 切成了几段]`。来自 split_queue 的 segments 列，
    * 上限由 SPLIT_SEGMENTS_MAX 夹住（FIFO）。锚行据此把「疑似应拆分」写成「疑似应拆分（3 段）」。
    *
    * 为什么不是 Map：这是纯数据接口，要能原样序列化（回执与快照都会序列化它）；
@@ -1041,7 +1041,7 @@ export function recall(
       referenceReason: reference?.reason ?? 'none',
       primaryHits,
       secondaryHits,
-      // 只读一次 meta（一个键）。它不进任何打分，只决定锚行那句提示的措辞。
+      // 只读一次 split_queue。它不进任何打分，只决定锚行那句提示的措辞。
       splitConfirmed: readConfirmedSplits(db),
       splitPendingSegments: [...readPendingSegments(db)],
       elapsedMs: Date.now() - t0,

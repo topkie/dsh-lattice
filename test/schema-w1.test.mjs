@@ -1,7 +1,7 @@
 // W1 第 2 步：结构与取代语义。
 //
 // 这一组只验本次改动新定的三件事：
-//   1. 新建库的 atom 表有 superseded_at，且 calib_state 表已删除（meta 有意保留）；
+//   1. 新建库的 atom 表有 superseded_at，且 calib_state 与 meta 两张表都已删除；
 //   2. 取代只写 superseded_by 与 superseded_at，不动 updated_at；
 //   3. 取消取代把两列一起清回 NULL。
 //
@@ -101,8 +101,8 @@ describe('W1 结构改动', () => {
         .all()
         .map((t) => t.name)
       assert.ok(!tables.includes('calib_state'), 'calib_state 应已删除；实际表：' + tables.join(','))
-      // meta 是外部标定包的快照位，本插件不写它，但删它会让标定包的写入抛错 —— 有意保留。
-      assert.ok(tables.includes('meta'), 'meta 要保留（外部标定包写快照用）；实际表：' + tables.join(','))
+      // meta 曾是外部标定包的快照位；标定包归档、标定功能退役后它没有读写方，已删除。
+      assert.ok(!tables.includes('meta'), 'meta 应已删除；实际表：' + tables.join(','))
     })
   })
 

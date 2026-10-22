@@ -23,9 +23,9 @@
 //   · 从未被召回过的 atom 数（recall_hits = 0）
 //
 // 其中「高相似未合并对」依赖 atom_pair，而它由重聚类建立。表是空的时，本模块不能
-// 从「0 行」推断出「没有重复」—— 那正是判据 7 要防的误读。建立者会在 meta 里留下
-// `recluster_at`（见 cluster/rebuild.ts 的 rebuildAtomPairs），体检据此区分「没建过」与
-// 「建过但没有」。这个标记只加在写侧；本模块仍然只读。
+// 从「0 行」推断出「没有重复」—— 那正是判据 7 要防的误读。建立者会在
+// `recluster_state.completed_at` 留下完成时刻（见 cluster/index.ts 的落库段），
+// 体检据此区分「没建过」与「建过但没有」。这个标记只加在写侧；本模块仍然只读。
 
 import type { DatabaseSync } from 'node:sqlite'
 import { readReclusterTimes } from '../db/recluster-state.js'
@@ -151,7 +151,7 @@ export interface AuditReport {
     limit: number
     offset: number
     rows: DuplicatePairRow[]
-    /** 上次重聚类时间（meta.recluster_at）；从未重聚类时为 null。 */
+    /** 上次重聚类时间（recluster_state.completed_at）；从未重聚类时为 null。 */
     rebuiltAt: number | null
     /** 上次重聚类之后新增的 atom 数 —— 这些 atom 没参与比对，读数要带上这句。 */
     atomsAfterRebuild: number | null
@@ -182,7 +182,7 @@ function count(db: DatabaseSync, sql: string, ...args: Array<string | number>): 
   return Number(row?.n ?? 0)
 }
 
-/** 表在不在。老库（v1）没有 meta 表，直接查会抛 —— 体检要能读老库。 */
+/** 表在不在。老库没有 recluster_state 表，直接查会抛 —— 体检要能读老库。 */
 function hasTable(db: DatabaseSync, name: string): boolean {
   return count(db, "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?", name) > 0
 }
@@ -385,7 +385,7 @@ export function audit(db: DatabaseSync, opts: AuditOptions = {}): AuditReport {
   } else if (rebuiltAt === null) {
     duplicateState = 'no-data'
     duplicateDetail =
-      '没有数据：atom_pair 由重聚类建立，库里没有重聚类记录（meta.recluster_at 缺失）。' +
+      '没有数据：atom_pair 由重聚类建立，库里没有重聚类记录（recluster_state.completed_at 缺失）。' +
       '先跑一次重建，再来读这一项 —— 空表不等于没有重复。'
   } else if (duplicateTotal === 0) {
     duplicateState = 'no-findings'

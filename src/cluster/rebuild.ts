@@ -525,7 +525,7 @@ export function computeAtomPairs(
 }
 
 /**
- * 把算好的对写进 atom_pair（整表替换）。不写任何 meta。
+ * 把算好的对写进 atom_pair（整表替换）。不写任何状态表。
  *
  * `inTransaction: true` 时不自己开事务 —— 调用方（runRecluster）已经包了一个大事务，
  * 目的是让「topic 表换了、atom_pair 没换」这种半套状态不可能出现。

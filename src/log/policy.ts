@@ -62,7 +62,7 @@ export const EVENT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
   // **不带 atom id**：这张表的白名单里没有 id 通道，忽略这件事只需要「发生过」。
   'split.ignored': [],
   // 用户确认了一条待拆分候选。与 split.ignored 同形，理由见 split.ts 的文件头：
-  // meta 里的确认清单是 FIFO 的，被挤出去的那条只能靠日志回答「它被确认过」。
+  // split_queue 里的确认清单是 FIFO 的，被挤出去的那条只能靠日志回答「它被确认过」。
   'split.confirmed': [],
   // 确认清单满了，最旧的一条被挤出去。只记**被挤掉的条数**，不记 id。
   // 正常情况下这个数是 1；大于 1 说明一次确认挤掉了一批，值得知道。

@@ -59,7 +59,7 @@ export interface ReclusterOptions {
   /**
    * 在**同一个事务里**、COMMIT 之前调用一次。
    *
-   * 给调用方留的钩子：重聚类要写几个 meta 键（重聚类时间、规划时间、开始时间），
+   * 给调用方留的钩子：重聚类要写几行 recluster_state（完成、规划、开始时刻），
    * 它们与主数据必须一起提交或一起回滚 —— 否则会出现「topic 换了但状态说没跑过」。
    * 在事务外写这几行，正是那种半套状态的来源。
    */
@@ -427,7 +427,7 @@ export async function runRecluster(db: DatabaseSync, opts: ReclusterOptions = {}
   opts.onProgress?.('atomPairs', computedPairs.pairs.length, computedPairs.pairs.length)
 
   // ── 落库（一个事务）───────────────────────────────────────────────────────
-  // 四段写 + 调用方的 meta 一起提交，失败则一起回滚。分段提交会留下「topic 已换、
+  // 四段写 + 调用方的 recluster_state 一起提交，失败则一起回滚。分段提交会留下「topic 已换、
   // atom_pair 未换」这种半套状态 —— 它不报错，恢复逻辑也就无从判断该从哪一段重来。
   // BEGIN IMMEDIATE 直接拿写锁：拿不到（别的连接正在写）就抛上去，由调用方决定重试。
   let rebuild: RebuildStats

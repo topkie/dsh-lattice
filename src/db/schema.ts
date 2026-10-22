@@ -15,9 +15,9 @@
 //      这样增量加减与全量重算逐位等价，不会被浮点漂移破坏上面第 1 条不变量。
 //   4. **墓碑与活着的记忆分表**：显式删除（§44）的凭证进 `forgotten`，不进 `atom`。
 //      一句话：「活着的记忆」这条不变量不该靠每处查询都记得加过滤。
-//   5. **状态各占一张单行表**：库自描述、整理进度、重标进度、拆分队列四件事各自成表，
+//   5. **状态各占一张单行表**：库自描述、整理进度、拆分队列三件事各自成表，
 //      理由见 SNAPSHOT_V5 的注释 —— 一句话：同一件事的几个字段必须一起变或一起不变。
-//      库里因此只剩一张 key-value 表 `meta`，它由外部包 `lattice-calib` 的校准快照占用。
+//      库里因此没有 key-value 表：状态都是带列类型与主键的行。
 
 import type { ResourceParams } from '../util/memory.js'
 
@@ -265,22 +265,6 @@ const SNAPSHOT_V5: readonly string[] = [
     added_at  INTEGER NOT NULL
   )`,
   `CREATE INDEX idx_split_queue_confirmed ON split_queue(confirmed, added_at)`,
-
-  // ── 校准快照：库里唯一一张 key-value 表，且不由本插件写 ──
-  //
-  // 占用者是外部包 `lattice-calib` 0.1.0 的 `recalibrateAndWrite()`：它在同一个事务里写
-  // 5 个键（calib_params / calib_s_baseline / calib_version / calib_at /
-  // calib_encoder_model），并在写之前要求这张表已经存在（包的约定是「只加键、不改库结构」）。
-  //
-  // **为什么它没跟着旧 meta 一起消失**：本插件自己的状态键已经搬进上面四张表，但这 5 个键
-  // 的写入方在另一个包里，删表会让重标定在写快照那一步直接抛错。
-  // 跨包契约不能由本仓库单方面改 —— 要让它也搬走，得先改 `lattice-calib` 的存储。
-  // 在那之前，这张表只服务校准快照；本插件不再往里写任何状态。
-  `CREATE TABLE meta (
-    key        TEXT PRIMARY KEY,
-    value      TEXT    NOT NULL,
-    updated_at INTEGER NOT NULL
-  ) WITHOUT ROWID`,
 ]
 
 /**

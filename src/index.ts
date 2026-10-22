@@ -717,7 +717,7 @@ function atomRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse
  *
  * 与其他只读路由的**一处有意的不同**：这里不用 getRuntime，而是自己只读打开库。
  * 三个理由：
- *   - getRuntime 会补 meta（stampVault）、会按标定状态写独立日志库；而体检的契约是
+ *   - getRuntime 会补库自描述（stampVault）、会写日志库；而体检的契约是
  *     「不改库、不写日志」；
  *   - getRuntime 在库不存在时会建库；体检面对「还没有库」应当报「无数据」，而不是顺手造一个；
  *   - 只读连接不迁移旧库：体检要能读改动前的快照或旧版本库，那正是诊断的用法。
@@ -1005,7 +1005,7 @@ async function archiveRoute(
  * 拆分候选的决定：确认或忽略。
  *
  * 两者的共同点：都清 `atom.flags` 的 bit0，所以界面上的候选提示消失。差别只有一处 ——
- * 确认另记一条状态（meta 的 split_confirmed），下次召回会在锚行提示「用户已确认应拆分」；
+ * 确认另记一行状态（split_queue 的 confirmed），下次召回会在锚行提示「用户已确认应拆分」；
  * 忽略只写一条日志，没有状态、没有待办。
  *
  * 三道写栅栏与删除 / 归档相同：这个动作同样「不需要读到响应就已经造成了后果」。
@@ -1043,7 +1043,7 @@ async function splitRoute(
       return
     }
     // 确认之后的有效确认条数：界面与验收都能据此看出「这份清单有没有被写进去」，
-    // 而不必再去读 meta（那是实现细节）。
+    // 而不必再去读 split_queue（那是实现细节）。
     const payload: Record<string, unknown> = {
       ok: true,
       atomId: r.atomId,
@@ -1093,7 +1093,7 @@ async function reclusterRoute(
         })
         return
       }
-      // 规划只写 meta 并挂一个一次性延迟；真正的执行在这里之外发生，不等它。
+      // 规划只写 recluster_state 并挂一个一次性延迟；真正的执行在这里之外发生，不等它。
       const state = planRecluster(rt.db, () => {
         void executePlannedRecluster(rt.db)
       })

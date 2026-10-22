@@ -13,7 +13,7 @@
 import { DatabaseSync } from 'node:sqlite'
 
 /** 默认量这几张表：写入、召回、体检路径会碰到的全部。 */
-export const RULER_TABLES = ['atom', 'edge', 'topic', 'entry', 'atom_topic', 'meta']
+export const RULER_TABLES = ['atom', 'edge', 'topic', 'entry', 'atom_topic']
 
 /**
  * 打开一把只读的观测尺。**必须在被测操作之前打开**，且操作前后用同一个实例读。
