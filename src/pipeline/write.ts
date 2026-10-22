@@ -13,7 +13,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import type { ThresholdValue } from '../threshold-types.js'
-import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { DECLARED_ORIGIN, OUT_DEGREE_CAP, linkNewAtom } from '../graph/infer.js'
 import { FLAG_AMBIGUOUS, FLAG_SPLIT_PENDING, FLAG_UNCLASSIFIED } from '../db/flags.js'
 import { type AtomKind, normalizeAtomKind, normalizeOrigin } from '../db/schema.js'
 import {
@@ -941,6 +941,13 @@ function commitWrite(
 function afterWrite(ctx: WriteCtx, topicId: number, atomId: number, entryCount: number): void {
   const db = ctx.db
   if (entryCount > 0) invalidateVocab(ctx)
+  // 新写入的记忆补推断边：只算它自己与全库的近邻，不重扫两两。
+  // 失败不影响本次写入 —— 图路只是候选来源之一，缺边比丢掉一次写入轻。
+  try {
+    linkNewAtom(db, atomId)
+  } catch {
+    /* 建边失败留给全量重建 */
+  }
   try {
     const m = db.prepare('SELECT AVG(fit) AS f FROM atom WHERE topic_id = ?').get(topicId) as
       { f: number | null } | undefined
@@ -948,7 +955,6 @@ function afterWrite(ctx: WriteCtx, topicId: number, atomId: number, entryCount: 
   } catch {
     // 维护统计失败不影响本次写入——它只会让健康指标短暂不准，不该让写入报错。
   }
-  void atomId
 }
 
 /** 便捷构造：多数调用点只需要给 db 与阈值。 */

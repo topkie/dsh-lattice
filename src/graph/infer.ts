@@ -428,9 +428,8 @@ export function edgeOriginCounts(db: DatabaseSync): { declared: number; inferred
 /**
  * 确保库里有 inferred 边：已经建过就直接返回，否则重建一次。
  *
- * **判据只有「表里有没有 inferred 边」这一条**，不含新鲜度检查：增量维护需要挂在写入
- * 路径上（write.ts），而那超出了本次的改动边界。代价是「新写入的 atom 不会自动获得边」，
- * 这在报告里作为未确定项写明，不假装它已经解决。
+ * **判据只有「表里有没有 inferred 边」这一条**，不含新鲜度检查：新写入的 atom 由写入
+ * 路径自己补边（见 linkNewAtom），这里不需要再判一次新鲜度。
  */
 export function ensureGraphEdges(db: DatabaseSync, opts: InferOptions): InferOutcome {
   const row = db.prepare('SELECT COUNT(*) AS n FROM edge WHERE origin = ?').get(INFERRED_ORIGIN) as {
@@ -440,4 +439,90 @@ export function ensureGraphEdges(db: DatabaseSync, opts: InferOptions): InferOut
     return { status: 'fresh', detail: '库中已有 ' + Number(row.n) + ' 条 inferred 边，未重建', stats: null }
   }
   return inferEdges(db, opts)
+}
+
+/** 局部建边的选项。与全量重建共用两条线，重复判据不参与。 */
+export interface LinkOptions {
+  /** 目标出度；默认 NEAR_K。 */
+  nearK?: number
+  /** 余弦截断线；默认 NEAR_COS_MIN。 */
+  nearCosMin?: number
+}
+
+/**
+ * 给刚写入的一条记忆补推断边。
+ *
+ * 为什么不直接调 inferEdges：全量重建先删掉所有 inferred 边再重扫两两，放在写入路径上
+ * 等于每写一条就重算一次全库。而新写入的 atom 此前没有任何推断边，它需要的只是
+ * 「与近邻互相可达」这一小段 —— 出边取它的 top-K，入边取同一批邻居的反向边。
+ *
+ * 与全量重建的三处差异都是刻意的：
+ *   1. 邻居的出度不重算。邻居的 top-K 里要不要把这条新记忆挤掉，只有全量重建知道；
+ *      这里只按余弦线取，所以局部建出的入边可能比全量重建多几条，不会少。
+ *   2. 不产生 duplicate 边。它读 atom_pair，而 atom_pair 本身也是重建产物。
+ *   3. 不删任何旧边。新 atom 此前没有推断边；对已有 atom 重算会撞上「删掉邻居指向
+ *      它的边却不重建邻居的 top-K」这件事，那比多几条边差。
+ *
+ * 结论：局部建边保证「新条目立刻能被图路找到」，不是全量重建的替代品；
+ * 跑一次全量重建就回到统一口径。
+ *
+ * 返回真正写进表的边数（撞声明边的唯一键而被 DO NOTHING 跳过的不计）。
+ */
+export function linkNewAtom(db: DatabaseSync, atomId: number, opts: LinkOptions = {}): number {
+  const me = db.prepare('SELECT embedding FROM atom WHERE id = ?').get(atomId) as
+    { embedding: Uint8Array | null } | undefined
+  if (me === undefined || me.embedding === null || me.embedding === undefined) return 0
+  const buf =
+    me.embedding instanceof Uint8Array ? me.embedding : new Uint8Array(me.embedding as ArrayBufferLike)
+  if (buf.byteLength !== VEC_DIM * 4) return 0
+  const v = decodeVec(buf)
+  let selfNorm = 0
+  for (let d = 0; d < VEC_DIM; d++) selfNorm += v[d]! * v[d]!
+  // 零向量是「没编码」的占位，拿它算余弦没有意义。
+  if (selfNorm === 0) return 0
+  const root = Math.sqrt(selfNorm)
+  const k = Math.max(0, Math.min(Math.floor(opts.nearK ?? NEAR_K), OUT_DEGREE_CAP))
+  if (k === 0) return 0
+  const cosMin = opts.nearCosMin ?? NEAR_COS_MIN
+  const { ids, vecs, norms } = loadVectors(db)
+  const cand: Array<{ id: number; cos: number }> = []
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i] === atomId) continue
+    const other = vecs[i]!
+    let s = 0
+    for (let d = 0; d < VEC_DIM; d++) s += v[d]! * other[d]!
+    const cos = s / (root * norms[i]!)
+    if (cos >= cosMin) cand.push({ id: ids[i]!, cos })
+  }
+  if (cand.length === 0) return 0
+  cand.sort((a, b) => b.cos - a.cos)
+  const top = cand.slice(0, k)
+  const ins = db.prepare(
+    'INSERT INTO edge(src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(src_type, src_id, dst_type, dst_id, kind) DO NOTHING',
+  )
+  const now = Date.now()
+  let written = 0
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const c of top) {
+      const conf = Math.round(c.cos * 1e6) / 1e6
+      // 两个方向都写：图路是双向走的（search.ts 的 graphPath 把出边与入边 UNION 在一起），
+      // 只写一侧等于这条记忆半可达。
+      const out = ins.run('atom', atomId, 'atom', c.id, 'near', conf, INFERRED_ORIGIN, now)
+      const back = ins.run('atom', c.id, 'atom', atomId, 'near', conf, INFERRED_ORIGIN, now)
+      if (Number(out.changes) > 0) written += 1
+      if (Number(back.changes) > 0) written += 1
+    }
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* 回滚失败不覆盖原始错误 */
+    }
+    throw err
+  }
+  return written
 }
