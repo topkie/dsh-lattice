@@ -15,48 +15,6 @@ import { FLAG_SPLIT_PENDING } from '../db/flags.js'
 import { DEFAULT_MAX_EXTRACTED } from './entries.js'
 import { TERM_CHARS } from './write.js'
 
-/** 各段的字符配额占比。三段之和为 1。 */
-export const SEGMENT_RATIO = { anchors: 0.55, entries: 0.2, paths: 0.25 } as const
-
-/** 锚段保底条数——预算再紧也要给这么多条记忆留位置。 */
-export const MIN_ANCHORS = 3 satisfies ThresholdValue<
-  'chosen',
-  {
-    area: '注入'
-    why: '保底锚条数是「低相关只给入口段」与降噪彻底程度之间的取舍，最后选了分档方案；3 这个数本身没有实测标定'
-    failsWhen: ['无关查询的容忍度（保底越高，降噪越不彻底）', '一次注入的字符预算']
-    guardedBy: ['test/view.test.mjs']
-    affects: '锚段保底条数：预算再紧也先给这么多条；同时是摘录档的锚上限'
-  }
->
-
-/**
- * 超预算时的裁剪顺序。
- *
- * 这个数组是**行为契约**：测试直接依赖它的顺序，而不是依赖某个具体输出。
- * 想在中间插一步，就得同时想清楚它对「锚不被挤掉」这条不变量意味着什么。
- */
-export const TRIM_ORDER = ['paths->5', 'entries->4', 'anchors->summary', 'paths->0', 'anchors->3'] as const
-
-export type TrimStep = (typeof TRIM_ORDER)[number]
-
-/**
- * 裁剪第一步把路段行数上限压到的值。
- *
- * 与 DEFAULT_PATH_LINES（15）不是同一个量：那是初始上限，这是「超预算后先降到多少」。
- * 步骤名 `paths->5` 里带着这个值（TRIM_ORDER 是行为契约，测试依赖它的顺序与字面量），
- * 改这里必须同步那个字符串 —— 这也是它此前一直没有名字的代价。
- */
-export const TRIM_PATHS_LIMIT = 5 satisfies ThresholdValue<
-  'chosen',
-  {
-    area: '注入'
-    why: '超预算后路段先降到多少是裁剪策略选择：TRIM_ORDER 的名字里带着 5、但 5 从哪来没有出处；它与 DEFAULT_PATH_LINES(15) 不是同一个量'
-    failsWhen: ['TRIM_ORDER 改动时（名字与值必须同步）']
-    affects: '裁剪第一步把路段行数上限压到的值（TRIM_ORDER 的 paths->5）'
-  }
->
-
 /**
  * 锚行里「使用场景」（本次查询词）最多给多少个字符。
  *
@@ -177,7 +135,7 @@ export const DEFAULT_PATH_LINES = 15 satisfies ThresholdValue<
   'chosen',
   {
     area: '注入'
-    why: '路段整体行数上限是容量选择：源码无注释，TRIM_ORDER 里的 5 与它是什么关系也没有写明'
+    why: '路段整体行数上限是容量选择：源码无注释，与旧裁剪顺序里的 5 是什么关系也没有写明'
     failsWhen: ['一跳关联的平均条数', '字符预算']
     affects: '路段整体行数上限（裁剪顺序里会先降到 5、再清零）'
   }

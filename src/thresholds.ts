@@ -57,7 +57,6 @@ import {
   LEARNED_PROMOTE_MAX_WEIGHT,
 } from './pipeline/entries.js'
 import { AFFILIATION, CHANNEL_WEIGHT } from './pipeline/search.js'
-import { SEGMENT_RATIO, TRIM_ORDER } from './pipeline/view.js'
 import { DEFAULT_THRESHOLDS } from './pipeline/write.js'
 
 /** 阈值影响管线里的哪一段。用于按段检索，不参与判定。 */
@@ -538,46 +537,8 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
       '两者不是同一个量，但不熟悉的人容易当成同一个',
   },
   // ────────────────────────────── 注入（view.ts）───────────────────────────────
-  {
-    name: 'SEGMENT_RATIO',
-    unmovable: '对象组',
-    area: '注入',
-    ...chosen(
-      () => SEGMENT_RATIO,
-      '锚决定回答质量，路只提供线索 —— 理由完整，但没有实测记录（未做过不同配比下的召回质量对比）；' +
-        '0.55 / 0.2 / 0.25 是配比选择',
-    ),
-    definedBy: { file: 'src/pipeline/view.ts', name: 'SEGMENT_RATIO' },
-    affects: '三段字符配额的占比（锚 / 入口 / 路），三段之和为 1',
-    group: ['anchors', 'entries', 'paths'],
-    variesWith: ['锚段平均长度与主题数的变化', '入口段在回答里的实际贡献'],
-    design: {
-      doc: DESIGN_DOC,
-      key: 'ratioAnchor/Entry/Path',
-      default: 55,
-      scale: 100,
-      codeKeys: ['anchors', 'entries', 'paths'],
-    },
-    diverges:
-      '**名字与单位都不同**：文档按百分数（55 / 20 / 25，和=100）且叫 ratioXxx，代码是小数' +
-      '（0.55 / 0.2 / 0.25）且键名是 anchors/entries/paths',
-  },
-  {
-    name: 'TRIM_ORDER',
-    unmovable: '非数值',
-    area: '注入',
-    ...chosen(
-      () => TRIM_ORDER.join(' -> '),
-      '这个数组是行为契约，顺序的理由是设计不变量「锚不为其他段让路」，不是标定结果；没有测量能给出裁剪顺序',
-      { guardedBy: ['test/view.test.mjs'] },
-    ),
-    display: 'paths->5 -> entries->4 -> anchors->summary -> paths->0 -> anchors->3',
-    definedBy: { file: 'src/pipeline/view.ts', name: 'TRIM_ORDER' },
-    affects: '超预算时的裁剪顺序（路 -> 入口 -> 锚降级 -> 路清零 -> 锚减量）',
-    variesWith: ['三段分工本身变化时（例如新增一段）'],
-    diverges:
-      '**zod schema 里也没有**。它按字符串而非数值登记：' + '列在此处的目的是让「行为契约级常量」不被漏掉',
-  },
+  // 这里原有两条登记项：三段字符配额（55/20/25）与超预算时的裁剪顺序。0.5.0 换机制时一起删掉 ——
+  // 注入不再分段、也没有裁剪顺序，按余弦序装着装着装不下就停，它们描述的行为已不存在。
   // ENTRY_LABEL_CHARS 已并入 TOPIC_LABEL_CHARS（同一个量：主题标签的宽度），
   // 见「落位」一节的 TOPIC_LABEL_CHARS 行。
   // ────────────────────────────── 目录（list.ts）───────────────────────────────
@@ -654,8 +615,9 @@ export const DESIGN_GAPS: readonly DesignGap[] = [
   {
     key: 'ratioAnchor/Entry/Path',
     designDefault: 55,
-    note: '**文档有、代码里键名不同**：实现在 pipeline/view.ts 的 SEGMENT_RATIO（小数 0.55 / 0.2 / 0.25）',
-    refs: [{ file: 'src/pipeline/view.ts', symbol: 'SEGMENT_RATIO' }],
+    note:
+      '**文档有、代码里没有这个量了**：0.5.0 换成「按余弦序逐条装到字符预算」之后注入不再分段，' +
+      '锚 / 入口 / 路各分一份配额这件事连同那个常量（pipeline/view.ts，0.55 / 0.2 / 0.25，设计文档叫 ratioXxx）一起删掉',
   },
   {
     key: 'wVec/wEntry/wBody/wGraph',
