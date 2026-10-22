@@ -287,6 +287,30 @@ describe('lattice_recall', () => {
     const body = out.slice(out.indexOf('【入选】'))
     assert.ok(body.length <= 900 + 60, '正文应当受预算约束，实际 ' + body.length)
   })
+
+  /**
+   * scope 的两个默认值不同：写入缺省 global，召回缺省「不限」。
+   *
+   * 「不传时两个项目域都出现」是对照组，不能省：少了它，第二条用例里
+   * 「乙标记不出现」可能只是因为两条类似记忆被压掉了一条，而不是 scope 起了作用。
+   * 三条正文刻意写得不像，避免被重复压制先一步拿掉。
+   */
+  it('scope 只召回该域与 global，不传则不限域', async () => {
+    await tool('lattice_write').execute({ text: '项目甲：部署流程先跑构建再发布，甲标记。', scope: 'proj-a' })
+    await tool('lattice_write').execute({
+      text: '项目乙那边怎么走部署流程，写的是先备份再切流量，乙标记。',
+      scope: 'proj-b',
+    })
+    await tool('lattice_write').execute({ text: '部署流程的通用说明，共用标记。' })
+    const q = '部署流程'
+    const all = await tool('lattice_recall').execute({ query: q })
+    assert.ok(all.includes('甲标记'), '不传 scope 时项目甲该出现: ' + all)
+    assert.ok(all.includes('乙标记'), '不传 scope 时项目乙该出现: ' + all)
+    const onlyA = await tool('lattice_recall').execute({ query: q, scope: 'proj-a' })
+    assert.ok(onlyA.includes('甲标记'), '本域该出现: ' + onlyA)
+    assert.ok(onlyA.includes('共用标记'), 'global 在任何域下都该出现: ' + onlyA)
+    assert.ok(!onlyA.includes('乙标记'), '域外的记忆不该出现: ' + onlyA)
+  })
 })
 
 describe('召回回执的固定措辞', () => {

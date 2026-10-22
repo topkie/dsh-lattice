@@ -320,6 +320,9 @@ lattice_write
 `lattice_list` 的过滤条件与分页：`kind` / `origin`（`user` / `model` / `import`）/ `scope` / `topic` / `flags`；
 本页条数默认 20、上限 50（固定上限）；翻页用 `offset`。
 
+`lattice_recall` 可传 `scope`：只召回该域与 `global` 的记忆，不传则不限域。
+写入缺省 `global`、召回缺省「不限」，两个默认值不同是有意的 —— 写不知道自己在哪个项目域里，读不该替它选一个。
+
 ### 3.2 模型侧没有的两件事
 
 **① 没有删除工具。** 模型侧没有 forget / delete。删除是**界面上由用户执行**的管理动作，归用户。

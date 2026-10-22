@@ -412,12 +412,20 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         required: true,
       },
       budget: { type: 'number', description: '返回文本的字符预算' },
+      scope: {
+        type: 'string',
+        description:
+          '只召回这个域的记忆（global 或项目键）；给定时连同 global 一起。不传则不限域 —— 写进项目域的记忆也能召回到。',
+      },
     },
     output: textOutput(),
     async execute(args: Record<string, unknown>) {
       const rt = getRuntime(cfg)
       const q = str(args?.query).trim()
       if (q === '') return '查询为空。'
+      // scope 与写入侧的默认值不同：写入缺省 global，召回缺省「不限」。
+      // 两个默认值不同是有意的 —— 写不知道自己在哪个项目域里，读不该替它选一个。
+      const scopeArg = str(args?.scope).trim()
       const vq = await runtimeEncode(cfg, q)
       // 参考线：一个与库无关的问题在本库最高能拿到多少余弦。首次要把 48 条内置问句各
       // 编码一次（约 1 秒），之后按 atom 行数缓存，稳态零成本。编码器不可用时它返回
@@ -425,6 +433,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const ref = await referenceFor(rt.db, (text) => runtimeEncode(cfg, text))
       const recalled = recall(rt.db, q, vq, {
         topN: cfg.topN,
+        scope: scopeArg === '' ? undefined : scopeArg,
         reference: { line: ref.p90, usable: ref.usable, reason: ref.reason },
       })
       // 降级留痕：只入队，不阻塞召回（见 src/log/index.ts 的队列与批量窗口）。
