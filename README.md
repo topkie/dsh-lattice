@@ -87,7 +87,7 @@ profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<prof
 | `tauLex` | `0.05` | 并入所需的词面重叠阈值（0.02~0.5） |
 | `tauLexOnly` | `0.1` | 只靠词面就判同主题的阈值（0.02~0.6） |
 | `tauNew` | `0.5` | 新建主题的余弦阈值（0.2~0.8） |
-| `viewBudget` | `6000` | 单次注入的字符预算 |
+| `viewBudget` | `4000` | 单次注入的字符预算 |
 | `topN` | `24` | 交注入层的候选数 |
 | `samplesEnabled` | `true` | 校准样本的自动收集（负样本）；关掉后显式 `lattice_feedback` 仍可用 |
 
