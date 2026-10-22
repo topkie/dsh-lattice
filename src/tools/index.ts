@@ -393,7 +393,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
   const recallTool = defineTool({
     name: 'lattice_recall',
     description:
-      '按需取回记忆。返回两段：【入选】记忆正文（每条带 id，标「我」=用户说的、「导入」=外部来源、「已被 #N 取代」=已修订），以及未入选的条目为什么没列出来。库里没有相关内容的，会直接说没有。答案取决于「之前定过什么」的问题先查；与历史无关的常识不必查。',
+      '按需取回记忆。返回一段【入选】：逐条给出记忆正文（每条带 id，标「我」=用户说的、「导入」=外部来源、「已被 #N 取代」=已修订）；末尾最多三句汇总说明压掉的条目（已被取代 / 与同源内容重复 / 预算装不下）。库里没有相关内容的，会直接说没有。答案取决于「之前定过什么」的问题先查；与历史无关的常识不必查。',
     parameters: {
       query: {
         type: 'string',
@@ -496,7 +496,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
     parameters: {
       atom_id: {
         type: 'number',
-        description: '召回【锚】段里的 id',
+        description: '召回【入选】段里的 id',
         required: true,
       },
       mode: { type: 'string', description: 'full（默认）或 related' },

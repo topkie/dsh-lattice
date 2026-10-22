@@ -1,15 +1,15 @@
-// W1 写入侧派生约定的验证。一条用例对应一个约定号，#24 到 #46 各一条，另有补缺-2(#21)。
+// 写入侧派生行为的验证：一条用例验一件事，覆盖 scope 透传、主题归属、主题行上的聚合列与检索行正文。
 //
 // 这里验的是写入路径怎么处理 scope、主题归属与主题行上的聚合列；不验召回质量、不验阈值。
 //
 // 两组夹具，分开是因为要看的东西不同：
-//   A 组只放 #24 —— 走工具层（apply 注册 lattice_write 后从 ctx.registered 里取出），
+//   A 组只放一条 —— 走工具层（apply 注册 lattice_write 后从 ctx.registered 里取出），
 //     因为这一条要同时覆盖参数默认值那一层（src/tools/index.ts）与写库那一层（src/pipeline/write.ts）。
 //   B 组放其余十条 —— 直接 openVault + createWriteCtx + writeAtom，
 //     因为要读库里的原始列值（含 BLOB），而工具回执只有一段给人看的文本。
 //
 // 编码模型一律不加载：B 组注入 encode 桩函数（文本片段 → 固定向量），A 组把 encoderEnabled 关掉、
-// 直接走降级路径（零向量）。这十条约定关心的量都不来自编码模型，加载它只会让用例变慢、依赖模型文件。
+// 直接走降级路径（零向量）。这些用例关心的量都不来自编码模型，加载它只会让用例变慢、依赖模型文件。
 //
 // 关于「同主题」怎么构造：落位并入已有主题要同时满足两个条件（src/pipeline/write.ts:716-717）——
 // 向量余弦 >= tauJoin、词面重合 >= tauLex。所以下面凡是需要两条记忆并进同一主题的用例，
@@ -107,9 +107,9 @@ const TEXT_A = '系统代理必须走本地端口，否则访问境外源时会�
 const TEXT_B = '系统代理必须走本地端口，局域网内的访问同样不能例外。'
 const SHARED = '系统代理必须走本地端口'
 
-// ── A 组：工具层（#24） ───────────────────────────────────────────────────
+// ── A 组：工具层 ───────────────────────────────────────────────────
 
-describe('W1-A 工具层：scope 透传', () => {
+describe('A 组 · 工具层：scope 透传', () => {
   let dir
   let tools
 
@@ -162,7 +162,7 @@ describe('W1-A 工具层：scope 透传', () => {
 
   beforeEach(() => {
     closeRuntime()
-    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-w1-tools-'))
+    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-tools-'))
     const ctx = fakeCtx()
     apply(ctx, cfg())
     tools = ctx.registered
@@ -175,7 +175,7 @@ describe('W1-A 工具层：scope 透传', () => {
     } catch {}
   })
 
-  it('#24 scope 只做字符串透传：大小写不同的两个值原样入库', async () => {
+  it('scope 只做字符串透传：大小写不同的两个值原样入库', async () => {
     // #24 跨 scope 不归一
     await tool('lattice_write').execute({ text: '第一行：网关的端口映射由运维统一维护。', scope: 'Proj-A' })
     await tool('lattice_write').execute({ text: '第二行：值班表在每周一早上重新排一次。', scope: 'proj-a' })
@@ -193,12 +193,12 @@ describe('W1-A 工具层：scope 透传', () => {
 
 // ── B 组：pipeline 层（其余十条） ────────────────────────────────────────
 
-describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
+describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   let dir
   let db
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-w1-pipe-'))
+    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-pipe-'))
     db = openVault(join(dir, 'lattice.db')).db
   })
 
@@ -212,7 +212,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     } catch {}
   })
 
-  it('#25 落位不看 scope：换了 scope 的相似文本仍并进同一个主题', async () => {
+  it('落位不看 scope：换了 scope 的相似文本仍并进同一个主题', async () => {
     // #25 落位候选不带 scope 条件
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A, scope: 'p1' })
@@ -222,7 +222,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM topic').get().n, 1)
   })
 
-  it('#28 防写回不看 scope：删过的文本换一个 scope 再写仍被拒', async () => {
+  it('防写回不看 scope：删过的文本换一个 scope 再写仍被拒', async () => {
     // #28 墓碑比对不看 scope
     const text = '境外源访问必须走系统代理，否则直连会被拒绝。'
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([['境外源访问', oneHot(4)]]) })
@@ -244,7 +244,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM atom WHERE summary = ?').get(summary).n, 0)
   })
 
-  it('#29 topic 表没有 scope 列：不同 scope 的两条记忆共用一行主题', async () => {
+  it('topic 表没有 scope 列：不同 scope 的两条记忆共用一行主题', async () => {
     // #29 主题不按 scope 分区
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A, scope: 'p1' })
@@ -260,7 +260,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     )
   })
 
-  it('#36 写入路径不改既有 atom 的归属：(id, topic_id) 指纹在写入前后一致', async () => {
+  it('写入路径不改既有 atom 的归属：(id, topic_id) 指纹在写入前后一致', async () => {
     // #36 写入路径不 UPDATE atom.topic_id
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A })
@@ -281,7 +281,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.equal(b.topicId, a.topicId)
   })
 
-  it('#38 新建主题的列值：sum_vec 等于该条记忆的向量、n_atoms=1、mean_fit=0、label 是摘要前 16 字符', async () => {
+  it('新建主题的列值：sum_vec 等于该条记忆的向量、n_atoms=1、mean_fit=0、label 是摘要前 16 字符', async () => {
     // #38 新建主题的初值
     const text = '傍晚的路灯把影子拉得很长，我站在站台上等那班永远晚点的车。'
     const vec = oneHot(7)
@@ -307,7 +307,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.deepEqual(Buffer.from(topic.sum_vec), Buffer.from(atom.embedding))
   })
 
-  it('#39 mean_fit 在提交之后按 AVG(fit) 重算，重算失败不阻断写入', async () => {
+  it('mean_fit 在提交之后按 AVG(fit) 重算，重算失败不阻断写入', async () => {
     // #39 mean_fit 重算位置与失败处理
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A })
@@ -335,7 +335,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.ok(db.prepare('SELECT 1 AS ok FROM atom WHERE id = ?').get(b.atomId))
   })
 
-  it('#41 删除后重算 n_atoms 与 mean_fit，删空时不重写 sum_vec', async () => {
+  it('删除后重算 n_atoms 与 mean_fit，删空时不重写 sum_vec', async () => {
     // #41 删除后的主题聚合值
     // B 与 A 的余弦取 0.85：仍高于并入线（0.78），但两条的 fit 不相等 ——
     // 若两条的 fit 都是 1，重算出来的平均值与不重算时的旧值读数相同，这条断言就分不出重算有没有发生。
@@ -373,7 +373,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.deepEqual(Buffer.from(afterA.sum_vec), sumBefore)
   })
 
-  it('#42 删除不删空主题，空主题也不再被落位选中', async () => {
+  it('删除不删空主题，空主题也不再被落位选中', async () => {
     // #42 空主题保留、且不参与落位候选
     const lone = '机房的空调在夜间会切到除湿档，值班的人需要留意水位。'
     // 不能给它和 lone 同一个向量：lone 已被删成墓碑，写入前的墓碑判重按余弦算，
@@ -404,7 +404,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     )
   })
 
-  it('#46 atom_search.body 是「摘要 摘要 正文 入口词」，1600 字符只截正文段', async () => {
+  it('atom_search.body 是「摘要 摘要 正文 入口词」，1600 字符只截正文段', async () => {
     // #46 body 的拼法与截断位置
     const summary = '摘'.repeat(SUMMARY_CHARS)
     const longText = '甲'.repeat(2000)
@@ -431,7 +431,7 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     )
   })
 
-  it('#21 图路只走白名单关系：related 边带来候选、duplicate 边不带来', async () => {
+  it('图路只走白名单关系：related 边带来候选、duplicate 边不带来', async () => {
     // #21 图路白名单（补缺-2）
     const bVec = oneHot(1)
     const cVec = oneHot(2)

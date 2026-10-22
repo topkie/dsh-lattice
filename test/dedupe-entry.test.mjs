@@ -1,11 +1,11 @@
-// W1 写入侧派生验证：5 条约定的用例各一条（#51 / #57 / #68 / 补缺-1(#11) / 补缺-3(#93)）。
+// 写入侧派生行为的验证：去重范围、去重排序、入口行初值、写入侧去重排除已取代行、召回不改真相层，各一条。
 //
 // 每个用例都自建一份临时目录（库文件、样本、日志都在里面，结束时整份删掉），
 // 不依赖别的用例留下的状态。两种取数方式：
-//   · 工具层（#68、#93 的召回段）：照 test/tools.test.mjs 的写法，用 apply() 注册工具，
+//   · 工具层（入口行初值与召回段的用例）：照 test/tools.test.mjs 的写法，用 apply() 注册工具，
 //     再按名字取出来用 execute() 调用 —— 只有这条路径会真的走 tools/index.ts 里
 //     recordRecall 与 feedLearned 那两段；
-//   · 函数层（#51、#57、补缺-1、#93 的写入夹具）：照 test/supersede.test.mjs 的写法，
+//   · 函数层（去重、排序与排除已取代行的用例）：照 test/supersede.test.mjs 的写法，
 //     openVault 拿连接、createWriteCtx 造上下文、直接调 writeAtom —— 这样能看见
 //     findDuplicate / forgetAtom 这些函数的返回值本身，而不只是工具回执里的文案。
 
@@ -68,7 +68,7 @@ async function withVault(tag, fn) {
   // 编码器状态是模块级单例：别的测试文件可能已把它置为 ready，不复位会静默沿用。
   resetEncoder()
   closeRuntime()
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-w1-' + tag + '-'))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-dedupe-' + tag + '-'))
   const config = cfg(dir)
   const ctx = fakeCtx()
   apply(ctx, config)
@@ -104,8 +104,8 @@ function basis(i, weight = 1) {
   return v
 }
 
-describe('W1 写入侧派生验证', () => {
-  it('#51 去重只比主属主题的前 200 条，第 201 条等于没比', async () => {
+describe('写入侧派生验证', () => {
+  it('去重只比主属主题的前 200 条，第 201 条等于没比', async () => {
     // #51 去重只看主属主题前 200 条
     await withVault('51', async ({ db }) => {
       // encoderOn: false 时 writeAtom 不调用编码器，向量取零向量占位 —— 200 条夹具不必付编码开销。
@@ -150,7 +150,7 @@ describe('W1 写入侧派生验证', () => {
     })
   })
 
-  it('#57 去重与防写回都按 (cos ?? 0) * 2 + lex 排第一', async () => {
+  it('去重与防写回都按 (cos ?? 0) * 2 + lex 排第一', async () => {
     // #57 去重排序值 = (cos ?? 0) * 2 + lex
     await withVault('57', async ({ db }) => {
       // T 有 5 个词；候选一与它词面交集 2 个 → 2/(5+2-2) = 0.4；候选二 1 个 → 1/(5+6-1) = 0.1
@@ -228,7 +228,7 @@ describe('W1 写入侧派生验证', () => {
     })
   })
 
-  it('#68 写入的 entry 行 hits=0/last_seen=NULL，召回反哺的行 hits=1/last_seen=当时', async () => {
+  it('写入的 entry 行 hits=0/last_seen=NULL，召回反哺的行 hits=1/last_seen=当时', async () => {
     // #68 entry 行的 hits/last_seen 两种来源不同
     await withVault('68', async ({ tool, db }) => {
       const w = tool('lattice_write')
@@ -270,7 +270,7 @@ describe('W1 写入侧派生验证', () => {
     })
   })
 
-  it('补缺-1（#11）写入侧去重排除已取代行', async () => {
+  it('写入侧去重排除已取代行', async () => {
     // 补缺-1（#11）写入侧去重排除已取代行
     await withVault('11', async ({ db }) => {
       const ctx = createWriteCtx(db(), {}, { encoderOn: false })
@@ -307,7 +307,7 @@ describe('W1 写入侧派生验证', () => {
     })
   })
 
-  it('补缺-3（#93）召回不改真相层，只读连接给出同样的文本', async () => {
+  it('召回不改真相层，只读连接给出同样的文本', async () => {
     // 补缺-3（#93）召回不改真相层
     await withVault('93', async ({ dir, config, tool, db }) => {
       // 写入夹具走函数层，为的是能给向量：推断边（origin='inferred'）只从非零向量算出来，

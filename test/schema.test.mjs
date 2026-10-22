@@ -1,4 +1,4 @@
-// W1 第 2 步：结构与取代语义。
+// 结构与取代语义。
 //
 // 这一组只验本次改动新定的三件事：
 //   1. 新建库的 atom 表有 superseded_at，且 calib_state 与 meta 两张表都已删除；
@@ -68,11 +68,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-describe('W1 结构改动', () => {
+describe('结构改动', () => {
   beforeEach(() => {
     resetEncoder()
     closeRuntime()
-    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-schema-w1-'))
+    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-schema-'))
     const ctx = fakeCtx()
     apply(ctx, cfg())
     tools = ctx.registered
@@ -87,7 +87,7 @@ describe('W1 结构改动', () => {
     }
   })
 
-  describe('W1 结构：列与表', () => {
+  describe('结构：列与表', () => {
     it('新建库的 atom 表有 superseded_at，且没有 calib_state 表', () => {
       // 传 cfg：apply() 只注册工具，库要到第一次用到时才建，这里正是要用它。
       const db = getRuntime(cfg()).db
@@ -106,7 +106,7 @@ describe('W1 结构改动', () => {
     })
   })
 
-  describe('W1 取代语义：只改关系，不改内容', () => {
+  describe('取代语义：只改关系，不改内容', () => {
     it('取代后 updated_at 不变、superseded_at 有值', async () => {
       const a = atomIdOf(
         await tool('lattice_write').execute({ text: '系统代理必须走本地端口，否则境外源超时。' }),

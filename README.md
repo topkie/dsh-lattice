@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 
-> **状态：0.9.0，第一个对外发布版。** 存储、编码、写入、召回、注入组装、1 跳图扩展与六个工具都已实现，
+> **状态：0.9.0，第一个对外发布版。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现，
 > 门禁带 467 条测试；设置页能列出现有记忆、搜到指定一条、不借助模型把它删掉。
 > 整理（重聚类）要手动触发，没有定时自动执行。其余已知限制见 [CHANGELOG](CHANGELOG.md) 的「已知限制」一节。
 
@@ -50,7 +50,8 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 ## 安装
 
-本插件还没有发布到 npm，所以现在只有从源码装这一条路。需要 Node 22 以上、git 与 pnpm ≥ 9
+npm 上的 `dsh-lattice` 目前只是一个占位包：`npm view dsh-lattice` 能查到 `0.0.0`，包的 description 写明请勿安装。
+所以可用版本只能从源码装。需要 Node 22 以上、git 与 pnpm ≥ 9
 （与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。`node` 要在 `PATH` 里 —— 有几个依赖的
 安装脚本会直接调用 `node` 命令，找不到就会装出缺原生二进制的半成品。
 
@@ -70,6 +71,10 @@ pnpm run build
 profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<profile 名>/`；不确定就找宿主配置里 `profiles/` 所在的那一层。
 只复制 `dist/` 或只复制 `lib/` 会出现「后端是新版、设置页是旧版」，两样要一起复制。
 
+`cordis.patch.yml` 是 bundle 补丁层：`package.json` 的 `dsh.bundle.patch` 指向它，宿主据此在 profile 里
+插入 id 为 `lattice` 的插件条目并给出默认配置（`enabled`、`encoderEnabled`）；profile 自己的
+`cordis.patch.yml` 可以按这个 id 覆盖或禁用。漏复制它，profile 里的 `package.json` 就指向一个不存在的文件。
+
 装好后用一次写入与一次召回确认：让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；
 也可以直接调 `lattice_ping`：它返回插件版本、数据目录、编码器配置（`off` 或模型名），以及五处缓存的实时占用 —— 编码器是否真的加载成功看 `caches.encoder.state`。
 
@@ -81,15 +86,20 @@ profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<prof
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | 总开关 |
-| `dataDir` | 空 | 数据目录；留空使用默认位置 |
+| `dataDir` | 空（即 `<数据目录>/lattice`） | 数据目录；留空按 `DSH_HOME/lattice` 解析，未设置 `DSH_HOME` 时用 `~/.dsh/lattice` |
 | `encoderEnabled` | `true` | 关掉即为纯词面模式 |
 | `encoderModel` | `Xenova/bge-small-zh-v1.5` | 向量模型 |
+| `encoderMirror` | 空 | 模型下载源；留空用官方源，网络受限时可指向镜像 |
+| `encoderCacheDir` | 空 | 模型缓存目录；留空用运行时默认位置 |
 | `tauJoin` | `0.78` | 并入已有主题所需的余弦阈值（可调范围 0.6~0.95） |
 | `tauLex` | `0.05` | 并入所需的词面重叠阈值（0.02~0.5） |
 | `tauLexOnly` | `0.1` | 只靠词面就判同主题的阈值（0.02~0.6） |
 | `tauNew` | `0.5` | 新建主题的余弦阈值（0.2~0.8） |
 | `viewBudget` | `5000` | 单次注入的字符预算 |
 | `topN` | `24` | 交注入层的候选数 |
+| `mmapSize` | `0` | SQLite mmap 窗口字节数；0 = 按机器内存与库大小自动 |
+| `cacheSize` | `0` | SQLite 页缓存字节数；0 = 自动 |
+| `busyTimeout` | `0` | 写锁等待上限毫秒；0 = 自动 |
 
 > 落位判定需要**余弦与词面同时达标**：同一大类内部，不同主题的余弦可能高到 0.73，
 > 而同一主题最低约 0.75，仅凭余弦会静默合并不同主题。
@@ -99,7 +109,7 @@ profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<prof
 | 文档 | 内容 |
 |---|---|
 | [**设计原则**](docs/PRINCIPLES.md) | **根本约束：职责边界、行为边界、数据边界**。与之冲突的改动一律不做 |
-| [宿主接入契约](docs/INTEGRATION.md) | 第一次接入先读：什么时候该查记忆、一条记忆怎么写、六个工具各管到哪、失败与降级时看到什么 |
+| [宿主接入契约](docs/INTEGRATION.md) | 第一次接入先读：什么时候该查记忆、一条记忆怎么写、五个工具各管到哪、失败与降级时看到什么 |
 | [架构](docs/ARCHITECTURE.md) | 记忆模型、存储布局、检索与写入流程 |
 | [开发指南](docs/DEVELOPMENT.md) | 环境、命令、模块划分、关键约束 |
 | [阈值登记](docs/THRESHOLDS.md) | 代码里那些数字为什么是这个值、什么条件该重标、这套检查查得出什么查不出什么 |

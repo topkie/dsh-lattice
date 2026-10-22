@@ -103,7 +103,7 @@ async function main() {
   const { db } = openVault(WORK)
   const afterRule = ruleOf(db)
   const atoms = db.prepare('SELECT id, text FROM atom').all()
-  // D4：重建入口会把 learned（使用史）一起删掉 —— 按 PRINCIPLES §六 第三类，丢必须留痕。
+  // 重建入口会把 learned（使用史）一起删掉 —— 按 PRINCIPLES §六 第三类，丢必须留痕。
   // 先数再删，N=0 也打印：分不清「没清」与「没打印」就等于没有留痕。
   const clearedLearned = clearLearned(db)
   console.log('  已清空 ' + clearedLearned + ' 条反哺')

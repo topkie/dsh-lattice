@@ -144,12 +144,12 @@ describe('write', () => {
       // 回执要能核对「没把握」指的是哪两个候选。
       // nearId 是 near 边指向的最近候选，secondId 是次近候选 —— 两者在这个场景里不同，
       // 混用会让回执给的编号对不上 lattice_list / SQL。
-      assert.equal(typeof r.nearId, 'number', 'D1：新建主题且指向候选时应带 nearId')
-      assert.notEqual(r.evidence.secondId, null, 'D1：ambiguous 一定有次近候选')
+      assert.equal(typeof r.nearId, 'number', '新建主题且指向候选时应带 nearId')
+      assert.notEqual(r.evidence.secondId, null, 'ambiguous 一定有次近候选')
       const nearEdge = db
         .prepare("SELECT dst_id FROM edge WHERE kind = 'near' AND src_id = ? AND dst_type = 'topic'")
         .get(r.atomId)
-      assert.equal(Number(nearEdge.dst_id), r.nearId, 'D1：nearId 必须就是 near 边的目标')
+      assert.equal(Number(nearEdge.dst_id), r.nearId, 'nearId 必须就是 near 边的目标')
 
       // 当时的判据是「只改回执、不写 flags」；**位标志落地后存储有意改变**（ambiguous 置歧义位）。
       // 那条历史语义保留在这里的注释里，而 flags 的完整判据归 test/flags.test.mjs —— 两处各写一套就会分叉。

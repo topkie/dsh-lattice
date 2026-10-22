@@ -81,8 +81,8 @@ export const REFERENCE_QUANTILE = 0.9 satisfies ThresholdValue<
   'recheckable',
   {
     area: '召回判定'
-    tool: 'probes/b3-rewrite/scripts/exp-g.mjs（分位敏感性扫描）'
-    finding: 'p85 / p90 / p95 三档对照：p90 在三库上 gold 漏判都是 0%、无关查询判空 83%–100%；p95 在技术笔记上漏判 5%；p85 在 Vue 上判空降到 79%'
+    tool: 'scripts/probe-verdict-line.mjs（分位复算：p90 与 --boot 抽样漂移）'
+    finding: 'p85 / p90 / p95 三档对照（三档由一次性扫描得出，未留脚本）：p90 在三库上 gold 漏判都是 0%、无关查询判空 83%–100%；p95 在技术笔记上漏判 5%；p85 在 Vue 上判空降到 79%'
     failsWhen: ['语料的内容分布（判空率随之变）', '内置问句集的主题（用户库本身讲日常生活时线被抬高）']
     scale: '三个语料各 1374 / 1346 / 1496 atom，20 条 gold + 24 条无关查询；线由 48 条内置问句算出'
     guardedBy: ['test/refdist.test.mjs']

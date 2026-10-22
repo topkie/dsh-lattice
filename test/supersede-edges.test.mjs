@@ -1,7 +1,7 @@
 // 写入侧派生验证：取代（supersedes / unsupersede）与声明关系边（edges）的边界。
 //
-// 每个用例注释第一行的 `#N` 是开发笔记 probes/b3-rewrite/W1-派生验证清单.md 里的约定号。
-// 十条覆盖：#1 #2 #4 #5 #6 #7 #12 #16 #17 #18。
+// 下面这组用例覆盖这些边界：目标不存在、目标存在但改写失败、同一目标多次取代、跨 scope 取代、
+// 被切成两段时只落在第一段、时间戳不变、非正整数 target、同批重复声明、边数上限。
 //
 // 全部走真实工具入口（apply + 独立临时目录）：这些约定断言的是两件事 —— 调用方在回执文本里
 // 看见了什么，以及库里最终留下了什么。回执文案取自 src/tools/index.ts 与 src/pipeline/write.ts，
@@ -130,7 +130,7 @@ describe('写入侧取代关系与声明边的边界', () => {
     // 编码器状态是模块级单例：不复位的话可能沿用上一个文件留下的状态。
     resetEncoder()
     closeRuntime()
-    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-w1-supersede-'))
+    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-supersede-'))
     const ctx = fakeCtx()
     apply(ctx, cfg())
     tools = ctx.registered
@@ -146,7 +146,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #1 取代在写入事务提交之后单独执行
-  it('#1 目标不存在时回执同时出现「已写入记忆」与「未建立取代关系」两行', async () => {
+  it('目标不存在时回执同时出现「已写入记忆」与「未建立取代关系」两行', async () => {
     await write({ text: '系统代理必须走本地端口，否则访问境外源会超时。' })
     const out = await write({
       text: '代理改走 7890 端口，旧的写法不再适用。',
@@ -164,7 +164,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #1 的另一半：目标在库里，但改写它这一步本身失败。
-  it('#1 目标存在但改写失败时，写入已经落库，错从取代那一步抛出来', async () => {
+  it('目标存在但改写失败时，写入已经落库，错从取代那一步抛出来', async () => {
     const a = await write({ text: '旧写法：代理配置写在环境变量里，重启就丢。' })
     const aid = atomIdOf(a)
     const text = '新写法：代理配置写进配置文件，环境变量那条作废。'
@@ -205,7 +205,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #2 目标不存在时只追加回执、不抛不回滚
-  it('#2 目标不存在时不抛异常，回执给出原因，本次写入照常落库', async () => {
+  it('目标不存在时不抛异常，回执给出原因，本次写入照常落库', async () => {
     let threw = null
     let out = ''
     try {
@@ -224,7 +224,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #4 无条件覆盖
-  it('#4 对同一条先后两次取代，最终指向最后一个取代者', async () => {
+  it('对同一条先后两次取代，最终指向最后一个取代者', async () => {
     const a = atomIdOf(await write({ text: '代理端口是 7890，这是最早的说法。' }))
     const b = atomIdOf(await write({ text: '代理端口改成 8080，最早的说法作废。', supersedes: a }))
     assert.equal(Number(atomRow(a).superseded_by), b, '第一次取代应当生效')
@@ -237,7 +237,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #5 重复调用刷新 superseded_at
-  it('#5 对同一条连续两次取代，superseded_at 被刷成更晚的时间', async () => {
+  it('对同一条连续两次取代，superseded_at 被刷成更晚的时间', async () => {
     const a = atomIdOf(await write({ text: '这条记忆会被连续取代两次，用来观察时间戳。' }))
     await write({ text: '第一次取代它的新说法，写在这里。', supersedes: a })
     const t1 = Number(atomRow(a).superseded_at)
@@ -251,7 +251,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #6 跨 scope 取代
-  it('#6 取代只按 id 匹配，跨 scope 也能建立', async () => {
+  it('取代只按 id 匹配，跨 scope 也能建立', async () => {
     const a = atomIdOf(
       await write({ text: '全局域里的一条记忆，稍后会被项目域的那条取代。', scope: 'global' }),
     )
@@ -264,7 +264,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #7 切分后取代只落第一条
-  it('#7 取代一条会被切成两段的文本时，只落在第一段', async () => {
+  it('取代一条会被切成两段的文本时，只落在第一段', async () => {
     const a = atomIdOf(await write({ text: '这条旧记忆会被一条按长度切开的文本取代。' }))
     const long = longText()
     assert.equal(long.length, 1200, '这条用例的输入应当是 1200 字，实际 ' + long.length)
@@ -279,7 +279,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #12 取代与取消取代只动两列
-  it('#12 取代与取消取代都不改 updated_at，superseded_at 从非空回到 NULL', async () => {
+  it('取代与取消取代都不改 updated_at，superseded_at 从非空回到 NULL', async () => {
     const a = atomIdOf(await write({ text: '这条记忆的 updated_at 在两轮关系改动里都不该变。' }))
     const updatedAt = atomRow(a).updated_at
     // 基线本身要是真值：updated_at 为 NULL 时后面两次相等断言都恒真，等于没测。
@@ -296,7 +296,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #16 target 只接受正整数
-  it('#16 target 不是正整数时整条边被拒，且不落 edge 表', async () => {
+  it('target 不是正整数时整条边被拒，且不落 edge 表', async () => {
     await write({ text: '第一个关系目标，用来证明 id 存在本身不是被拒的原因。' })
     const b = atomIdOf(await write({ text: '第二个关系目标，被下面那条边用非法 target 指向。' }))
 
@@ -331,7 +331,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #17 同批重复 (type,target) 只拒后面那条
-  it('#17 同一批里重复声明同一条关系时，只拒后面那条', async () => {
+  it('同一批里重复声明同一条关系时，只拒后面那条', async () => {
     await write({ text: '同批重复关系里被指向的那一条，先写进库里。' })
     const b = atomIdOf(await write({ text: '这条才是下面那两条重复边指向的目标。' }))
     const out = await write({
@@ -350,7 +350,7 @@ describe('写入侧取代关系与声明边的边界', () => {
   })
 
   // #18 出度上限 16
-  it('#18 一条记忆声明 17 条关系时，只有前 16 条落库', async () => {
+  it('一条记忆声明 17 条关系时，只有前 16 条落库', async () => {
     const topics = [
       '代理',
       '缓存',

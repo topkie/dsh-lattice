@@ -62,7 +62,7 @@ let db = null
 
 describe('写入路径：时间戳与事务边界', () => {
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-w1-id-tx-'))
+    dir = mkdtempSync(join(tmpdir(), 'dsh-lattice-id-tx-'))
     db = openVault(join(dir, 'lattice.db')).db
   })
 

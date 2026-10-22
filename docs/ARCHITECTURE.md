@@ -274,7 +274,7 @@ top1 恒为 1/61，它只携带「命中了几路、在各路排第几」，不�
 
 它**不是模型侧的工具**：模型写、查、展开、列表，不需要「体检」；而结构比例只作参考，
 工具化会把参考值直接递到模型手里，容易被读成结论。
-模型侧固定六个工具：ping / write / recall / expand / list / feedback。
+模型侧固定五个工具：ping / write / recall / expand / list（`lattice_feedback` 的工具定义仍在 `src/tools/index.ts` 里，但未注册给模型）。
 
 报出的指标：
 

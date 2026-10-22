@@ -2,7 +2,8 @@
 //
 // 插件只做两件事：
 //   1. 导出符合 Cordis 契约的接口（name / inject / Config / apply）
-//   2. 注册六个工具：ping（健康检查）、write、recall、expand、list、feedback
+//   2. 注册五个工具：ping（健康检查）、write、recall、expand、list
+//      （`lattice_feedback` 的工具定义仍在 src/tools/index.ts 里，但未注册给模型）
 //
 // 外加十二条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
 //   /api/lattice-ping-mini      库的规模（最小实跑留下的座位验证，实测通过的那条基线）
@@ -154,7 +155,7 @@ const UNARCHIVE_ROUTE_PATH = '/api/lattice-unarchive'
  *
  * 为什么不是工具、也不加模型侧参数：这两个动作是**人的判断**。写入时的切分是自动的，
  * 但「这条到底该不该拆」要读内容，而读内容作判断正是模型侧不该被要求做的事（§11.1：
- * 插件不做判断，只提供判断所需的信息）。模型侧因此仍是六个工具。
+ * 插件不做判断，只提供判断所需的信息）。模型侧因此仍是五个工具（`lattice_feedback` 的工具定义仍在 src/tools/index.ts 里，但未注册给模型）。
  *
  * 为什么两条路由而不是一条 `{ confirmed: true/false }`：与归档 / 恢复同一条理由 ——
  * 动作方向写进路径，日志与界面调用都不必再解释一个布尔值的含义；两条共用一个 handler。
