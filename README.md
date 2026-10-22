@@ -51,7 +51,8 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ## 安装
 
 本插件还没有发布到 npm，所以现在只有从源码装这一条路。需要 Node 22 以上、git 与 pnpm ≥ 9
-（与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。
+（与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。`node` 要在 `PATH` 里 —— 有几个依赖的
+安装脚本会直接调用 `node` 命令，找不到就会装出缺原生二进制的半成品。
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git

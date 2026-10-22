@@ -1,3 +1,7 @@
+# 即使仓库只有一个包，也要写 packages 字段 —— pnpm 9 在这个文件里找不到它时
+# 直接报「packages field missing or empty」，install 连开始都不开始。
+packages: ['.']
+
 # 依赖链接方式：hoisted（把依赖平铺到顶层）。
 # 默认的 isolated 模式依赖符号链接，在无法创建链接的环境（受限容器、部分 Windows 配置）
 # 下会装出空目录或缺失包。平铺方式牺牲少量隔离性，换取到处都能装。
