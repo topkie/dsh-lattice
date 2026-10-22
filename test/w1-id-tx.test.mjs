@@ -34,13 +34,20 @@ function recordingDb(db) {
   return { db: proxy, execs }
 }
 
-/** 让含某段 SQL 的 prepare 抛错的库代理：模拟提交之后的维护查询失败。 */
-function failingPrepare(db, fragment) {
+/**
+ * 让含某段 SQL 的 prepare 抛错的库代理：模拟提交之后的维护查询失败。
+ *
+ * onFail 每次注入命中时调一次，用来证明「注入真的被问到过」以及「问的时机在哪儿」。
+ */
+function failingPrepare(db, fragment, onFail) {
   return new Proxy(db, {
     get(t, p) {
       if (p === 'prepare') {
         return (sql) => {
-          if (String(sql).includes(fragment)) throw new Error('注入：维护查询失败')
+          if (String(sql).includes(fragment)) {
+            if (onFail !== undefined) onFail(String(sql))
+            throw new Error('注入：维护查询失败')
+          }
           return t.prepare(sql)
         }
       }
@@ -102,9 +109,16 @@ describe('写入路径：时间戳与事务边界', () => {
   })
 
   it('提交之后的维护查询失败不影响已落库的记忆', async () => {
-    const proxy = failingPrepare(db, 'SELECT AVG(fit) AS f FROM atom WHERE topic_id')
+    const { db: rec, execs } = recordingDb(db)
+    // 每次注入命中都记下「当时 COMMIT 是否已经执行过」。
+    const fails = []
+    const proxy = failingPrepare(rec, 'SELECT AVG(fit) AS f FROM atom WHERE topic_id', () =>
+      fails.push(execs.includes('COMMIT')),
+    )
     const ctx = createWriteCtx(proxy)
     const r = await writeAtom(ctx, { text: '维护查询失败时，这条记忆仍应留在库里。' })
+    // 少一条就等于这条用例从没走到失败分支上，测的是正常路径。
+    assert.deepEqual(fails, [true], '注入必须命中一次，且命中时 COMMIT 已经执行过')
     const row = db.prepare('SELECT text FROM atom WHERE id = ?').get(r.atomId)
     assert.ok(row, '维护查询在提交之后，失败不该把已提交的行带走')
     assert.equal(String(row.text), '维护查询失败时，这条记忆仍应留在库里。')

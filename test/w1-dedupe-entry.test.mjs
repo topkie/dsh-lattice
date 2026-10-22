@@ -325,7 +325,8 @@ describe('W1 写入侧派生验证', () => {
       const own = openVault(join(dir, 'lattice.db'))
       try {
         const writeCtx = createWriteCtx(own.db, {}, { encode })
-        for (const text of vecs.keys()) await writeAtom(writeCtx, { text })
+        // 顺带写一条 declared 入口：它属第 1 层，读之后同样一个字段都不许变。
+        for (const text of vecs.keys()) await writeAtom(writeCtx, { text, refs: ['端口缓存'] })
       } finally {
         own.db.close()
       }
@@ -344,7 +345,11 @@ describe('W1 写入侧派生验证', () => {
       )
       const before = snapshot(db())
       assert.ok(before.inferredEdges.length > 0, '前置：库里应当已有推断边，否则②的「不变」是空的')
-      assert.ok(before.extractedEntries.length > 0, '前置：库里应当已有 origin=extracted 的入口行')
+      assert.ok(before.sentinelEntries.length > 0, '前置：库里应当已有 origin=extracted 的入口行')
+      assert.ok(
+        before.sentinelEntries.some((e) => JSON.parse(e).origin === 'declared'),
+        '前置：夹具里要有 origin=declared 的入口行，否则这一层没被测到',
+      )
 
       await r.execute({ query: q })
       const hitsAfterSecond = Number(
@@ -364,7 +369,7 @@ describe('W1 写入侧派生验证', () => {
       assert.deepEqual(after.atomTopics, before.atomTopics, 'atom_topic 行不得变化')
       assert.deepEqual(after.inferredEdges, before.inferredEdges, '推断边不得变化')
       assert.deepEqual(after.pairs, before.pairs, 'atom_pair 行不得变化')
-      assert.deepEqual(after.extractedEntries, before.extractedEntries, 'extracted 入口行不得变化')
+      assert.deepEqual(after.sentinelEntries, before.sentinelEntries, 'declared 与 extracted 入口行不得变化')
 
       // ④ 只读连接：同一条查询，文本逐字符相同、锚点 id 逐个相同。
       const recallOpts = { topN: config.topN }
@@ -388,8 +393,10 @@ describe('W1 写入侧派生验证', () => {
 
 /**
  * 取六份行集合的快照，每行序列化成一个字符串（行内键顺序由 SQL 固定，所以可以直接逐行比较）。
- * 六份分别是：atom 的七列真相、topic 行、atom_topic 行、推断边、atom_pair、extracted 入口行。
- * 故意**不**取 atom.recall_hits / last_recalled_at —— 召回本来就要改这两列。
+ * 六份分别是：atom 的真相列（七列 + 三个时间戳）、topic 行、atom_topic 行、推断边、atom_pair、
+ * 非 learned 的入口行（declared 与 extracted）。
+ * 故意**不**取 atom.recall_hits / last_recalled_at —— 召回本来就要改这两列；
+ * 也**不**取 origin='learned' 的入口行 —— 那是第 3 层，召回本来就该升它的 hits 与 last_seen。
  */
 function snapshot(db) {
   const rows = (sql) =>
@@ -398,7 +405,9 @@ function snapshot(db) {
       .all()
       .map((row) => JSON.stringify(row))
   return {
-    atoms: rows('SELECT id, text, summary, kind, scope, origin, flags, superseded_by FROM atom ORDER BY id'),
+    atoms: rows(
+      'SELECT id, text, summary, kind, scope, origin, flags, superseded_by, created_at, updated_at, superseded_at FROM atom ORDER BY id',
+    ),
     topics: rows(
       'SELECT id, domain_id, label, n_atoms, mean_fit, created_at, rebuilt_at FROM topic ORDER BY id',
     ),
@@ -407,8 +416,8 @@ function snapshot(db) {
       "SELECT id, src_type, src_id, dst_type, dst_id, kind, confidence, origin, created_at FROM edge WHERE origin = 'inferred' ORDER BY id",
     ),
     pairs: rows('SELECT a_id, b_id, cos, lexical FROM atom_pair ORDER BY a_id, b_id'),
-    extractedEntries: rows(
-      "SELECT id, atom_id, term, bigram, weight, origin, hits, last_seen, created_at FROM entry WHERE origin = 'extracted' ORDER BY id",
+    sentinelEntries: rows(
+      "SELECT id, atom_id, term, bigram, weight, origin, hits, last_seen, created_at FROM entry WHERE origin <> 'learned' ORDER BY id",
     ),
   }
 }

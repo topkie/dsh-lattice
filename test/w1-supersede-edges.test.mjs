@@ -163,6 +163,47 @@ describe('写入侧取代关系与声明边的边界', () => {
     atomRow(bid)
   })
 
+  // #1 的另一半：目标在库里，但改写它这一步本身失败。
+  it('#1 目标存在但改写失败时，写入已经落库，错从取代那一步抛出来', async () => {
+    const a = await write({ text: '旧写法：代理配置写在环境变量里，重启就丢。' })
+    const aid = atomIdOf(a)
+    const text = '新写法：代理配置写进配置文件，环境变量那条作废。'
+    const rt = getRuntime({})
+    const real = rt.db
+    // 只拦取代那一条 UPDATE：其余查询照常走真库，所以「写入有没有落库」仍然可读。
+    const broken = new Proxy(real, {
+      get(t, p) {
+        if (p === 'prepare') {
+          return (sql) => {
+            if (String(sql).includes('UPDATE atom SET superseded_by')) {
+              throw new Error('注入：改写旧条失败')
+            }
+            return t.prepare(sql)
+          }
+        }
+        const v = t[p]
+        return typeof v === 'function' ? v.bind(t) : v
+      },
+    })
+    let threw = null
+    rt.db = broken
+    try {
+      await write({ text, supersedes: aid })
+    } catch (e) {
+      threw = e
+    } finally {
+      rt.db = real
+    }
+    assert.equal(
+      threw === null ? null : threw.message,
+      '注入：改写旧条失败',
+      '没抛这个错就说明注入没命中，这条用例测的是别的路径',
+    )
+    // 写入在取代之前就已提交：这里抛的是取代那一步的错，用户写下的东西不该跟着消失。
+    assert.ok(db().prepare('SELECT id FROM atom WHERE text = ?').get(text), '写入必须已经落库')
+    assert.equal(atomRow(aid).superseded_by, null, '取代没建立，旧条的标记不该被改动')
+  })
+
   // #2 目标不存在时只追加回执、不抛不回滚
   it('#2 目标不存在时不抛异常，回执给出原因，本次写入照常落库', async () => {
     let threw = null

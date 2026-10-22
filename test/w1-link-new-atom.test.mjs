@@ -14,7 +14,8 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { openVault } from '../dist/db/open.js'
 import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
-import { recall } from '../dist/pipeline/search.js'
+import { recall, DUP_COS, DUP_LEX } from '../dist/pipeline/search.js'
+import { inferEdges } from '../dist/graph/infer.js'
 import { VEC_DIM } from '../dist/util/vec.js'
 
 let dbFile = ''
@@ -108,6 +109,50 @@ describe('写入路径：新记忆立刻获得推断边', () => {
     assert.ok(
       !without.hits.map((h) => h.id).includes(rb.atomId),
       '删掉边之后同一次召回不该再出现 —— 否则上一条不是边带来的',
+    )
+  })
+
+  it('补边失败不拖累写入：原子照样落库、边留 0 条，缺口交给重建命令', async () => {
+    const A = '依赖解析要先开 hoisted 再装'
+    const VA = unit([1, 0])
+    const plain = createWriteCtx(db, {}, { encode: async () => VA })
+    await writeAtom(plain, { text: A })
+
+    // linkNewAtom 一进函数就要读自己的向量（src/graph/infer.ts:456），在那一步注入失败，
+    // 等于让整个局部补边抛错 —— 这正是 afterWrite 里那个空 catch 要接住的场面。
+    const broken = new Proxy(db, {
+      get(t, p) {
+        if (p === 'prepare') {
+          return (sql) => {
+            if (String(sql).includes('SELECT embedding FROM atom WHERE id = ?')) {
+              throw new Error('注入：读自己的向量失败')
+            }
+            return t.prepare(sql)
+          }
+        }
+        const v = t[p]
+        return typeof v === 'function' ? v.bind(t) : v
+      },
+    })
+    // 余弦 0.75：过建边线、又过不了去重线，否则这条写入会被当成重复直接拒掉。
+    const VB = unit([0.75, 0.661])
+    const ctx = createWriteCtx(broken, {}, { encode: async () => VB })
+    const second = await writeAtom(ctx, { text: '另一段与此无关的文本，用来当第二条写入' })
+
+    // 1 写入本身要成功：补边失败只该丢边，不该丢掉用户刚写下的东西。
+    assert.ok(db.prepare('SELECT id FROM atom WHERE id = ?').get(second.atomId), '补边失败不得让写入回滚')
+    // 2 半截边也不该留下：建边在自己的事务里，失败整批回滚。
+    assert.equal(
+      Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin = 'inferred'").get().n),
+      0,
+      '补边整批失败，不该留下部分边',
+    )
+    // 3 缺口可观测、可补：全量重建能把两条边补回来。这条也说明「静默失败」不是死路。
+    const outcome = inferEdges(db, { dupCos: DUP_COS, dupLex: DUP_LEX })
+    assert.equal(outcome.status, 'built')
+    assert.ok(
+      Number(db.prepare("SELECT COUNT(*) AS n FROM edge WHERE origin = 'inferred'").get().n) > 0,
+      '重建命令应把缺的边补回来',
     )
   })
 })

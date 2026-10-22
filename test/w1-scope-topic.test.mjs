@@ -17,7 +17,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -269,8 +269,14 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     const after = assignmentHash(db, a.atomId)
     // 指纹只覆盖写入前已存在的行：新写的那一条本来就该多一行，把它算进去等于让这条约束必然不成立
     assert.equal(after, before)
-    // 指纹确实能反映归属变化：把新写的那条也算进来，指纹必须变（否则上面的「没变」不能说明任何事）
-    assert.notEqual(assignmentHash(db, b.atomId), before)
+    // 指纹的灵敏度：单独把既有那条的归属改掉再算一次，指纹必须变。
+    // 直接拿「含新行」的指纹去比证明不了这件事 —— 那个差异只说明行数变了。
+    db.exec('PRAGMA foreign_keys = OFF')
+    db.prepare('UPDATE atom SET topic_id = 999 WHERE id = ?').run(a.atomId)
+    const tampered = assignmentHash(db, a.atomId)
+    db.prepare('UPDATE atom SET topic_id = ? WHERE id = ?').run(a.topicId, a.atomId)
+    db.exec('PRAGMA foreign_keys = ON')
+    assert.notEqual(tampered, before, '指纹应对归属变化敏感，否则上面的「没变」说明不了任何事')
     // 前提检查：这次写入确实并进了 A 的主题。若它是新建主题，上面的「没变」也可能是「根本没比对」
     assert.equal(b.topicId, a.topicId)
   })
@@ -370,6 +376,10 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
   it('#42 删除不删空主题，空主题也不再被落位选中', async () => {
     // #42 空主题保留、且不参与落位候选
     const lone = '机房的空调在夜间会切到除湿档，值班的人需要留意水位。'
+    // 不能给它和 lone 同一个向量：lone 已被删成墓碑，写入前的墓碑判重按余弦算，
+    // 同向量会被当成「删过的内容」直接拒写（ForgottenError）。所以这里只造无关向量，
+    // 「不落空主题」的原因另用源码断言钉住，见用例末尾。
+    const unrelated = '周末的市集改到了河对岸的旧仓库，摊位比上个月多了一倍。'
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[lone.slice(0, 8), oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: lone })
     const emptyTopicId = a.topicId
@@ -380,12 +390,18 @@ describe('W1-B 写入路径：scope / 主题 / 聚合列', () => {
     assert.equal(still.n_atoms, 0)
 
     // 再写一条与它无关的文本：落位候选只取 n_atoms > 0 的主题，所以它必须另建主题
-    const unrelated = '周末的市集改到了河对岸的旧仓库，摊位比上个月多了一倍。'
     const b = await writeAtom(ctx, { text: unrelated })
     assert.notEqual(b.topicId, emptyTopicId)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM topic').get().n, 2)
     // 空主题没被新写入顺手填满
     assert.equal(db.prepare('SELECT n_atoms FROM topic WHERE id = ?').get(emptyTopicId).n_atoms, 0)
+    // 上面「没落位」也可能只是因为 unrelated 与空主题余弦不够 —— 那说明不了 n_atoms 规则。
+    // 真正的原因是候选查询按 n_atoms > 0 过滤，空主题根本进不了候选集。
+    const writeSrc = readFileSync(new URL('../src/pipeline/write.ts', import.meta.url), 'utf8')
+    assert.ok(
+      writeSrc.includes('FROM topic WHERE n_atoms > 0'),
+      '落位候选查询必须排除空主题（src/pipeline/write.ts）',
+    )
   })
 
   it('#46 atom_search.body 是「摘要 摘要 正文 入口词」，1600 字符只截正文段', async () => {
