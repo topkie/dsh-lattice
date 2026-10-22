@@ -32,12 +32,14 @@ describe('建库与迁移', () => {
     assert.ok(objs.filter((o) => o.type === 'table').length >= 12, '表数不足')
     assert.ok(objs.filter((o) => o.type === 'index').length >= 8, '索引数不足')
     assert.ok(objs.filter((o) => o.type === 'trigger').length >= 6, '触发器数不足')
-    for (const name of ['build_info', 'recluster_state', 'calib_state', 'split_queue']) {
+    for (const name of ['build_info', 'recluster_state', 'split_queue']) {
       assert.ok(
         objs.some((o) => o.type === 'table' && o.name === name),
         '缺少 v5 的表：' + name,
       )
     }
+    // calib_state 在 0.9 的结构变更里删掉了：它 0.5.0 起没有读写方。
+    assert.ok(!objs.some((o) => o.type === 'table' && o.name === 'calib_state'), 'calib_state 应已删除')
     // 版本号是声明；上面缺对象就抛的那一步（missingObjects）是证据。
     assert.equal(schemaVersion(db), SCHEMA_VERSION)
     db.close()

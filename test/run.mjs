@@ -34,6 +34,7 @@ if (NOT_IMPORTED.length > 0 || GONE.length > 0) {
 
 import './plugin.test.mjs'
 import './db.test.mjs'
+import './schema-w1.test.mjs'
 import './util.test.mjs'
 import './encoder.test.mjs'
 import './write.test.mjs'

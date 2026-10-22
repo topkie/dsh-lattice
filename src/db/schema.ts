@@ -59,6 +59,11 @@ export function pragmas(res: ResourceParams): readonly string[] {
  */
 const SNAPSHOT_V5: readonly string[] = [
   // ── 域与主题：派生，可由 atom 重算 ─────────────────────────
+  //
+  // `domain` 表与 `topic.domain_id`（含 idx_topic_domain）：**未实现，当前恒为空**。
+  // 用途：域是主题的上层聚类，只做导航与配额，不参与打分。
+  // 现状：全库没有写入方，`domain` 恒 0 行，`topic.domain_id` 恒 NULL。
+  // 会在「主题数量多到一个视图装不下、需要再分一层」时实现。
   `CREATE TABLE domain (
     id          INTEGER PRIMARY KEY,
     label       TEXT    NOT NULL,
@@ -66,6 +71,12 @@ const SNAPSHOT_V5: readonly string[] = [
     topic_count INTEGER NOT NULL DEFAULT 0,
     built_at    INTEGER NOT NULL
   )`,
+  // `topic.mean_fit` 与 `atom.fit`：**未实现读取方**。
+  // 用途：成员到主题中心的平均余弦，用来发现「主题内部松散」——成员达到一定数量、
+  // 均值过低时该主题进待分裂队列。
+  // 现状：`mean_fit` 在重聚类时整表重算，但没有任何读取方；`atom.fit` 只在写入时算一次，
+  // 重聚类改了归属却不回填，所以在重建过的库上它是旧值。
+  // 会在「体检增加主题松散这一项」时实现，届时 `fit` 的回填要一起补。
   `CREATE TABLE topic (
     id           INTEGER PRIMARY KEY,
     domain_id    INTEGER REFERENCES domain(id) ON DELETE SET NULL,
@@ -97,8 +108,17 @@ const SNAPSHOT_V5: readonly string[] = [
     recall_hits      INTEGER NOT NULL DEFAULT 0,
     last_recalled_at INTEGER,
     created_at       INTEGER NOT NULL,
-    updated_at       INTEGER NOT NULL
+    updated_at       INTEGER NOT NULL,
+    superseded_at    INTEGER
   )`,
+  // `superseded_at` 与 `updated_at` 分开的理由：取代改的是关系，不改内容。
+  // 两者共用一列时，词表缓存的失效戳（读 `MAX(updated_at)`）会被取代推动，
+  // 一次「把旧条标成被取代」就要重建整份词表统计，而词表一个词都没变。
+  //
+  // `atom.polarity`：**未实现，当前恒为 NULL**。
+  // 用途：设计期打算给判定型的陈述打 -1 / 0 / 1，供注入排序使用。
+  // 现状：工具层没有这个参数，写入恒 NULL；它的用途本身也还没定下来，先留着列。
+  // 会在「注入排序需要区分陈述与断言」时实现或删列。
   `CREATE INDEX idx_atom_topic   ON atom(topic_id)`,
   `CREATE INDEX idx_atom_created ON atom(created_at DESC)`,
   `CREATE INDEX idx_atom_scope   ON atom(scope)`,
@@ -112,6 +132,11 @@ const SNAPSHOT_V5: readonly string[] = [
     PRIMARY KEY (atom_id, topic_id)
   ) WITHOUT ROWID`,
   `CREATE INDEX idx_atom_topic_topic ON atom_topic(topic_id)`,
+  // `atom_topic` 的次属（`origin` 为 inferred / declared 的行、权重区间 0.4~0.6）：**未实现**。
+  // 用途：主属唯一 + 次属多元 —— 一条记忆只存一份，但可以有多条到达路径；次属供多路径召回、
+  // 孤立判定与融合打分使用。
+  // 现状：只有 origin='primary' 的行，权重恒 1.0；召回不读次属。
+  // 会在「召回要按主题路径扩展、而不只看向量近邻」时实现。
 
   // ── 边：declared 与 inferred 共用一张表，origin 区分 ──────
   `CREATE TABLE edge (
@@ -196,12 +221,15 @@ const SNAPSHOT_V5: readonly string[] = [
   `CREATE INDEX idx_forgotten_deleted ON forgotten(deleted_at DESC)`,
   `CREATE INDEX idx_forgotten_scope ON forgotten(scope)`,
 
-  // ── 状态：四件事各一张单行/队列表（v5 新增，取代原来的 meta 键值表）──
+  // ── 状态：三件事各一张单行/队列表（v5 新增，取代原来的 meta 键值表）──
   //
   // **为什么不是一张 key-value 表**：原来的 meta 把所有状态压成字符串键值对，
   // 于是「同一件事的几个字段」在库里没有共同边界 —— 整理的三态是三个键，写一个
   // 键失败时另外两个已经是新值；拆分清单是一整份 JSON，每次读写都要整份读改写。
-  // 分成四张表之后，同一行的一次 UPDATE 要么全成功要么全失败，而清单类状态按行增删。
+  // 分成三张表之后，同一行的一次 UPDATE 要么全成功要么全失败，而清单类状态按行增删。
+  //
+  // 原来还有第四张 `calib_state`（标定检查的两个时刻），0.5.0 起标定功能退役、它没有任何
+  // 读写方，本次结构变更里删掉 —— 留着只会让后来人以为库里还有一处标定状态要维护。
   //
   // **为什么每张状态表都有 id = 1 的 CHECK**：它们在语义上都是「一个实例」，
   // 有第二行就说明有代码写错了。约束写进表里，比在每个调用点记得加 WHERE 可靠。
@@ -217,11 +245,6 @@ const SNAPSHOT_V5: readonly string[] = [
     planned_at   INTEGER,
     started_at   INTEGER,
     completed_at INTEGER
-  )`,
-  `CREATE TABLE calib_state (
-    id            INTEGER PRIMARY KEY CHECK (id = 1),
-    last_check_at INTEGER,
-    last_error    TEXT
   )`,
   // 拆分队列：一行一条候选。
   //

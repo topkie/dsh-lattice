@@ -351,6 +351,9 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         }
       }
 
+      // 只改 superseded_by 与 superseded_at：取代改的是关系，不改内容，所以不碰
+      // updated_at —— 词表缓存的失效戳读的就是 MAX(updated_at)，被取代不该让它失效。
+      //
       // 取代关系只落在这里：写入侧的事务内固定 O(1) 行数，多一条 UPDATE 就多一份
       // 写锁持有时间，而这不是热路径。
       // 切分后「本条」是多条 atom，取代关系只能落在一条上 —— 落在第一条，并把落在
@@ -358,7 +361,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       if (sup !== undefined) {
         const target = out.results[0]!
         const u = rt.db
-          .prepare('UPDATE atom SET superseded_by = ?, updated_at = ? WHERE id = ? AND id <> ?')
+          .prepare('UPDATE atom SET superseded_by = ?, superseded_at = ? WHERE id = ? AND id <> ?')
           .run(target.atomId, Date.now(), sup, target.atomId)
         lines.push(
           Number(u.changes) === 0
@@ -371,8 +374,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
                 '取代（旧条不会删除）。',
         )
       }
-      // 取消取代：与 supersedes 对称，只动 superseded_by 这一列 ——
-      // 不删行、不改内容、不碰 edge 表（库里的关系行原样保留）。
+      // 取消取代：与 supersedes 对称，只动 superseded_by 与 superseded_at 两列 ——
+      // 不删行、不改内容、不碰 updated_at、不碰 edge 表（库里的关系行原样保留）。
       // 三种结果分开说：「没有改动」有两个不同原因（id 不在库里 / 本来就没被取代），
       // 混成一句，调用方就不知道下一步该做什么。
       if (unsup !== undefined) {
@@ -384,9 +387,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           lines.push('记忆 #' + unsup + ' 本来就没有被取代，未改动。')
         } else {
           const by = Number(row.superseded_by)
-          rt.db
-            .prepare('UPDATE atom SET superseded_by = NULL, updated_at = ? WHERE id = ?')
-            .run(Date.now(), unsup)
+          rt.db.prepare('UPDATE atom SET superseded_by = NULL, superseded_at = NULL WHERE id = ?').run(unsup)
           lines.push(
             '已取消 #' +
               unsup +
