@@ -125,18 +125,18 @@ export interface ViewResult {
   used: { anchors: number; budget: number }
 }
 
-export const DEFAULT_BUDGET = 4000 satisfies ThresholdValue<
+export const DEFAULT_BUDGET = 5000 satisfies ThresholdValue<
   'chosen',
   {
     area: '注入'
-    why: '注入字符预算是容量选择：6000 时一次注入 13–16 条，4000 时 8–11 条。实测 5000 与 6000 命中率持平，4000 让技术笔记的文档级命中从 90% 掉到 80%、Vue 从 95% 掉到 90%；0.5.0 定 4000 是产品选择（一次注入少给约 2000 字符），不是测量结论'
+    why: '注入字符预算是容量选择：6000 时一次注入 13–16 条，5000 时 10–14 条，4000 时 8–11 条。实测 5000 与 6000 在技术笔记与新闻上命中率完全相同（90% / 100%），Vue 从 95% 掉到 90%；再降到 4000 技术笔记会掉到 80%，所以 0.5.0 定 5000'
     note: '三个语料各 20 条人工提问，预算 6000 / 5000 / 4000 的命中率：技术笔记 90/90/80%，新闻 100/100/100%，Vue 95/90/90%；注入字符中位 5967–5988 / 4968–4988 / 3968–3988'
     failsWhen: ['模型上下文窗口', '一次注入里锚段的平均长度']
     affects: '注入字符预算的默认值（工具调用可覆盖）'
     diverges: '这个数只有一处定义：zod 的 `.default(DEFAULT_BUDGET)` 与 `index.ts` 的 `?? DEFAULT_BUDGET` 都引用它，不再各写一遍'
     doc: 't7'
     docKey: 'viewBudget'
-    docDefault: 4000
+    docDefault: 5000
     docRange: [1000, 20000]
     zod: { file: 'src/index.ts'; name: 'viewBudget' }
   }

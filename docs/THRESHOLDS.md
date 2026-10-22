@@ -99,7 +99,7 @@ REFERENCE_QUANTILE 是 0.5.0 改机制后新加的：召回判「这次有没有
 
 - tauJoin ｜ DEFAULT_THRESHOLDS.tauJoin ｜ 文档默认 0.75 ｜ 代码 0.78 ｜ 分叉
 - tauLex ｜ DEFAULT_THRESHOLDS.tauLex ｜ 文档默认 0.12 ｜ 代码 0.05 ｜ 分叉
-- viewBudget ｜ DEFAULT_BUDGET ｜ 文档默认 4000 ｜ 代码 4000 ｜ 一致
+- viewBudget ｜ DEFAULT_BUDGET ｜ 文档默认 5000 ｜ 代码 5000 ｜ 一致
 
 分叉不是错误，但必须在登记项里写原因（divergence 只写原因，文档值从 docDefault 读，不抄第二份）。
 
