@@ -74,14 +74,22 @@ describe('写入路径：新记忆立刻获得推断边', () => {
     const rb = await writeAtom(ctx, { text: B })
 
     // 前置：B 不该因为词面或主题与 A 相邻（否则下面的对照不成立）。
-    const rows = db.prepare("SELECT src_id, dst_id FROM edge WHERE origin = 'inferred'").all()
-    assert.ok(
-      rows.some((r) => Number(r.src_id) === rb.atomId && Number(r.dst_id) === ra.atomId),
-      '新记忆 → 近邻 的边应已写入',
-    )
-    assert.ok(
-      rows.some((r) => Number(r.src_id) === ra.atomId && Number(r.dst_id) === rb.atomId),
-      '近邻 → 新记忆 的边应已写入（图路双向走）',
+    // 恰一对双向边，不多不少。用 some() 只能证明「有」，证明不了「只有」——
+    // 多出来的边会把这个库的图路宽度改掉，而测试照样绿。
+    const rows = db
+      .prepare("SELECT src_id, dst_id FROM edge WHERE origin = 'inferred'")
+      .all()
+      .map((x) => [Number(x.src_id), Number(x.dst_id)])
+      .sort((x, y) => x[0] - y[0] || x[1] - y[1])
+    const lo = Math.min(ra.atomId, rb.atomId)
+    const hi = Math.max(ra.atomId, rb.atomId)
+    assert.deepEqual(
+      rows,
+      [
+        [lo, hi],
+        [hi, lo],
+      ],
+      '两个原子之间应恰好一对双向 near 边',
     )
 
     // kVec: 1 把向量路压到只回种子，B 只能经边到。

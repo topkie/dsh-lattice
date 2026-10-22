@@ -41,6 +41,20 @@ if (NOT_IMPORTED.length > 0 || GONE.length > 0) {
 // 全局数据目录切走，让先注册的文件读到空库。
 //
 
+// 上面这条规则以前只写在注释里，靠人记得。现在自己核对：文件顶层的钩子在
+// 单进程里会对所有文件的用例生效，一处忘记收进 describe，就会让先注册的文件
+// 读到被切走的目录 —— 而这种错只在特定 import 顺序下才现形。
+const BAD_HOOK = /^(beforeEach|afterEach)\(/m
+const TOP_HOOKED = ON_DISK.filter((n) => BAD_HOOK.test(readFileSync(new URL(n, import.meta.url), 'utf8')))
+if (TOP_HOOKED.length > 0) {
+  console.error(
+    '以下文件的 beforeEach / afterEach 写在文件顶层：[' +
+      TOP_HOOKED.join(', ') +
+      ']。单进程里它们会对所有文件的用例生效，请收进 describe 再跑。',
+  )
+  process.exit(1)
+}
+
 import './plugin.test.mjs'
 import './db.test.mjs'
 import './schema-w1.test.mjs'
