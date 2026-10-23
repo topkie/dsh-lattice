@@ -52,19 +52,47 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 ## 安装
 
-三种装法，从最省事到最灵活。三种装完都要重启宿主；记忆存在本机数据目录里，换装法不会丢数据。
+四种装法，从最省事到最灵活。四种装完都要重启宿主；记忆存在本机数据目录里，换装法不会丢数据。
 
 当前 npm 上的 `dsh-lattice` 还只是一个占位包（`npm view dsh-lattice` 能查到 `0.0.0`，
-包的 description 写明请勿安装），GitHub 上的发布也还没开始 —— 前两种等正式版上线后可用，
-现在能走的是第三种。
+包的 description 写明请勿安装），GitHub 上的发布也还没开始。所以插件管理器与 npm 两条要等正式版；
+让助手装与源码装现在就能用，这两种走的都是源码。
 
-### 一、插件管理器（图形化，最省事）
+### 一、让助手装（最省事）
+
+把下面整段发给一个能执行命令的助手（DSH 自己、Claude Code、Codex 都行），让它把剩下的步骤做完。
+这条路排在第一位，是因为它不需要你先搞清楚 profile 目录在哪、也不用读懂 `dsh.profile.bundles`
+是什么 —— 卡住时助手会自己往下查。
+
+```
+我要在这台机器上装 dsh-lattice 这个 DSH 插件。请执行并逐步报结果：
+
+1. 找到 DSH 的 profile 目录：在 ~/.dsh/profiles/ 下找含 package.json 的那一层，名字通常是 desktop。
+   找不到就停下来问我要路径，不要自己编一个。
+2. 把插件装进去：没有源码目录就先
+   git clone https://github.com/topkie/dsh-lattice.git
+   进目录跑 pnpm install --no-frozen-lockfile 与 pnpm run build；
+   然后回到 profile 目录跑 pnpm add "file:<dsh-lattice 源码目录的绝对路径>"。
+3. 在 profile 目录的 package.json 里，把 "dsh-lattice" 加进 dsh.profile.bundles 数组
+   （没有这个数组就按同目录其它条目的写法新建）。
+4. 叫我重启宿主。重启后调用一次 lattice_ping，把返回里的 version、atoms、
+   caches.encoder.state 三项报给我。
+5. caches.encoder.state 不是 loaded，说明模型没下成：把 attempts 数组原文贴给我，
+   不要自己改编码器配置重试。
+
+前置条件：Node 22.13 以上、git、pnpm 9 以上，且 node 在 PATH 里。
+不要用管理员权限，不要动 profile 里其它插件的条目。
+```
+
+装成了的样子：设置的侧边栏出现「lattice 记忆库」这一页，`lattice_ping` 报的 `version` 与你要装的版本一致。
+
+### 二、插件管理器（图形化）
 
 在宿主的插件管理界面里搜索 `dsh-lattice`，点安装，重启宿主。依赖登记与插件清单由界面代做，
 不需要手改文件。装完在设置的「lattice 记忆库」页看得到入口就说明装对了；看不到就把
 `dsh-lattice` 加进 profile 目录 `package.json` 的 `dsh.profile.bundles` 数组再重启。
 
-### 二、npm
+### 三、npm
 
 在**宿主 profile 目录**（通常在用户目录下 `.dsh/profiles/<profile 名>/`）里装：
 
@@ -75,7 +103,7 @@ pnpm add dsh-lattice
 再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
 要固定版本就写 `pnpm add dsh-lattice@0.10.0`；之后升级用 `pnpm update dsh-lattice` 再重启。
 
-### 三、GitHub 源码
+### 四、GitHub 源码
 
 想改代码、或者要用还没发到 npm 的提交时走这条。需要 Node 22.13 以上、git 与 pnpm ≥ 9。
 `node` 要在 `PATH` 里 —— 有几个依赖的安装脚本会直接调用 `node` 命令，找不到就会装出
@@ -110,8 +138,8 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 包管理器默认不跑依赖的构建脚本：npm 12 实测拦下 `onnxruntime-node`、`sharp`、`protobufjs`
 三个包的安装脚本，效果是写得进、召回退回纯词面。判据是 `lattice_ping` 的
-`caches.encoder.state`，不是 `loaded` 就说明编码器没起来。走第三种时在本仓库里 `pnpm install`
-不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；前两种装的是发布出来的包，
+`caches.encoder.state`，不是 `loaded` 就说明编码器没起来。走第一种与第四种时，在源码目录里 `pnpm install`
+不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；插件管理器与 npm 装的是发布出来的包，
 碰不碰得到取决于宿主或 npm 的设置。
 
 ### 确认装好了
@@ -125,8 +153,9 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 ### 卸载
 
-按装法对应着来：插件管理器里卸载；命令行装的在 profile 目录 `pnpm remove dsh-lattice` 并把名字
-从 `dsh.profile.bundles` 里删掉；第三种还可以顺手删掉 clone 下来的目录。都要重启宿主。
+按装法对应着来：插件管理器里卸载；其余三种都在 profile 目录 `pnpm remove dsh-lattice` 并把名字
+从 `dsh.profile.bundles` 里删掉，其中从源码装的两种（第一种与第四种）还可以顺手删掉 clone 下来的目录。
+都要重启宿主。
 记忆数据在独立的数据目录里，这几步都不会删它。
 
 ## 配置
