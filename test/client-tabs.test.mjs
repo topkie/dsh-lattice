@@ -106,7 +106,7 @@ function fetchStub(url) {
       ok: true,
       version: '0.0.0-test',
       atoms: ROWS.length,
-      dataDir: 'C:\\Users\\test\\.dsh\\lattice',
+      dataDir: 'D:\\vault\\lattice',
       encoder: { enabled: true, model: 'Xenova/bge-small-zh-v1.5', mirror: '' },
       tauJoin: 0.78,
       tauLex: 0.05,
@@ -302,7 +302,7 @@ describe('界面选项卡：管理与配置分开', () => {
       )
       assert.equal(cards.length, 6, '配置页应当有六张读数卡片')
       assert.ok(configText.includes('数据目录'), '配置页里没有数据目录读数')
-      assert.ok(configText.includes('C:\\Users\\test'), '数据目录的值没有上屏')
+      assert.ok(configText.includes('D:\\vault\\lattice'), '数据目录的值没有上屏')
       assert.ok(configText.includes('Xenova/bge-small-zh-v1.5'), '编码器没有上屏')
       assert.ok(configText.includes('tauJoin'), '四个写入阈值没有上屏')
       assert.ok(configText.includes('这些读数是只读的'), '配置页没有写明读数只读、能改的项在下面的表单里')
