@@ -107,7 +107,13 @@ function fetchStub(url) {
       version: '0.0.0-test',
       atoms: ROWS.length,
       dataDir: 'D:\\vault\\lattice',
-      encoder: { enabled: true, model: 'Xenova/bge-small-zh-v1.5', mirror: '' },
+      encoder: {
+        enabled: true,
+        model: 'Xenova/bge-small-zh-v1.5',
+        mirror: '',
+        state: 'ready',
+        attempts: [{ host: 'https://huggingface.co/', ok: true, ms: 9857, error: null }],
+      },
       tauJoin: 0.78,
       tauLex: 0.05,
       tauLexOnly: 0.1,
@@ -300,7 +306,7 @@ describe('界面选项卡：管理与配置分开', () => {
           .split(' ')
           .includes('lattice-card'),
       )
-      assert.equal(cards.length, 6, '配置页应当有六张读数卡片')
+      assert.equal(cards.length, 7, '配置页应当有七张读数卡片（含编码器状态那张）')
       assert.ok(configText.includes('数据目录'), '配置页里没有数据目录读数')
       assert.ok(configText.includes('D:\\vault\\lattice'), '数据目录的值没有上屏')
       assert.ok(configText.includes('Xenova/bge-small-zh-v1.5'), '编码器没有上屏')
@@ -419,6 +425,60 @@ describe('界面选项卡：管理与配置分开', () => {
       URL.createObjectURL = originalCreate
       URL.revokeObjectURL = originalRevoke
       globalThis.document = originalDoc
+    }
+  })
+
+  /**
+   * 下载源报告：两个源都失败时，配置页要**逐源**说出「试了哪、错在哪」。
+   * 只留最后一句时，用户分不清是官方源被墙还是镜像也挂了 —— 而这决定了他该换
+   * 镜像还是查本机网络。
+   */
+  it('两个下载源都失败时，配置页逐源报出原因', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      const pathname = new URL(String(url), 'http://127.0.0.1').pathname
+      if (pathname !== '/api/lattice-ping-mini') return fetchStub(url)
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            ok: true,
+            version: '0.0.0-test',
+            atoms: ROWS.length,
+            dataDir: 'D:\\vault\\lattice',
+            encoder: {
+              enabled: true,
+              model: 'Xenova/bge-small-zh-v1.5',
+              mirror: '',
+              state: 'unavailable',
+              attempts: [
+                { host: 'https://huggingface.co/', ok: false, ms: 21045, error: 'fetch failed' },
+                { host: 'https://hf-mirror.com/', ok: false, ms: 1599, error: 'fetch failed' },
+              ],
+            },
+            tauJoin: 0.78,
+            tauLex: 0.05,
+            tauLexOnly: 0.1,
+            tauNew: 0.5,
+            viewBudget: 5000,
+          }),
+      }
+    }
+    try {
+      const view = await mount()
+      await settle()
+      view.click('配置')
+      await settle()
+      const box = descendantsOf(view.getRoot()).find((n) => n.props.className === 'lattice-fail')
+      assert.ok(box, '两个源都失败，界面却没有报出原因')
+      const text = textOf(box)
+      assert.match(text, /https:\/\/huggingface\.co\//, '没说是哪个源')
+      assert.match(text, /https:\/\/hf-mirror\.com\//, '只报了第一个源，第二个源的失败原因丢了')
+      assert.match(text, /fetch failed/, '只写了失败，没写原因')
+      assert.match(text, /词面/, '没说清后果：召回会退回词面')
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 })

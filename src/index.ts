@@ -39,6 +39,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
 import { cacheUsage } from './cache-usage.js'
+import { encoderAttempts, encoderState } from './encoder/index.js'
 import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
 import { exportJson, exportMarkdown } from './export/snapshot.js'
 import {
@@ -329,11 +330,13 @@ export const Config = z.object({
     .string()
     .default(DEFAULT_ENCODER_MODEL)
     .description('向量模型名。换模型要重建全库向量，改后需重启宿主'),
-  /** 模型下载源；留空用官方源，网络受限环境可指向镜像 */
+  /** 第二下载源；留空等于 hf-mirror.com，填成官方地址则只试官方 */
   encoderMirror: z
     .string()
     .default('')
-    .description('模型下载源；留空用官方源。国内网络打不开 huggingface.co 时填镜像，改后需重启宿主'),
+    .description(
+      '第二下载源。加载模型时先试 huggingface.co，失败再试这里；留空等于 hf-mirror.com，填成官方地址则只试官方。改后需重启宿主',
+    ),
   /** 模型缓存目录；留空用运行时默认位置 */
   encoderCacheDir: z.string().default('').description('模型缓存目录；留空用运行时默认位置。改后需重启宿主'),
   /** 并入阈值（余弦） */
@@ -753,6 +756,10 @@ function miniPing(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse)
         enabled: cfg.encoderEnabled !== false,
         model: cfg.encoderModel,
         mirror: cfg.encoderMirror,
+        // 最近一次加载按顺序试过哪些源、每个结果如何。仍是**读模块变量**，
+        // 不触发加载：刷新页面不该把 23 MB 的模型重新拉一遍。
+        state: encoderState(),
+        attempts: encoderAttempts(),
       },
       tauJoin: cfg.thresholds.tauJoin,
       tauLex: cfg.thresholds.tauLex,

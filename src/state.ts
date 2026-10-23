@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { ensureBuildInfo } from './db/build-info.js'
 import { openVault } from './db/open.js'
-import { encode, encoderErrorCode, ensureEncoder, type EncoderOptions } from './encoder/index.js'
+import { encode, encoderErrorCode, ensureEncoder, hostList, type EncoderOptions } from './encoder/index.js'
 import { closeLog, configureLog, log } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
 import type { RecallMeta } from './pipeline/search.js'
@@ -57,6 +57,20 @@ export function resolveDataDir(configured: string): string {
   return join(process.cwd(), '.lattice')
 }
 
+/**
+ * 从配置算出编码器选项。
+ *
+ * 三处调用点（建运行时、探测可用、编码文本）原先各自构造同一份对象 ——
+ * 于是「候选源怎么排」会有三个说法。收成一处，改顺序只改这里。
+ */
+function encoderOptionsOf(cfg: RuntimeConfig): EncoderOptions {
+  return {
+    model: cfg.encoderModel,
+    hosts: hostList(cfg.encoderMirror),
+    cacheDir: cfg.encoderCacheDir || undefined,
+  }
+}
+
 /** 取（必要时创建）运行时。同一进程内只初始化一次。 */
 export function getRuntime(cfg: RuntimeConfig): Runtime {
   if (current !== null) return current
@@ -69,11 +83,7 @@ export function getRuntime(cfg: RuntimeConfig): Runtime {
   const file = join(dir, 'lattice.db')
   const { db } = openVault(file, { resources: cfg.resources })
   stampVault(db)
-  const encoderOpts: EncoderOptions = {
-    model: cfg.encoderModel,
-    remoteHost: cfg.encoderMirror || undefined,
-    cacheDir: cfg.encoderCacheDir || undefined,
-  }
+  const encoderOpts: EncoderOptions = encoderOptionsOf(cfg)
   const write = createWriteCtx(db, cfg.thresholds, {
     encode: cfg.encoderEnabled === false ? undefined : (text: string) => encode(text, encoderOpts),
   })
@@ -99,11 +109,7 @@ let lastEncoderFailure: string | null = null
 /** 编码器是否可用（供工具决定是否走纯词面路径）。 */
 export async function runtimeEncoderReady(cfg: RuntimeConfig): Promise<boolean> {
   if (cfg.encoderEnabled === false) return false
-  const ok = await ensureEncoder({
-    model: cfg.encoderModel,
-    remoteHost: cfg.encoderMirror || undefined,
-    cacheDir: cfg.encoderCacheDir || undefined,
-  })
+  const ok = await ensureEncoder(encoderOptionsOf(cfg))
   noteEncoderState(ok)
   return ok
 }
@@ -112,11 +118,7 @@ export async function runtimeEncoderReady(cfg: RuntimeConfig): Promise<boolean> 
 export async function runtimeEncode(cfg: RuntimeConfig, text: string): Promise<Float32Array | null> {
   if (cfg.encoderEnabled === false) return null
   if (!(await runtimeEncoderReady(cfg))) return null
-  const vec = await encode(text, {
-    model: cfg.encoderModel,
-    remoteHost: cfg.encoderMirror || undefined,
-    cacheDir: cfg.encoderCacheDir || undefined,
-  })
+  const vec = await encode(text, encoderOptionsOf(cfg))
   // 加载成功、但这一条编码失败（输出形状异常等）同样是降级，照样留痕。
   noteEncoderState(vec !== null)
   return vec

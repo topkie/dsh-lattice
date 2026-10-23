@@ -731,7 +731,11 @@ describe('插件契约', () => {
       assert.equal(typeof body.atoms, 'number', '规模必须是数字')
       assert.equal(typeof body.dataDir, 'string')
       assert.ok(body.dataDir.length > 0, '数据目录不能是空串')
-      assert.deepEqual(Object.keys(body.encoder).sort(), ['enabled', 'mirror', 'model'])
+      assert.deepEqual(Object.keys(body.encoder).sort(), ['attempts', 'enabled', 'mirror', 'model', 'state'])
+      // 读数是「现在按什么在跑」，不是「现在去加载一次」：
+      // state 与 attempts 都取自模块变量，这条路由不能把模型拉起来。
+      assert.ok(typeof body.encoder.state === 'string', '状态必须是字符串')
+      assert.ok(Array.isArray(body.encoder.attempts), '尝试记录必须是数组')
       assert.equal(typeof body.encoder.enabled, 'boolean')
       assert.equal(typeof body.encoder.model, 'string')
       for (const key of ['tauJoin', 'tauLex', 'tauLexOnly', 'tauNew', 'viewBudget']) {

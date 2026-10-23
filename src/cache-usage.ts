@@ -17,7 +17,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { oldTopicCacheUsage } from './cluster/rebuild.js'
-import { encoderCacheUsage, type EncoderState } from './encoder/index.js'
+import { encoderCacheUsage, type EncoderAttempt, type EncoderState } from './encoder/index.js'
 import { readVocabCacheUsage } from './pipeline/entries.js'
 import { vecCacheUsage } from './pipeline/search.js'
 import { topicLexCacheUsage } from './pipeline/write.js'
@@ -35,7 +35,13 @@ export interface CacheUsage {
   /** 重聚类前的归属快照（cluster/rebuild.ts）：模块级，不按连接分。 */
   oldTopic: { unit: 'atom'; entries: number }
   /** 编码器本体（encoder/index.ts）：没有条目数，只报加载状态。 */
-  encoder: { loaded: boolean; state: EncoderState; model: string | null }
+  encoder: {
+    loaded: boolean
+    state: EncoderState
+    model: string | null
+    /** 最近一次加载试过哪些下载源、每个的耗时与失败原因。 */
+    attempts: EncoderAttempt[]
+  }
 }
 
 /**

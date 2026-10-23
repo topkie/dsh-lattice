@@ -19,10 +19,23 @@ export interface EncoderOptions {
   model: string
   /** 模型缓存目录；留空则用运行时默认 */
   cacheDir?: string
-  /** 模型下载源；留空用官方源，网络受限环境可指向镜像 */
-  remoteHost?: string
+  /**
+   * 下载源候选，**按顺序尝试**，前一个失败才试下一个。留空等于只用官方源。
+   *
+   * 为什么要候选而不是一个源：官方源在部分网络里不可达（实测被 DNS 污染到
+   * 一个无关地址段），镜像也会失效。只配一个源的后果是「网络稍差就没有向量」，
+   * 而且失败原因只留最后一个，用户看不出该换哪个。
+   */
+  hosts?: readonly string[]
   /** 量化方式，默认 q8 */
   dtype?: string
+  /**
+   * 加载器。默认走 `@huggingface/transformers` 的 `pipeline()`。
+   *
+   * 留出这个参数是为了让用例能构造「第一个源失败、第二个源成功」的顺序：
+   * 真网络里造不出确定的失败与成功。生产代码不传。
+   */
+  load?: EncoderLoader
 }
 
 /**
@@ -33,7 +46,7 @@ export interface EncoderOptions {
  * 类型引进编译期，就把它变成了**构建期**必需 —— 那份「可缺失」的性质会在构建阶段失效。
  * 这里只描述真正用到的那一小块，装不装得上都能编译。
  */
-interface FeatureExtractor {
+export interface FeatureExtractor {
   (
     texts: string[],
     options: { pooling: string; normalize: boolean },
@@ -52,6 +65,72 @@ interface FeatureExtractor {
 interface TransformersModule {
   env: { remoteHost?: string; cacheDir?: string }
   pipeline(task: string, model: string, options: { dtype: string }): Promise<FeatureExtractor | null>
+}
+
+/** 加载一个源上的模型。失败请抛错（不要返回 null），由调用方记进尝试记录。 */
+export type EncoderLoader = (host: string, opts: EncoderOptions) => Promise<FeatureExtractor | null>
+
+/**
+ * 官方源。`@huggingface/transformers` 自己的默认值就是它；这里显式写出来，
+ * 因为「第一个源」要出现在尝试记录里，不能靠「没设过」来表达。
+ */
+export const OFFICIAL_HOST = 'https://huggingface.co/'
+
+/** 官方源不可达时用的镜像。写成常量，改它只改一处。 */
+export const DEFAULT_MIRROR_HOST = 'https://hf-mirror.com/'
+
+/**
+ * 由配置里的一个镜像地址算出候选序列。
+ *
+ * 顺序固定为「官方在前、镜像在后」：官方源可用时不该先去镜像绕一圈，
+ * 而镜像失效时也不该把用户卡在「必须先改配置」上。镜像填成官方地址时只留一个，
+ * 免得同一个源试两次。
+ */
+export function hostList(mirror?: string): readonly string[] {
+  const custom = typeof mirror === 'string' ? mirror.trim() : ''
+  const second = custom === '' ? DEFAULT_MIRROR_HOST : custom
+  return second === OFFICIAL_HOST ? [OFFICIAL_HOST] : [OFFICIAL_HOST, second]
+}
+
+/** 一次源尝试的结果。`ms` 是这一次花掉的时间，含建立连接与下载。 */
+export interface EncoderAttempt {
+  /** 试的是哪个源。 */
+  host: string
+  /** 这个源上是否加载成功。 */
+  ok: boolean
+  /** 这一次花掉的毫秒数。 */
+  ms: number
+  /** 失败时的消息原文；成功时为 null。**含主机名与缓存路径，不要写进日志。** */
+  error: string | null
+}
+
+/**
+ * 最近一次加载尝试的逐源记录，按尝试顺序。加载成功后保留。
+ *
+ * 为什么不只留最后一句错误：用户要知道的是「哪几个源试过、分别怎么失败」。
+ * 只留最后一次会把「第一个源为什么不通」抹掉，而那往往正是要改的那个配置。
+ */
+let attempts: EncoderAttempt[] = []
+
+/** 最近一次加载尝试的逐源记录（副本，调用方改不动模块状态）。 */
+export function encoderAttempts(): EncoderAttempt[] {
+  return attempts.map((a) => ({ ...a }))
+}
+
+/**
+ * 默认加载器：动态 import 那个包，设好源与缓存目录，再建 pipeline。
+ *
+ * 每次尝试都要**重设 `remoteHost`** —— 那个包把它当全局环境变量读，
+ * 换源不重新赋值的话，第二个源仍会打向第一个地址。
+ */
+async function defaultLoader(host: string, opts: EncoderOptions): Promise<FeatureExtractor | null> {
+  // 动态 import：包可能根本没装（optionalDependency）。
+  // 这个转换是对**宿主之外**的边界：包没有随本仓库编译的声明，形状由上层用法约束，
+  // 也就是上面那个 TransformersModule —— 声称的字段一旦写错，调用点会立刻编译不过。
+  const mod = (await import('@huggingface/transformers')) as unknown as TransformersModule
+  mod.env.remoteHost = host
+  if (opts.cacheDir) mod.env.cacheDir = opts.cacheDir
+  return mod.pipeline('feature-extraction', opts.model, { dtype: opts.dtype ?? 'q8' })
 }
 
 let state: EncoderState = 'idle'
@@ -91,8 +170,13 @@ export function encoderErrorCode(): string | null {
  * 拿它算参数量会在升级时静默给出错的数。所以只报**是不是已经加载**（`loaded`）、
  * 当前状态与加载的模型名；这三样是从模块变量直读，不是快照。
  */
-export function encoderCacheUsage(): { loaded: boolean; state: EncoderState; model: string | null } {
-  return { loaded: extractor !== null, state, model: loadedModel }
+export function encoderCacheUsage(): {
+  loaded: boolean
+  state: EncoderState
+  model: string | null
+  attempts: EncoderAttempt[]
+} {
+  return { loaded: extractor !== null, state, model: loadedModel, attempts: encoderAttempts() }
 }
 
 /** 异常 → 短 token：优先 `code`，其次类名。 */
@@ -114,6 +198,7 @@ export function resetEncoder(): void {
   extractor = null
   loading = null
   loadedModel = null
+  attempts = []
 }
 
 /**
@@ -131,27 +216,35 @@ export async function ensureEncoder(opts: EncoderOptions): Promise<boolean> {
   if (loading !== null && loadedModel === opts.model) return loading
   if (state === 'ready' || state === 'unavailable') resetEncoder()
 
+  // 一个源都没配就只试官方源：`hosts` 为空与「只用官方」是同一种意思，
+  // 不能让空数组变成「什么都不试、直接降级」。
+  const hosts = opts.hosts !== undefined && opts.hosts.length > 0 ? opts.hosts : [OFFICIAL_HOST]
+  const load = opts.load ?? defaultLoader
+
   loading = (async () => {
-    state = 'loading'
     try {
-      // 动态 import：包可能根本没装（optionalDependency）。
-      // 这个转换是对**宿主之外**的边界：包没有随本仓库编译的声明，形状由上层用法约束，
-      // 也就是上面那个 TransformersModule —— 声称的字段一旦写错，调用点会立刻编译不过。
-      const mod = (await import('@huggingface/transformers')) as unknown as TransformersModule
-      if (opts.remoteHost) mod.env.remoteHost = opts.remoteHost
-      if (opts.cacheDir) mod.env.cacheDir = opts.cacheDir
-      extractor = await mod.pipeline('feature-extraction', opts.model, {
-        dtype: opts.dtype ?? 'q8',
-      })
-      state = 'ready'
-      loadedModel = opts.model
-      lastError = null
-      lastErrorCode = null
-      return true
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err)
-      lastErrorCode = codeOf(err)
-      extractor = null
+      state = 'loading'
+      attempts = []
+      // 按顺序试：前一个失败才试下一个。每次都重设 remoteHost（见 defaultLoader 的注释）。
+      for (const host of hosts) {
+        const started = Date.now()
+        try {
+          extractor = await load(host, opts)
+          state = 'ready'
+          loadedModel = opts.model
+          lastError = null
+          lastErrorCode = null
+          attempts.push({ host, ok: true, ms: Date.now() - started, error: null })
+          return true
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err)
+          lastErrorCode = codeOf(err)
+          extractor = null
+          attempts.push({ host, ok: false, ms: Date.now() - started, error: lastError })
+        }
+      }
+      // 所有源都失败：停在 unavailable，逐源原因留在 attempts 里。
+      // 不再抛错 —— 编码器可缺失是文件头第 2 条纪律，上层靠 null 走词面路径。
       loadedModel = opts.model
       state = 'unavailable'
       return false
