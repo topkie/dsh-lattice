@@ -474,6 +474,58 @@ describe('插件契约', () => {
     }
   })
 
+  /**
+   * 规模读数端点：界面「配置」页靠它拿「现在按什么在跑」。
+   *
+   * 判据是**字段形状**：少了 dataDir / encoder / 四个阈值 / 注入预算，配置页会静默
+   * 显示成一排「—」，看不出是数据没取到还是本来就没有。
+   *
+   * 不比 dataDir 的具体值：运行时是进程级单例，同一进程里前面的用例可能已经建过库，
+   * 这里断言的是「报了一个非空目录」，不是「报了本次传进去的那个」。
+   */
+  it('规模端点：回环 GET 返回规模、数据目录、编码器、四个写入阈值与注入预算', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lattice-mini-route-'))
+    try {
+      const routes = []
+      const webServer = {
+        register: (route) => {
+          routes.push(route)
+          return () => {}
+        },
+      }
+      apply(fakeCtx({ webServer }), { ...baseConfig, dataDir: dir })
+      const handler = routes.find((r) => r.path === '/api/lattice-ping-mini').handler
+      assert.equal(typeof handler, 'function')
+
+      const denied = fakeRes()
+      handler(fakeReq({ remote: '10.0.0.7', method: 'GET' }), denied)
+      assert.equal(denied.out.status, 403, '非回环必须拒')
+
+      const wrongMethod = fakeRes()
+      handler(fakeReq({ method: 'POST' }), wrongMethod)
+      assert.equal(wrongMethod.out.status, 405, '非 GET 必须拒')
+
+      const ok = fakeRes()
+      handler(fakeReq({ method: 'GET' }), ok)
+      assert.equal(ok.out.status, 200)
+      const body = ok.out.body
+      assert.equal(body.ok, true)
+      assert.equal(typeof body.atoms, 'number', '规模必须是数字')
+      assert.equal(typeof body.dataDir, 'string')
+      assert.ok(body.dataDir.length > 0, '数据目录不能是空串')
+      assert.deepEqual(Object.keys(body.encoder).sort(), ['enabled', 'mirror', 'model'])
+      assert.equal(typeof body.encoder.enabled, 'boolean')
+      assert.equal(typeof body.encoder.model, 'string')
+      for (const key of ['tauJoin', 'tauLex', 'tauLexOnly', 'tauNew', 'viewBudget']) {
+        assert.equal(typeof body[key], 'number', key + ' 必须是数字，否则配置页只会显示「—」')
+      }
+    } finally {
+      // 这条路径会真的建库并留住连接：不先关掉，Windows 上目录删不掉。
+      closeRuntime()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('体检端点：有库时返回结构指标（只读打开，不建库）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'lattice-audit-route-data-'))
     try {
