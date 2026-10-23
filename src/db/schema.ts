@@ -24,8 +24,8 @@ import type { ResourceParams } from '../util/memory.js'
 /**
  * schema 版本；用 PRAGMA user_version 持久化。
  *
- * **0.9 起版本链只有一步**：MIGRATIONS 的第 0 步直接建出最新结构（SNAPSHOT_V5），
- * 不再重放 v1→v4 的历史增量。理由：0.9 是第一次公开发布，不存在外部持有的旧库；
+ * **版本链只有一步**：MIGRATIONS 的第 0 步直接建出最新结构（SNAPSHOT_V5），
+ * 不再重放 v1→v4 的历史增量。理由：这是第一次公开发布，不存在外部持有的旧库；
  * 而保留历史链意味着 v1 的建表语句要永久冻结在代码里（改一处它就再也升不上来），
  * 新建库的路径也永远带着 35 条语句的历史包袱。
  *
@@ -332,7 +332,7 @@ export function normalizeOrigin(v: unknown, fallback: AtomOrigin = 'model'): Ato
 /**
  * 迁移步骤表：MIGRATIONS[i] 把库从版本 i 升到版本 i+1。
  *
- * 0.9 起只有第 0 步（快照）。第 1.0 版起，这一数组只允许**追加**，不允许修改或删除
+ * 只有第 0 步（快照）。1.0.0 起，这一数组只允许**追加**，不允许修改或删除
  * 已有的步骤 —— 外面的库要靠它一路升上来。
  */
 export const MIGRATIONS: readonly (readonly string[])[] = [SNAPSHOT_V5]

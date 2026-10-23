@@ -39,7 +39,7 @@ describe('db', () => {
           '缺少 v5 的表：' + name,
         )
       }
-      // calib_state 在 0.9 的结构变更里删掉了：它 0.5.0 起没有读写方。
+      // calib_state 在结构变更里删掉了：它 0.5.0 起没有读写方。
       assert.ok(!objs.some((o) => o.type === 'table' && o.name === 'calib_state'), 'calib_state 应已删除')
       // 版本号是声明；上面缺对象就抛的那一步（missingObjects）是证据。
       assert.equal(schemaVersion(db), SCHEMA_VERSION)
@@ -178,7 +178,7 @@ describe('db', () => {
     })
 
     it('迁移表只有一份快照，没有历史增量链', () => {
-      // 0.9 是首个对外版本：没有外部库需要升级，所以只保留「空库直建 v5」。
+      // 首个对外版本没有外部库需要升级，所以只保留「空库直建 v5」。
       assert.equal(MIGRATIONS.length, 1)
     })
   })

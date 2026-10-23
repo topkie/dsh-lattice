@@ -20,7 +20,7 @@
 
 ### 0.1 装
 
-0.9.0 还没发布到 npm，所以 `dsh plugin add dsh-lattice` 在这一版上跑不通。先按
+这个包还没发布到 npm，所以 `dsh plugin add dsh-lattice` 现在跑不通。先按
 [README 的安装一节](../README.md) 从源码构建，把构建产物复制进 profile 的 `node_modules`。
 发布到 npm 之后，最短路径才是：
 

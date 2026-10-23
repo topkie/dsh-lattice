@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 
-> **状态：0.9.0，第一个对外发布版。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现，
+> **状态：首个对外发布版，尚未发布。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现，
 > 门禁带 467 条测试；设置页能列出现有记忆、搜到指定一条、不借助模型把它删掉。
 > 整理（重聚类）要手动触发，没有定时自动执行。其余已知限制见 [CHANGELOG](CHANGELOG.md) 的「已知限制」一节。
 

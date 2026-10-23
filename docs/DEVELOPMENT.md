@@ -416,7 +416,7 @@ src/
 
 只读打开（`readOnly`）既不跑断言也不迁移 —— 它不写库，也不该因为结构问题被拦。
 
-**0.9 起只认两个版本**：0（空库，建出快照）与 `SCHEMA_VERSION`。其它版本一律报错，提示从备份恢复或导出后重新导入 —— 本插件不修改无法识别的库。
+**现在只认两个版本**：0（空库，建出快照）与 `SCHEMA_VERSION`。其它版本一律报错，提示从备份恢复或导出后重新导入 —— 本插件不修改无法识别的库。
 
 **加对象之后**：`test/db.test.mjs` 里「空库建出哪些表和索引」的断言要跟着补；`scripts/build-baseline.mjs` 的 `MIN_OBJECTS`（表、索引、触发器的下限）也要跟着调，否则基准库自检会误报。
 ## 测试
@@ -542,7 +542,7 @@ export const RRF_K = 60 satisfies ThresholdValue<'chosen', {
 - `node scripts/print-thresholds.mjs --doc-keys`：设计说明键名 → 常量 → 文档默认值。
   文档改了一条之后，用它定位受影响的条目。
 
-**待评审条目已转化**（0.9.0）：那两类条目（缺条件的可复算项、没有测试按常量名断言默认值的项，
+**待评审条目已转化**（首个对外发布版）：那两类条目（缺条件的可复算项、没有测试按常量名断言默认值的项，
 5 + 78 条）此前记在临时清单 `thresholds-review-baseline.json` 里，只允许变短。现在按管线分段
 归并进 [CHANGELOG.md](../CHANGELOG.md) 的「已知限制」，每类写明条数、影响与一条自查命令
 （`node scripts/print-thresholds.mjs --unguarded --area=<段>`），清单文件已删除。
