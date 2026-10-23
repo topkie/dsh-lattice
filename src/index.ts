@@ -1076,6 +1076,8 @@ async function configRoute(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  // 配置是活的：任何一层缓存住一次读数，界面就会显示一个已经不成立的数字。
+  res.setHeader('cache-control', 'no-store')
   if (req.method !== 'POST') {
     if (!guardReadOnly(req, res)) return
     try {
@@ -1153,7 +1155,17 @@ async function configRoute(
       patch as Record<string, unknown>,
       Number.isFinite(revision) ? revision : undefined,
     )
-    jsonOut(res, 200, { ok: true, applied })
+    // 把更新后的那一条一并回带。界面保存后要立刻显示新值：让它自己再打一遍 GET，
+    // 拿到的是缓存或尚未刷新的旧值，输入框就会「弹回」——用户看到的是保存失败的样子。
+    // 这里读不到也不报错：界面收到没有 entry 的响应时会退回「再取一次」。
+    let entry: unknown = null
+    try {
+      const own = pickOwnEntry(settings.describe())
+      if (own !== null) entry = own.entry
+    } catch {
+      entry = null
+    }
+    jsonOut(res, 200, { ok: true, applied, entry })
   } catch (e) {
     // 409 不是「服务器坏了」：宿主的乐观锁冲突（revision 变了）落在这里，
     // 界面据此提示「别处刚改过，刷新再试」。

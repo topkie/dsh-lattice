@@ -73,4 +73,31 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
     // 字段清单只能来自宿主：写死一份字段名，宿主改配置后界面就会列出不存在的项。
     assert.match(client, /fields\.map\(/, '配置表单没有遍历宿主给出的字段，清单被写死了')
   })
+
+  /**
+   * 保存之后界面显示旧值，用户看到的是「保存失败」—— 这条踩过一次（2026-10-24 实测）。
+   *
+   * 三条约束都不报编译错，只让输入框弹回：
+   * ① 宿主把更新后的那一条随响应带回来了，直接用它，不要再打一次 GET；
+   * ② 真要重读就带 no-store，缓存住一次就是显示一个已经不成立的数字；
+   * ③ 读数卡片取的是另一条路由（ping-mini），它只跟 nonce 变，保存后必须通知父级刷新。
+   */
+  it('配置表单：保存后用响应里的新值，并让父级重取读数', () => {
+    assert.match(
+      client,
+      /result\.entry !== null/,
+      '保存后没用响应里的 entry：界面只能再取一次，而再取一次可能拿到旧值',
+    )
+    assert.match(client, /setData\(\{ \.\.\.data, entry: result\.entry \}\)/, '响应里的 entry 没被当成新基线')
+    assert.match(
+      client,
+      /getJson\(CONFIG_URL, \{ cache: 'no-store' \}\)/,
+      '读配置没带 no-store：浏览器缓存住一次读数，保存后就会弹回旧值',
+    )
+    assert.match(
+      client,
+      /if \(typeof props\.onSaved === 'function'\) props\.onSaved\(\)/,
+      '保存后没通知父级：上面的「注入预算」读数会一直是保存前的数',
+    )
+  })
 })

@@ -208,15 +208,23 @@ describe('插件契约', () => {
       },
     }
     const calls = []
+    // 状态可变：update 之后 describe 必须给出新值，否则测不出「响应里带的是更新后那一条」。
+    let own = { revision: 7, value: { viewBudget: 5000, topN: 24 } }
     const settings = {
       // 形状照 dsh-settings 的 describe 返回：一个数组，每条带 ns / schema / revision。
       describe: () => [
         { ns: 'billion-context', revision: 3, schema: { properties: { budget: {} } } },
         { ns: 'another-plugin', revision: 1, schema: { properties: { quota: {} } } },
-        { ns: 'dsh-lattice', revision: 7, schema: { properties: { viewBudget: {}, topN: {} } } },
+        {
+          ns: 'dsh-lattice',
+          revision: own.revision,
+          value: own.value,
+          schema: { properties: { viewBudget: {}, topN: {} } },
+        },
       ],
       update: (ns, patch, revision) => {
         calls.push({ ns, patch, revision })
+        own = { revision: own.revision + 1, value: { ...own.value, ...patch } }
         return { ok: true }
       },
     }
@@ -258,6 +266,12 @@ describe('插件契约', () => {
     )
     assert.equal(write.out.status, 200)
     assert.deepEqual(calls, [{ ns: 'dsh-lattice', patch: { viewBudget: 6000 }, revision: 7 }])
+    // 响应里要带**更新后**的那一条：界面拿它当新基线，不必再打一次 GET。
+    // 少了它，界面只能重读，而重读可能拿到缓存或尚未刷新的旧值，输入框就弹回去。
+    assert.equal(write.out.body.entry.revision, 8, '响应里带的应当是更新后的 revision')
+    assert.equal(write.out.body.entry.value.viewBudget, 6000, '响应里带的应当是更新后的值，不是保存前的')
+    // 配置是活读数：任何一层缓存住一次，界面就会显示一个已经不成立的数字。
+    assert.equal(read.out.headers['cache-control'], 'no-store', '配置读数不能被缓存')
   })
 
   /**
@@ -287,7 +301,12 @@ describe('插件契约', () => {
    */
   function fakeRes() {
     const res = new EventEmitter()
-    res.out = { status: 0, body: null }
+    res.out = { status: 0, body: null, headers: {} }
+    // 有的路由要先设头（配置路由声明 no-store）。替身缺这个方法，测出来的就是替身的缺陷。
+    res.setHeader = (name, value) => {
+      res.out.headers[String(name).toLowerCase()] = String(value)
+      return res
+    }
     res.writeHead = (status) => {
       res.out.status = status
       return res
