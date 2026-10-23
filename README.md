@@ -7,7 +7,7 @@
 不自动替你记、不猜你要什么；只保证写下的东西找得回、改得动、删得掉。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org)
 
 > **状态：首个对外发布版，尚未发布。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现，
 > 门禁带 470 条测试；设置页能列出现有记忆、搜到指定一条、不借助模型把它删掉。
@@ -52,7 +52,7 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ## 安装
 
 npm 上的 `dsh-lattice` 目前只是一个占位包：`npm view dsh-lattice` 能查到 `0.0.0`，包的 description 写明请勿安装。
-所以可用版本只能从源码装。需要 Node 22 以上、git 与 pnpm ≥ 9
+所以可用版本只能从源码装。需要 Node 22.13 以上、git 与 pnpm ≥ 9
 （与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。`node` 要在 `PATH` 里 —— 有几个依赖的
 安装脚本会直接调用 `node` 命令，找不到就会装出缺原生二进制的半成品。
 

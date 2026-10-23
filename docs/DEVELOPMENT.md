@@ -4,7 +4,7 @@
 
 | 项 | 要求 |
 |---|---|
-| Node.js | ≥ 22（依赖内置 `node:sqlite`） |
+| Node.js | ≥ 22.13（依赖内置 `node:sqlite`；该模块自 v22.13.0 起才不再要求 `--experimental-sqlite` 标志） |
 | 包管理器 | pnpm ≥ 9（实测 9.15.9 可装可构建） |
 | 操作系统 | 不限定（Windows / macOS / Linux 均可） |
 

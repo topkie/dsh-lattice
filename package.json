@@ -4,7 +4,7 @@
   "type": "module",
   "description": "面向 DeepSeek Harness 的本地记忆插件：结构化、可检索、可重建的知识存储。",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "main": "dist/index.js",
   "exports": {
@@ -71,7 +71,7 @@
     },
     "compatibility": {
       "dsh": ">=0.1.5-alpha.2 <0.3.0-0",
-      "node": ">=22",
+      "node": ">=22.13",
       "profiles": [
         "web",
         "desktop"

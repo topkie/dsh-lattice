@@ -7,7 +7,7 @@
 
 - `scripts/bench.mjs`：一条命令跑完的装置，只接受本地路径，自身不联网；
 - `bench/fixtures/queries.example.json`：查询集格式的示例（**假查询**，真实查询集不入库）；
-- `bench/results/`：每次基线一份 JSON，文件名是被测提交号；
+- `bench/results/`：每次基线一份 JSON，文件名是被测提交号（**首版仓库里没有结果文件**，原因见第八节）；
 - `.probe/baseline/lattice.db`：本机基准库（**不进版本控制**，见 `.gitignore`）。
 
 ## 一、怎么跑
@@ -217,7 +217,8 @@ diff run-1.stable.json run-2.stable.json && echo 完全一致
 ## 八、当前基线（内部子集，非公开语料）
 
 首份基线用本机内部数据跑：库 1374 条 atom、查询集 44 条（20 条带 target、24 条无关查询）。
-结果见 `bench/results/` 下与提交号同名的那份 JSON。要点：
+这份基线**没有附结果文件**：它跑在发布前历史整理之前的某个提交上，那个号现在已经查不回来，
+按「不写查不回来的 sha」这条原则，宁可不留文件。要点：
 
 - Recall@5 = 0.75、Recall@12 = 0.95（分母 20 条）；
 - 耗时 p50 约 7 ms、p95 在 9–15 ms 之间（44 次 recall 调用，不含编码，本机采集；
