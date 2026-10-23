@@ -1,0 +1,89 @@
+name: 缺陷报告
+description: 装了之后行为不对、报错，或者召回结果明显不对
+title: '[缺陷] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先在宿主里调用一次 `lattice_ping`，把 `version`、`atoms` 与 `caches.encoder` 贴到下面。
+        这三样能分清大多数人遇到的「召回不准」是哪一类：模型没加载（退回纯词面）、库还太小、
+        还是判定线把整次召回判成了空。
+
+        贴之前把 `dataDir` 那一项删掉 —— 它是本机路径，对判断没有用，公开出来也没必要。
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 插件版本
+      description: '`lattice_ping` 返回的 `version`。'
+      placeholder: 0.10.0
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: 宿主
+      options:
+        - DSH Desktop
+        - DSH Web
+        - 其他（在最后说明）
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 操作系统与 Node 版本
+      description: '宿主自带的 Node 也算，写版本号即可（插件要求 22.13 以上）。'
+      placeholder: Windows 11 / node 24.21.0
+    validations:
+      required: true
+  - type: textarea
+    id: ping
+    attributes:
+      label: lattice_ping 的输出
+      description: '至少要有 `atoms`、`caches.encoder.state`、`caches.encoder.model` 与 `attempts`（下载失败时）。'
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望发生什么
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际发生了什么
+      description: '报错请贴原文，不要只写「报错了」；召回不对请写出你用的查询与看到的前几条。'
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 写入 …
+        2. 用「…」召回
+        3. 看到 …
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 出现的频率
+      options:
+        - 每次都能复现
+        - 偶发（同一操作有时正常）
+        - 只出现过一次
+    validations:
+      required: true
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 上面贴的输出已经去掉本机路径（`dataDir`）与不希望公开的内容
+          required: true
+        - label: 我在现有 Issue 里搜过，没有重复
+          required: true

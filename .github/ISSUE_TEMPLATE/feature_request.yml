@@ -1,0 +1,46 @@
+name: 功能建议
+description: 想要的能力，或认为现在的做法有更好的选择
+title: '[建议] '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先说问题，再说方案。这个项目的取舍写在 [docs/PRINCIPLES.md](docs/PRINCIPLES.md)：职责边界、
+        行为边界、数据边界。与其中任何一条冲突的建议会被直接拒绝，所以先把问题写清楚，方案可以一起谈。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你要解决的问题
+      description: '现在的做法哪里不够用、代价是什么。不要只写「希望能 X」。'
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 现在怎么绕过
+      description: '如果有绕法，写出来 —— 它说明了问题的真实形状。'
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望的形态（可选）
+      description: '有具体的接口、参数或界面设想就写在这里。'
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及哪一块
+      options:
+        - 写入（切分、落位、取代、关系）
+        - 召回（检索、判定线、注入）
+        - 界面（设置页）
+        - 安装与接入
+        - 文档
+        - 其他
+    validations:
+      required: true
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: 参与方式
+      options:
+        - label: 我愿意自己提 PR（先看 CONTRIBUTING.md 的提交流程）

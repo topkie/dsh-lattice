@@ -16,9 +16,11 @@ jobs:
       GIT_BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+      # 固定到补丁号，且与 package.json 的 packageManager 同值：lockfile 格式与依赖布局按 pnpm
+      # 版本给，浮动到另一个小版本后，「本地装得上、CI 装不上」这类差异就复现不了。
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
       - uses: actions/setup-node@v4
         with:
           node-version: 22

@@ -168,6 +168,7 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 | [阈值登记](docs/THRESHOLDS.md) | 代码里那些数字为什么是这个值、什么条件该重标、这套检查查得出什么查不出什么 |
 | [迁移规范](docs/MIGRATION.md) | 从其他记忆库迁入时的组织、流程、验收与回滚 |
 | [贡献指南](CONTRIBUTING.md) | 提交流程与代码约定 |
+| [发布流程](docs/RELEASING.md) | 维护者用：切 CHANGELOG、打 tag、发 GitHub Release 与 npm |
 | [变更日志](CHANGELOG.md) | 版本历史 |
 
 ## 贡献
