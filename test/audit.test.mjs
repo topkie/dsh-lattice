@@ -353,7 +353,7 @@ describe('体检（audit）：结构指标与两种「空」', () => {
     }
   })
 
-  it('输出里没有二值判决词（U2：比例只作参考）', () => {
+  it('输出里没有二值判决词（比例只作参考）', () => {
     seedTopic(db, 1, 1)
     seedAtom(db, 1, { topicId: 1 })
     const text = JSON.stringify(audit(db))

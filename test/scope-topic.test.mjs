@@ -175,7 +175,7 @@ describe('A 组 · 工具层：scope 透传', () => {
   })
 
   it('scope 只做字符串透传：大小写不同的两个值原样入库', async () => {
-    // #24 跨 scope 不归一
+    // 跨 scope 不归一
     await tool('lattice_write').execute({ text: '第一行：网关的端口映射由运维统一维护。', scope: 'Proj-A' })
     await tool('lattice_write').execute({ text: '第二行：值班表在每周一早上重新排一次。', scope: 'proj-a' })
     const db = getRuntime({}).db
@@ -212,7 +212,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('落位不看 scope：换了 scope 的相似文本仍并进同一个主题', async () => {
-    // #25 落位候选不带 scope 条件
+    // 落位候选不带 scope 条件
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A, scope: 'p1' })
     const b = await writeAtom(ctx, { text: TEXT_B, scope: 'p2' })
@@ -222,7 +222,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('防写回不看 scope：删过的文本换一个 scope 再写仍被拒', async () => {
-    // #28 墓碑比对不看 scope
+    // 墓碑比对不看 scope
     const text = '境外源访问必须走系统代理，否则直连会被拒绝。'
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([['境外源访问', oneHot(4)]]) })
     const a = await writeAtom(ctx, { text, scope: 'p1' })
@@ -244,7 +244,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('topic 表没有 scope 列：不同 scope 的两条记忆共用一行主题', async () => {
-    // #29 主题不按 scope 分区
+    // 主题不按 scope 分区
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A, scope: 'p1' })
     const b = await writeAtom(ctx, { text: TEXT_B, scope: 'global' })
@@ -260,7 +260,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('写入路径不改既有 atom 的归属：(id, topic_id) 指纹在写入前后一致', async () => {
-    // #36 写入路径不 UPDATE atom.topic_id
+    // 写入路径不 UPDATE atom.topic_id
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A })
     const before = assignmentHash(db, a.atomId)
@@ -281,7 +281,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('新建主题的列值：sum_vec 等于该条记忆的向量、n_atoms=1、mean_fit=0、label 是摘要前 16 字符', async () => {
-    // #38 新建主题的初值
+    // 新建主题的初值
     const text = '傍晚的路灯把影子拉得很长，我站在站台上等那班永远晚点的车。'
     const vec = oneHot(7)
     // 注入一次失败：否则写完之后 mean_fit 会立刻被重算成 AVG(fit)，看不到建行时写下的 0
@@ -307,7 +307,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('mean_fit 在提交之后按 AVG(fit) 重算，重算失败不阻断写入', async () => {
-    // #39 mean_fit 重算位置与失败处理
+    // mean_fit 重算位置与失败处理
     const ctx = createWriteCtx(db, {}, { encode: encodeWith([[SHARED, oneHot(3)]]) })
     const a = await writeAtom(ctx, { text: TEXT_A })
     const b = await writeAtom(ctx, { text: TEXT_B })
@@ -335,7 +335,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('删除后重算 n_atoms 与 mean_fit，删空时不重写 sum_vec', async () => {
-    // #41 删除后的主题聚合值
+    // 删除后的主题聚合值
     // B 与 A 的余弦取 0.85：仍高于并入线（0.78），但两条的 fit 不相等 ——
     // 若两条的 fit 都是 1，重算出来的平均值与不重算时的旧值读数相同，这条断言就分不出重算有没有发生。
     const ctx = createWriteCtx(
@@ -373,7 +373,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('删除不删空主题，空主题也不再被落位选中', async () => {
-    // #42 空主题保留、且不参与落位候选
+    // 空主题保留、且不参与落位候选
     const lone = '机房的空调在夜间会切到除湿档，值班的人需要留意水位。'
     // 不能给它和 lone 同一个向量：lone 已被删成墓碑，写入前的墓碑判重按余弦算，
     // 同向量会被当成「删过的内容」直接拒写（ForgottenError）。所以这里只造无关向量，
@@ -404,7 +404,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('atom_search.body 是「摘要 摘要 正文 入口词」，1600 字符只截正文段', async () => {
-    // #46 body 的拼法与截断位置
+    // body 的拼法与截断位置
     const summary = '摘'.repeat(SUMMARY_CHARS)
     const longText = '甲'.repeat(2000)
     const built = buildSearchBody(summary, longText, [])
@@ -431,7 +431,7 @@ describe('B 组 · 写入路径：scope / 主题 / 聚合列', () => {
   })
 
   it('图路只走白名单关系：related 边带来候选、duplicate 边不带来', async () => {
-    // #21 图路白名单（补缺-2）
+    // 图路白名单（补缺-2）
     const bVec = oneHot(1)
     const cVec = oneHot(2)
     const aVec = oneHot(0)

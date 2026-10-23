@@ -324,15 +324,15 @@ const DESIGN_DOC_T17 = 'Entry 三级权重与 learned 反哺 §27'
 const DESIGN_DOC_T18_FAIL = '失败模式与降级 §33'
 
 /**
- * 短名 → 全名：搬到定义处之后，条目的类型参数里只写短名（`doc: 't17'`）。
+ * 短名 → 全名：搬到定义处之后，条目的类型参数里只写短名（`doc: 'entries'`）。
  *
  * 长路径照抄十九遍的后果不是难看，是改文档名时漏掉其中一条 —— 而漏掉的那条照样打印得出来。
  * 短名在这里维护一处，打印脚本与将来的 `--doc-keys` 都从这里查全名。
  */
-export const DESIGN_DOCS: Readonly<Record<'t7' | 't17' | 't18fail', string>> = {
-  t7: DESIGN_DOC,
-  t17: DESIGN_DOC_T17,
-  t18fail: DESIGN_DOC_T18_FAIL,
+export const DESIGN_DOCS: Readonly<Record<'config' | 'entries' | 'failure', string>> = {
+  config: DESIGN_DOC,
+  entries: DESIGN_DOC_T17,
+  failure: DESIGN_DOC_T18_FAIL,
 }
 
 /** 全部登记项。按模块分块，与源码顺序一致，便于对照审查。 */
@@ -596,7 +596,7 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     refs: [{ file: 'src/pipeline/entries.ts', symbol: 'LEARNED_PROMOTE_MAX_WEIGHT' }],
     affects: '升档能升到的分值上限 —— 取 ENTRY_WEIGHT.extracted，永不等于 declared 的 1.0',
     variesWith: ['ENTRY_WEIGHT.extracted（同一个数的两个出口，改一个必须看另一个）'],
-    design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 第 3 条（→ extracted，0.6）', default: 0.6 },
+    design: { doc: DESIGN_DOC_T17, key: '反哺三步 · 升档线（→ extracted，0.6）', default: 0.6 },
     diverges:
       '**文档改 origin（learned → extracted → declared），代码只改 weight，origin 恒为 learned。**' +
       '三条理由：① weight 只被注入层的入口展示读（view.ts 的 topicEntries 按 MAX(weight) 排序），' +

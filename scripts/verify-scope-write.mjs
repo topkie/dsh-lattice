@@ -6,11 +6,11 @@
 //
 // 用法（一条命令，可被第三方复现）：
 //   node scripts/verify-scope-write.mjs
-//   node scripts/verify-scope-write.mjs --dir .probe/t27-scope --keep   # 换个目录并留档
+//   node scripts/verify-scope-write.mjs --dir .probe/scope-write --keep   # 换个目录并留档
 //
 // 需要真实编码器（用本地缓存；加载失败直接退出，不吃降级路径 —— 本脚本验的是
 // **几何定位 + scope 过滤**这条链，退化到纯词面就换了被测对象）。
-// 不碰任何既有库：临时库建在 --dir（默认 .probe/t24-scope），跑完删除；--keep 可留档。
+// 不碰任何既有库：临时库建在 --dir（默认 .probe/scope-write），跑完删除；--keep 可留档。
 // 因此它不需要用户的真实库 —— 判据全部在本脚本自己写的库上成立。
 //
 // 判据（任一不成立即非零退出）。每条后面写的是「怎么改会让它变红」——
@@ -77,7 +77,7 @@ function arg(name, fallback) {
   const i = process.argv.indexOf('--' + name)
   return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : fallback
 }
-const DIR = arg('dir', join('.probe', 't24-scope'))
+const DIR = arg('dir', join('.probe', 'scope-write'))
 const KEEP = process.argv.includes('--keep')
 
 /**

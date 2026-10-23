@@ -319,7 +319,7 @@ function isUsableTerm(term: string, stat?: TermStat): boolean {
  * 要在同一个位置上站住，强度必须相当 —— 降权不够，因为每个 atom 只有十六个槽位，
  * 而候选池平均 89.5 个/atom（全库 17497 个纯汉字二字型），碎片被降权后仍然排在真词前面。
  *
- * **与 §五 第四条（不确定处不做二值判断）的关系**：那条管的是**注入给多少**，判错时只损失
+ * **与 PRINCIPLES §五 第四条（不确定处不做二值判断）的关系**：那条管的是**注入给多少**，判错时只损失
  * 相邻档位的效率；这里是**候选资格**，十六个槽位本身就是一个必须二选一的约束，硬判不违反
  * 它。而真正「不确定」的那批（还没有重复观测，下不了「边界自由度为零」这个结论）仍走
  * 降权，见 extractedEntries 里 `!st.leftVaried || !st.rightVaried` 那一行。
@@ -610,7 +610,7 @@ export function buildEntries(
 
 // 三级权重里只有前两级由写入产生。第三级 learned 是**召回的反哺**：一次召回把 query 的
 // 特征词记到它命中的 atom 上，于是同一个问法下次能直接命中入口层。入口不进正文向量，
-// 所以这一点点冗余不污染知识正交 —— 见文件头与 §27 防抖第 6 条。
+// 所以这一点点冗余不污染知识正交 —— 见文件头。
 //
 // 触发点在 lattice_recall 工具里（本插件只有工具、没有 hook）：recall() 保持只读，
 // 反哺是它返回前的一次**显式**调用。下面这组常量决定「记什么、记多久、什么时候删」，
@@ -621,11 +621,11 @@ export const LEARNED_FEATURE_TERMS = 3 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '设计说明 §27「取 query 的 TF-IDF top-3 特征词」给定的个数，未在本库标定；取几个特征词是反哺强度与噪声之间的取舍'
+    why: '设计说明「取 query 的 TF-IDF top-3 特征词」给定的个数，未在本库标定；取几个特征词是反哺强度与噪声之间的取舍'
     failsWhen: ['查询长度分布', '一次召回命中多少条 atom（乘数效应）', '冷启动阶段库还小、IDF 不稳']
     affects: '一次召回反哺几个查询特征词（取 query 的 TF-IDF 前三，与写入侧同一套抽取规则）'
-    doc: 't17'
-    docKey: '反哺三步 · 第 1 条'
+    doc: 'entries'
+    docKey: '反哺三步 · 特征词个数'
     docDefault: 3
   }
 >
@@ -646,11 +646,11 @@ export const LEARNED_COOLDOWN_HOURS = 24 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '§27 防抖第 1 条「24 h 内只记 1 次」给的值，未在本库标定；窗口多长是「重复同一问法算不算新证据」的取舍'
+    why: '设计说明「24 h 内只记 1 次」给的值，未在本库标定；窗口多长是「重复同一问法算不算新证据」的取舍'
     failsWhen: ['一次会话里重复同一问法的频率', '召回频次（低频库里冷却几乎不触发）']
     affects: '冷却：同一（查询词, atom）在这个窗口内只记 1 次，重复查询不构成重复证据'
-    doc: 't17'
-    docKey: '防抖第 1 条（单位与代码一致，都是小时）'
+    doc: 'entries'
+    docKey: '防抖 · 冷却窗口（单位与代码一致，都是小时）'
     docDefault: 24
   }
 >
@@ -660,11 +660,11 @@ export const LEARNED_HALF_LIFE_DAYS = 90 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '§27 防抖第 2 条「90 天半衰期」给的值，未在本库标定；半衰期取决于记忆的实际复用周期，要真实使用期才能测出'
+    why: '设计说明「90 天半衰期」给的值，未在本库标定；半衰期取决于记忆的实际复用周期，要真实使用期才能测出'
     failsWhen: ['记忆的实际复用周期', '召回频次']
     affects: '遗忘与淘汰共用的证据强度 count_eff 的半衰期'
-    doc: 't17'
-    docKey: '防抖第 2 条'
+    doc: 'entries'
+    docKey: '防抖 · 半衰期'
     docDefault: 90
   }
 >
@@ -672,7 +672,7 @@ export const LEARNED_HALF_LIFE_DAYS = 90 satisfies ThresholdValue<
 /**
  * 遗忘线：count_eff 低于此值的 learned 行删掉。
  *
- * **与设计说明 §27 的 1.5 分叉，理由在存储层。** 文档的公式是
+ * **与设计说明的 1.5 分叉，理由在存储层。** 文档的公式是
  * `count += exp(-Δt_days/90)`，即 count 是**实数累加**；而 entry.hits 是
  * `INTEGER NOT NULL`，本仓库也没有第二个能存小数累加值的列。整数事件数下 1.5 是
  * **自相矛盾**的线：count_eff = hits × 2^(-Δ/90) ≤ hits，所以只出现过一次的条目
@@ -688,8 +688,8 @@ export const LEARNED_FORGET_COUNT_EFF = 0.5 satisfies ThresholdValue<
     failsWhen: ['hits 的存储口径（若将来改成小数累加，这条线要按文档回到 1.5）', '召回频次']
     affects: '遗忘线：count_eff 低于它的 learned 行删除'
     divergence: '文档的 count 是实数累加，hits 是整数列 —— 这不是调参分歧，是存储口径不一致导致同一个数字无法照抄'
-    doc: 't17'
-    docKey: '防抖第 2 条（文档取 1.5，代码取 0.5，见 divergence）'
+    doc: 'entries'
+    docKey: '防抖 · 遗忘线（文档取 1.5，代码取 0.5，见 divergence）'
     docDefault: 1.5
   }
 >
@@ -699,15 +699,15 @@ export const LEARNED_MAX_PER_ATOM = 12 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '§27 防抖第 3 条「learned 入口 ≤ 12 条」给的值，未在本库标定；上限值本身是槽位额度的取舍'
+    why: '设计说明「learned 入口 ≤ 12 条」给的值，未在本库标定；上限值本身是槽位额度的取舍'
     failsWhen: [
       'extracted 入口上限（DEFAULT_MAX_EXTRACTED=16）—— 两者是同一批槽位的两半',
       '真实召回里「查询词不属于该 atom 已有入口」的比例（探针实测这个比例很高，上限很少触发）',
     ]
     guardedBy: ['test/entries-learned.test.mjs']
     affects: '单 atom 的 learned 入口上限，超出按 count_eff 淘汰最低的'
-    doc: 't17'
-    docKey: '防抖第 3 条'
+    doc: 'entries'
+    docKey: '防抖 · 单条上限'
     docDefault: 12
   }
 >
@@ -717,11 +717,11 @@ export const LEARNED_GLOBAL_FACTOR = 5 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '§27 防抖第 4 条「learned 总数 ≤ 5 × n_atoms」给的值，未在本库标定；随库增长的额度是反哺总量的取舍'
+    why: '设计说明「learned 总数 ≤ 5 × n_atoms」给的值，未在本库标定；随库增长的额度是反哺总量的取舍'
     failsWhen: ['库的 atom 数（这个上限随库增长，因此不是固定额度）']
     affects: '全局 learned 上限 = 此系数 × 库里的 atom 数，超出按 count_eff 淘汰最低的'
-    doc: 't17'
-    docKey: '防抖第 4 条'
+    doc: 'entries'
+    docKey: '防抖 · 全局额度'
     docDefault: 5
   }
 >
@@ -731,14 +731,14 @@ export const LEARNED_PROMOTE_COUNT = 5 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '§27 反哺三步第 3 条「count ≥ 5」给的值，未在本库标定；升档线定在几次命中是「够了」的判断，低频库里几乎不会发生'
+    why: '设计说明「count ≥ 5」给的值，未在本库标定；升档线定在几次命中是「够了」的判断，低频库里几乎不会发生'
     failsWhen: [
       '冷却窗口（24 h）与整数计数：hits ≥ 5 意味着至少 5 个跨 24 h 的事件，即约 5~7 天的使用',
       '召回频次；低频库里升档几乎不会发生',
     ]
     affects: '升档线：count_eff 到线且最近有命中时，learned 行的分值升到 extracted 档（0.6）'
-    doc: 't17'
-    docKey: '反哺三步 · 第 3 条（文档的 count 也是实数累加）'
+    doc: 'entries'
+    docKey: '反哺三步 · 升档线（文档的 count 也是实数累加）'
     docDefault: 5
   }
 >
@@ -748,12 +748,12 @@ export const LEARNED_PROMOTE_RECENT_DAYS = 30 satisfies ThresholdValue<
   'chosen',
   {
     area: '入口'
-    why: '§27 第 3 条「30 天内出现 ≥ 2 次」的时间窗，未在本库标定；表里只有 hits 与 last_seen 两列，只能守住「最近一次命中在窗口内」这半边，另半边要事件级时间戳'
+    why: '设计说明「30 天内出现 ≥ 2 次」的时间窗，未在本库标定；表里只有 hits 与 last_seen 两列，只能守住「最近一次命中在窗口内」这半边，另半边要事件级时间戳'
     failsWhen: ['召回频次', '若将来给 entry 加一列「首次命中时间」，就能按文档实现完整的 30 天窗口']
     affects: '升档与**降档**的时间窗：最近一次命中超出这个窗口就不再够格，已升档的降回 0.3'
     diverges: '**只实现了「最近一次命中在 30 天内」，没有实现「30 天内出现 ≥ 2 次」**：后者要事件级时间戳，表里只有 hits 与 last_seen。这是收窄，不是放宽'
-    doc: 't17'
-    docKey: '反哺三步 · 第 3 条的「30 天内」'
+    doc: 'entries'
+    docKey: '反哺三步 · 升档窗口「30 天内」'
     docDefault: 30
   }
 >

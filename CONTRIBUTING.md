@@ -36,7 +36,7 @@ main 永远可发布。**不要在 main 上直接提交**，所有改动走任�
 
 | 分支 | 用途 | 命名 |
 |---|---|---|
-| `feat/<slug>` | 新功能 | `feat/t7-view-assembly` |
+| `feat/<slug>` | 新功能 | `feat/view-assembly` |
 | `fix/<slug>` | 缺陷修复 | `fix/recall-empty-result` |
 | `docs/<slug>` | 仅文档 | `docs/constant-table` |
 

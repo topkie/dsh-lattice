@@ -99,7 +99,7 @@ REFERENCE_QUANTILE 是 0.5.0 改机制后新加的：召回判「这次有没有
 | 同上加 --undated | 可复算、但没有记录测量时间的条目（只是信息，不拦） | thresholds-query | 8 条 |
 | 同上加 --needs-review | 声明可复算、但缺编码模型与语料规模的条目 | 手工 | 1 条 |
 | 同上加 --unguarded | 没有测试按常量名断言默认值的条目 | 手工 | 78 条 |
-| 同上加 --doc-keys | 设计说明的键名 → 代码常量 → 文档给的默认值 | 手工 | 19 条，其中 5 条标着分叉 |
+| 同上加 --doc-keys | 设计说明的键名 → 代码常量 → 文档给的默认值 | 手工 | 18 条，其中 4 条标着分叉（条数随登记表变化，以命令输出首行为准） |
 
 门禁里的三条（thresholds / thresholds-review / thresholds-query）读同一份扫描结果，只读源码，不需要模型与网络。整条门禁在仓库根跑 node scripts/check-all.mjs，**要带上当前分支名**：GIT_BRANCH 没传时脚本打印「分支：未知」，那不叫通过（bash 写法 GIT_BRANCH=$(git branch --show-current) node scripts/check-all.mjs；PowerShell 先设 $env:GIT_BRANCH）。退出码 0 = 全部通过，1 = 任一检查不通过；--undated 进 CI，但它只打印、不判红。
 

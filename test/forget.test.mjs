@@ -154,7 +154,7 @@ describe('forget', () => {
 
       forgetAtom(db, { atomId: a.atomId })
 
-      // §36 第 9 项：悬空引用数 DR > 0 是硬失败。这就是那条判据的本地版。
+      // §36：悬空引用数 DR > 0 是硬失败。这就是那条判据的本地版。
       assert.equal(
         count(
           "SELECT COUNT(*) AS n FROM edge WHERE (src_type='atom' AND src_id NOT IN (SELECT id FROM atom)) OR (dst_type='atom' AND dst_id NOT IN (SELECT id FROM atom))",

@@ -105,7 +105,7 @@ function basis(i, weight = 1) {
 
 describe('写入侧派生验证', () => {
   it('去重只比主属主题的前 200 条，第 201 条等于没比', async () => {
-    // #51 去重只看主属主题前 200 条
+    // 去重只看主属主题前 200 条
     await withVault('51', async ({ db }) => {
       // encoderOn: false 时 writeAtom 不调用编码器，向量取零向量占位 —— 200 条夹具不必付编码开销。
       const ctx = createWriteCtx(db(), {}, { encoderOn: false })
@@ -150,7 +150,7 @@ describe('写入侧派生验证', () => {
   })
 
   it('去重与防写回都按 (cos ?? 0) * 2 + lex 排第一', async () => {
-    // #57 去重排序值 = (cos ?? 0) * 2 + lex
+    // 去重排序值 = (cos ?? 0) * 2 + lex
     await withVault('57', async ({ db }) => {
       // T 有 5 个词；候选一与它词面交集 2 个 → 2/(5+2-2) = 0.4；候选二 1 个 → 1/(5+6-1) = 0.1
       const T = 'alpha bravo charlie delta echo'
@@ -228,7 +228,7 @@ describe('写入侧派生验证', () => {
   })
 
   it('写入的 entry 行 hits=0/last_seen=NULL，召回反哺的行 hits=1/last_seen=当时', async () => {
-    // #68 entry 行的 hits/last_seen 两种来源不同
+    // entry 行的 hits/last_seen 两种来源不同
     await withVault('68', async ({ tool, db }) => {
       const w = tool('lattice_write')
       const A = '端口缓存配置改了三次才稳定'
@@ -270,7 +270,7 @@ describe('写入侧派生验证', () => {
   })
 
   it('写入侧去重排除已取代行', async () => {
-    // 补缺-1（#11）写入侧去重排除已取代行
+    // 补缺-1：写入侧去重排除已取代行
     await withVault('11', async ({ db }) => {
       const ctx = createWriteCtx(db(), {}, { encoderOn: false })
       const A = '端口用 8080，别改成别的，这是本机固定配置。'
@@ -307,7 +307,7 @@ describe('写入侧派生验证', () => {
   })
 
   it('召回不改真相层，只读连接给出同样的文本', async () => {
-    // 补缺-3（#93）召回不改真相层
+    // 补缺-3：召回不改真相层
     await withVault('93', async ({ dir, config, tool, db }) => {
       // 写入夹具走函数层，为的是能给向量：推断边（origin='inferred'）只从非零向量算出来，
       // 编码器关掉的话库里全是零向量，一张推断边也不会有，② 就成了「0 与 0 相等」。

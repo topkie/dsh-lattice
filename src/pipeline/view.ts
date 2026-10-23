@@ -79,7 +79,7 @@ export const DEFAULT_BUDGET = 5000 satisfies ThresholdValue<
     failsWhen: ['模型上下文窗口', '一次注入里锚段的平均长度']
     affects: '注入字符预算的默认值（工具调用可覆盖）'
     diverges: '这个数只有一处定义：zod 的 `.default(DEFAULT_BUDGET)` 与 `index.ts` 的 `?? DEFAULT_BUDGET` 都引用它，不再各写一遍'
-    doc: 't7'
+    doc: 'config'
     docKey: 'viewBudget'
     docDefault: 5000
     docRange: [1000, 20000]

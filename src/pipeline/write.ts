@@ -396,7 +396,7 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
     guardedBy: ['test/write.test.mjs']
     affects: 'decidePlacement：sim1 - sim2 小于此差值时判为「双峰」，退回新建（ambiguous）'
     diverges: '**仍不进 zod schema**：运行时不可配置。第一批只把它从内联字面量提成具名常量（取值未变）——「文档有名字、代码里是魔法数」这一半已消除，可配置性是另一件事'
-    doc: 't7'
+    doc: 'config'
     docKey: 'deltaPeak'
     docDefault: 0.06
     docRange: [0.01, 0.2]

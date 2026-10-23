@@ -56,7 +56,7 @@ export const NEAR_K = 4 satisfies ThresholdValue<
     finding: '参数网格（K = 2/3/4/6/8 × cosMin = 0.70/0.75/0.80）：96%（1293/1374）的 atom 过线邻居多于 K，所以 MOD 由 K 直接决定 —— K=4 → 3.86、K=6（cosMin 0.75）→ 4.64；按 §36 的 MOD 目标区间 2~5 取中点 4'
     scale: '基准库 1374 条 atom（只有一个规模档）'
     failsWhen: ['库规模（atom 越多近邻越密）', '换编码模型（余弦尺度会变）', '§36 的 MOD 目标区间']
-    affects: 'inferEdges：每个 atom 保留多少个向量近邻作为 near 边。它同时是图路的宽度与 §36 第 8 项 MOD 的旋钮 —— 实测 MOD 几乎等于 K'
+    affects: 'inferEdges：每个 atom 保留多少个向量近邻作为 near 边。它同时是图路的宽度与 §36 的 MOD 旋钮 —— 实测 MOD 几乎等于 K'
   }
 >
 
@@ -88,7 +88,7 @@ export const OUT_DEGREE_CAP = 16 satisfies ThresholdValue<
     why: '设计说明给的值，未在本库标定：§33 的降级路径、§40 的反例判据、技术文档 4.2 的图路参数都写 16，值出自那里；它是 K 被调大时的兜底，不是标定出来的上限'
     failsWhen: ['NEAR_K（K 接近或超过 16 时它才开始生效）', '库规模与语料密度']
     affects: '出度硬上限。两个来源各自用一次、**不合并计数**：推断边每 atom ≤ 16（inferEdges 把超出的邻居截断），声明边每批 ≤ 16（write.ts 把超出的边拒掉）。所以同一个 atom 可以有 16 条推断边 + 16 条声明边，合计不设上限。查询侧（graphPath 的每个种子）也用它截断候选，同样不参与前两者的计数'
-    doc: 't18fail'
+    doc: 'failure'
     docKey: '出度硬上限'
     docDefault: 16
   }
@@ -155,7 +155,7 @@ export interface InferStats {
   /** 候选邻居多于硬上限 OUT_DEGREE_CAP 的 atom 数 —— §40 的「边爆炸」形态。 */
   cappedByHardLimit: number
   maxOutDegree: number
-  /** 平均出度 MOD = Σdeg_out(a)/N（§36 第 8 项）。 */
+  /** 平均出度 MOD = Σdeg_out(a)/N（§36）。 */
   meanOutDegree: number
   /** 图路意义下孤立（入度与出度皆 0）的 atom 数。 */
   isolatedAtoms: number

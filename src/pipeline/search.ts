@@ -38,7 +38,7 @@ export const RRF_K = 60 satisfies ThresholdValue<
     failsWhen: ['换成别的融合方式时']
     affects: 'RRF 融合常数：分越高越压平头部排名的垄断，让多路共识浮现'
     diverges: '**zod schema 里没有它** —— 文档给了 10-100 的范围，运行时不生效、不可调'
-    doc: 't7'
+    doc: 'config'
     docKey: 'rrfK'
     docDefault: 60
     docRange: [10, 100]
@@ -547,7 +547,7 @@ export const RECALL_TOP_N = 24 satisfies ThresholdValue<
     failsWhen: ['注入字符预算', '一次注入能容纳的摘要条数']
     affects: '召回交给注入层的默认条数（调用方不传 topN 时用它）'
     diverges: '**与 DEFAULT_TOP_N 同为 24、不同量**（第一批判定为恰好同值，不合并）：那个是落位时取多少个 topic 候选，这个是召回交注入层的条数。设计说明 §7 的 topN 指后者'
-    doc: 't7'
+    doc: 'config'
     docKey: 'topN'
     docDefault: 24
     docRange: [5, 50]
@@ -953,7 +953,7 @@ export function recall(
     else primaryHits++
     const v = vecCache.vecs[vecCache.offset.get(id) ?? -1]
     if (v !== undefined) vecMap.set(id, v)
-    // 排序分就是余弦，不是融合分乘归属因子（决定记录 A1 / 第 17 条）。
+    // 排序分就是余弦，不是融合分乘归属因子。
     //
     // 为什么必须换成同一个量：融合分与「有多相关」不是一回事 —— 它是 w/(60+名次) 逐路
     // 累加，top1 恒在 0.0164 附近，只携带「命中几路、排第几」，没有相关性的语义。原先

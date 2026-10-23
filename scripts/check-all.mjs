@@ -40,7 +40,7 @@ const STEPS = [
   ['format', 'node_modules/prettier/bin/prettier.cjs', ['--check', ...FORMAT_GLOBS]],
   // 阈值登记覆盖：源码里新增了数值常量、却既没登记也没进豁免清单时，以非零码退出。
   // 排在这里是因为它只读 src/ 与 dist/（build 已产出），不需要模型与网络 —— 与其余静态检查同类。
-  // **为什么必须进门禁**：不进门禁的检查，与一句写在文档里的话，区别只是多一个文件（§1.3 防呆第 11 条）。
+  // **为什么必须进门禁**：不进门禁的检查，与一句写在文档里的话，区别只是多一个文件（§1.3）。
   ['thresholds', 'scripts/print-thresholds.mjs', []],
   // 阈值来历的待评审条数：那份临时债务清单（thresholds-review-baseline.json）已按类写进
   // CHANGELOG 的「已知限制」并删除，这一步现在的动作是**打印当前条数**，不是与存量比对，
