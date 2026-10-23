@@ -154,11 +154,13 @@ async function mount() {
     throw new Error('浏览器半 require 了未预期的模块：' + spec)
   })
   let component = null
+  let sectionOptions = null
   clientExports.apply({
     effect: (fn) => fn(),
     slots: {
       inject: (key, factory) => factory(),
       register: (options, registered) => {
+        sectionOptions = options
         component = registered
         return () => {}
       },
@@ -173,6 +175,7 @@ async function mount() {
   render()
   return {
     getRoot: () => root,
+    getSectionLabel: () => sectionOptions.label(),
     click: (text) => {
       const button = descendantsOf(root).find((n) => n.type === 'button' && textOf(n) === text)
       assert.ok(button, '找不到选项卡按钮：' + text)
@@ -182,6 +185,15 @@ async function mount() {
 }
 
 describe('界面选项卡：管理与配置分开', () => {
+  it('设置页入口自报「lattice 记忆库」，不是泛称', async () => {
+    const view = await mount()
+    assert.equal(
+      view.getSectionLabel(),
+      'lattice 记忆库',
+      '入口名要能看出是哪个插件的库；泛称在多插件环境里分不清是谁',
+    )
+  })
+
   it('默认停在管理页，两个选项卡按钮的顺序是「管理」「配置」', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = async (url) => fetchStub(url)
