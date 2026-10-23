@@ -24,6 +24,28 @@
 
 见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
+### 装进宿主看效果
+
+改完代码要在宿主里看到效果，除了构建还要把产物送进 profile。两条路各有用处。
+
+**按包管理器装（与用户的装法一致）**：在 profile 目录把本仓库登记为依赖，
+`pnpm add "file:<本仓库绝对路径>"`，再把 `dsh-lattice` 加进该目录 `package.json` 的
+`dsh.profile.bundles` 数组。pnpm 按本仓库 `package.json` 的 `files` 白名单复制 `dist/`、`lib/`、
+`cordis.patch.yml`、`package.json` 与几份文档，源码目录里改的东西不会自动跟过来 ——
+每次改完要重跑一次那条 `pnpm add`。
+
+**手工覆盖（只在排障时用）**：直接把 `dist/`、`lib/`、`package.json`、`cordis.patch.yml`
+复制进 `<profile>/node_modules/dsh-lattice/`。只复制 `dist/` 或只复制 `lib/` 会出现「后端是新版、
+设置页是旧版」，两样要一起复制。这样做的代价是：profile 里下次跑 `pnpm install` 会把它恢复成
+包管理器那一份，手工改动随之丢失。
+
+`cordis.patch.yml` 是本仓库的 bundle 补丁层：`package.json` 的 `dsh.bundle.patch` 指向它，
+宿主据此在 profile 里插入 id 为 `lattice` 的插件条目并给出默认配置（`enabled`、`encoderEnabled`）；
+profile 自己的 `cordis.patch.yml` 可以按这个 id 覆盖或禁用（后层优先）。漏了它，宿主那边就指向
+一个不存在的文件。
+
+产物换完之后重启宿主。界面半 `lib/client.js` 不参与 `tsc`，改它不用构建，但同样要重启或刷新页面。
+
 ## 分支与合并
 
 main 永远可发布。**不要在 main 上直接提交**，所有改动走任务分支。

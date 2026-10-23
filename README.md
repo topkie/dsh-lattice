@@ -9,9 +9,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org)
 
-> **状态：首个对外发布版，尚未发布。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现，
-> 门禁带 470 条测试；设置页能列出现有记忆、搜到指定一条、不借助模型把它删掉。
-> 整理（重聚类）要手动触发，没有定时自动执行。其余已知限制见 [CHANGELOG](CHANGELOG.md) 的「已知限制」一节。
+> **状态：首个对外发布版，尚未发布。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现；
+> 设置页能列出库里的记忆、搜到指定一条、不借助模型把它删掉，也能改两项运行参数、把整库导出成
+> JSON 或 Markdown。整理（重聚类）要手动触发，没有定时自动执行。
+> 其余已知限制见 [CHANGELOG](CHANGELOG.md) 的「已知限制」一节。
 
 ## 它解决什么
 
@@ -52,22 +53,16 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ## 安装
 
 npm 上的 `dsh-lattice` 目前只是一个占位包：`npm view dsh-lattice` 能查到 `0.0.0`，包的 description 写明请勿安装。
-所以可用版本只能从源码装。需要 Node 22.13 以上、git 与 pnpm ≥ 9
+可用版本从源码装，需要 Node 22.13 以上、git 与 pnpm ≥ 9
 （与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。`node` 要在 `PATH` 里 —— 有几个依赖的
 安装脚本会直接调用 `node` 命令，找不到就会装出缺原生二进制的半成品。
 
 包管理器默认不跑依赖的构建脚本，这是第二个来源：npm 12 实测拦下 `onnxruntime-node`、`sharp`、
 `protobufjs` 三个包的安装脚本，效果与上面相同 —— 装得上、写得进，但召回退回纯词面。
-判据是 `lattice_ping` 的 `caches.encoder.state`，不是 `loaded` 就说明模型没起来。
-本仓库的 `pnpm-workspace.yaml` 已按两个版本各自认识的字段名放行这四个包，用 pnpm 装不会遇到这一步。
+判据是 `lattice_ping` 的 `caches.encoder.state`，不是 `loaded` 就说明编码器没起来。
+在本仓库里装不会遇到这一步：`pnpm-workspace.yaml` 已放行这四个包。
 
-模型权重不在 npm 包里：装依赖只装运行时（`@huggingface/transformers`），第一次加载编码器才去
-`huggingface.co` 取 `Xenova/bge-small-zh-v1.5`，拿不到再试 `modelscope.cn`（魔搭）—— 两条源按这个顺序试，
-前一条成功就不再试后一条。国内网络实测：官方源连不上（解析到 `179.60.193.9`，10.4 秒后 `fetch failed`），
-魔搭那边 5 次独立进程都是 0.7~1.1 秒下完并加载；两次尝试合计约 11.6 秒，其中 10.8 秒花在等官方源超时。
-两条都失败时编码器停在未加载状态、召回退回纯词面 —— 表现与上面两种一模一样，只看行为分不出来。
-界面「配置」页会逐条列出试过哪个源、各花了多久、错在哪一句，所以先看那里。
-配置项 `encoderMirror` 换掉第二条源；填成官方地址就只试官方一次，填 `https://hf-mirror.com` 就换回旧的镜像。
+### 从源码装
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git
@@ -76,23 +71,41 @@ pnpm install --no-frozen-lockfile
 pnpm run build
 ```
 
-构建完把下面一组文件放进宿主 profile 的 `node_modules`，然后重启宿主：
+然后在**宿主 profile 目录**（通常在用户目录下 `.dsh/profiles/<profile 名>/`）里把它登记为依赖，
+路径换成上一步那个目录的绝对路径：
 
-| 目标目录 | 放什么 |
-|---|---|
-| `node_modules/dsh-lattice/` | `dist/`、`lib/`、`package.json`、`cordis.patch.yml` |
+```bash
+pnpm add "file:<dsh-lattice 目录的绝对路径>"
+```
 
-profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<profile 名>/`；不确定就找宿主配置里 `profiles/` 所在的那一层。
-只复制 `dist/` 或只复制 `lib/` 会出现「后端是新版、设置页是旧版」，两样要一起复制。
+再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
+宿主的插件管理界面如果支持从本地目录安装，走界面也可以 —— 它会替你改这两处。
 
-`cordis.patch.yml` 是 bundle 补丁层：`package.json` 的 `dsh.bundle.patch` 指向它，宿主据此在 profile 里
-插入 id 为 `lattice` 的插件条目并给出默认配置（`enabled`、`encoderEnabled`）；profile 自己的
-`cordis.patch.yml` 可以按这个 id 覆盖或禁用。漏复制它，profile 里的 `package.json` 就指向一个不存在的文件。
+更新到新版本：在源码目录 `git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
+再到 profile 目录重跑一次上面那条 `pnpm add`，重启宿主。
 
-装好后用一次写入与一次召回确认：让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；
-也可以直接调 `lattice_ping`：它返回插件版本、数据目录、编码器配置（`off` 或模型名），以及五处缓存的实时占用 —— 编码器是否真的加载成功看 `caches.encoder.state`。
+### 第一次加载要下模型
 
-卸载：删掉 `node_modules/dsh-lattice/`，重启宿主。
+模型权重不在包里：装依赖只装运行时（`@huggingface/transformers`），第一次加载编码器才去
+`huggingface.co` 取 `Xenova/bge-small-zh-v1.5`（约 23 MB），拿不到再试 `modelscope.cn`（魔搭），
+前一条成功就不再试后一条。两条都不通时编码器停在未加载状态、召回退回纯词面 ——
+表现与上面两种一模一样，只看行为分不出来。界面「配置」页会逐条列出试过哪个源、各花了多久、
+错在哪一句，所以先看那里。配置项 `encoderMirror` 决定第二条源；填成官方地址就只试官方一次。
+
+不需要向量检索时，装依赖加 `--omit=optional`，其余功能不受影响。
+
+### 确认装好了
+
+让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；也可以直接调 `lattice_ping`：
+它返回插件版本、数据目录、编码器配置，以及五处缓存的实时占用。编码器是否真的加载成功，
+看 `caches.encoder.state`。
+
+日常在设置的「lattice 记忆库」页：能看库里有什么、搜到某一条、把它删掉，也能改两项运行参数、
+把整库导出成 JSON 或 Markdown。写什么时候发生由模型决定，页面上不写。
+
+### 卸载
+
+在 profile 目录 `pnpm remove dsh-lattice`，把名字从 `dsh.profile.bundles` 里删掉，重启宿主。
 记忆数据在独立的数据目录里，不会被这一步删掉。
 
 ## 配置
