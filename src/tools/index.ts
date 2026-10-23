@@ -28,6 +28,7 @@ import {
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
 import { findTombstoneOf } from '../pipeline/forget.js'
 import { referenceFor } from '../pipeline/refdist.js'
+import type { ThresholdValue } from '../threshold-types.js'
 import {
   getRuntime,
   noteRecallDegradations,
@@ -94,6 +95,51 @@ export const DECLARED_EDGE_HINT = '关系可显式声明：lattice_write 的 edg
  * 所以改为直接拒边（见 pipeline/write.ts 的拒绝分支）。这里只剩 duplicate 一类。
  */
 export const DECLARED_EDGE_ONLY_NOTE = '（只记录关系，不改变去重状态）'
+
+/**
+ * 每召回多少次，才提醒一次「该写记忆了」。
+ *
+ * 不按每次召回提醒，是因为那句提醒与本次召回的内容无关 —— 每次都说，它就变成固定噪声，
+ * 读的人会很快学会跳过它。按次数间隔，靠的是「一直只查不写」这个行为的累积：查了五次
+ * 还没写过一条，才值得提一次。
+ *
+ * 这个数是选出来的，没有测量能给出它：太小等于每次都提，太大等于永远不出现。
+ */
+export const RECALL_HINT_EVERY = 5 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '工具输出'
+    why: '提醒要看「一直只查不写」的累积，一次不看单次召回。按五次一次：一次会话里正常查两三次的人不会看到它，反复查了五次还没落字的场景才会出现'
+    failsWhen: [
+      '一次任务里合法地只查不写（比如纯咨询），提醒会显得多余',
+      '模型每轮只召回一次的用法下，五次跨了好几轮，提示与当下任务已经脱节',
+    ]
+    guardedBy: ['test/tools.test.mjs']
+    affects: '召回返回尾部那句「还没写入过记忆」多久出现一次；不出现时召回文本与原来完全一样'
+  }
+>
+
+/**
+ * 召回尾部那条「该写记忆了」的提示。
+ *
+ * 只在三个条件同时成立时出现：召回有内容、本进程召回次数到了间隔的整数倍、本进程还没写过记忆。
+ * 后两条都不成立时它**不出现** —— 这条提示的目的是让「一直查不写」被看见，不是靠反复说让人记住。
+ */
+export function recallWriteHint(times: number): string {
+  return (
+    '本次会话第 ' + times + ' 次召回，还没有写入过记忆；刚定下的结论或踩过的坑，一条 lattice_write 就够。'
+  )
+}
+
+/**
+ * 写入后那条「这个主题有几条」的说明。
+ *
+ * 只在主题里不止本条时出现：一条新主题说「这里有一条」等于把刚发生的写入重念一遍。
+ * 两句后续用法分别对应「改写法」与「反查」，都是写完之后马上可能要做的事。
+ */
+export function topicCountNote(count: number): string {
+  return '这个主题现在有 ' + count + ' 条（含本条）；改写法用 supersedes，反查用 lattice_recall。'
+}
 
 /** 只记录关系、不改变状态的 kind（图路同样不认它）。 */
 const ONLY_RECORDED_KINDS: readonly string[] = ['duplicate']
@@ -274,6 +320,8 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       // 长度审核拦下：确实一条都没写。此时上面的说明就是全部反馈 —— 调用方据此改写，
       // 而不是以为写成功了（与防写回同一条纪律）。
       if (out.results.length === 0) return lines.join('\n')
+      // 写过就不再提示「该写了」：本进程的召回尾部提示（见 RECALL_HINT_EVERY）据此收口。
+      rt.writesSeen = (rt.writesSeen ?? 0) + 1
 
       const multi = out.results.length > 1
       out.results.forEach((r, i) => {
@@ -403,6 +451,17 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           )
         }
       }
+      // 写完之后马上可能要做的事：换一版写法（supersedes）、按主题反查（lattice_recall）。
+      // 只在主题里不止本条时说 —— 一条刚建的新主题说「这里有一条」等于把刚发生的事重念一遍。
+      // 已被取代的不算：它们不再是这个主题当前的写法。
+      const siblings = Number(
+        (
+          rt.db
+            .prepare('SELECT COUNT(*) AS n FROM atom WHERE topic_id = ? AND superseded_by IS NULL')
+            .get(out.results[0]!.topicId) as { n: number | bigint }
+        ).n,
+      )
+      if (siblings >= 2) lines.push(topicCountNote(siblings))
       return lines.join('\n')
     },
   })
@@ -429,6 +488,10 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       const rt = getRuntime(cfg)
       const q = str(args?.query).trim()
       if (q === '') return '查询为空。'
+      // 计一次召回：只用来决定「一直只查不写」那条提示什么时候出现（见 RECALL_HINT_EVERY）。
+      // 空查询不算 —— 那是调用方搞错了参数，不是一次查询。
+      const ticks = (rt.recallTicks ?? 0) + 1
+      rt.recallTicks = ticks
       // scope 与写入侧的默认值不同：写入缺省 global，召回缺省「不限」。
       // 两个默认值不同是有意的 —— 写不知道自己在哪个项目域里，读不该替它选一个。
       const scopeArg = str(args?.scope).trim()
@@ -502,7 +565,15 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       else if (recalled.hits.length < (cfg.topN ?? RECALL_TOP_N)) {
         tail.push('候选用完了，只有 ' + recalled.hits.length + ' 条。')
       }
-      return notes.join('\n') + '\n\n' + tail.join('\n') + '\n\n（' + DECLARED_EDGE_HINT + '）'
+      const hints: string[] = [DECLARED_EDGE_HINT]
+      // 「一直只查不写」到第五、第十次才提一次；本进程写过记忆之后不再提 —— 会写的人不需要被提醒，
+      // 反复说只会让这句提示变成可跳过的噪声。
+      if (ticks % RECALL_HINT_EVERY === 0 && (rt.writesSeen ?? 0) === 0) {
+        hints.push(recallWriteHint(ticks))
+      }
+      return (
+        notes.join('\n') + '\n\n' + tail.join('\n') + '\n\n' + hints.map((h) => '（' + h + '）').join('\n')
+      )
     },
   })
 

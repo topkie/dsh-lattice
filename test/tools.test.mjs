@@ -275,6 +275,29 @@ describe('工具注册与执行', () => {
       const out = await tool('lattice_recall').execute({ query: '缓存击穿' })
       assert.ok(out.includes('缓存击穿'), '召回应当能找到刚写入的内容，输出: ' + out)
     })
+
+    /**
+     * 写完之后马上可能要做的事：换一版写法、按主题反查。
+     *
+     * 只在主题里不止本条时才说 —— 一条刚建的新主题说「这里有一条」等于把刚发生的事重念一遍。
+     * 两个方向都断言：少的那个方向（第一条不提）比多的方向更容易在重构里丢掉。
+     */
+    it('同主题写到第二条时才说明条数，第一条不说', async () => {
+      const first = await tool('lattice_write').execute({
+        text: '缓存击穿是高并发下热点 key 失效导致的雪崩效应。',
+      })
+      assert.equal(first.includes('这个主题现在有'), false, '主题只有一条时不该说条数：' + first)
+      const topicId = Number(/主题 #(\d+)/.exec(first)[1])
+      const second = await tool('lattice_write').execute({
+        text: '缓存穿透是查询一条不存在的数据导致的，与击穿不是一回事。',
+        topic_hint: topicId,
+      })
+      assert.ok(second.includes('这个主题现在有 2 条（含本条）'), '同主题第二条要说明条数：' + second)
+      assert.ok(
+        second.includes('supersedes') && second.includes('lattice_recall'),
+        '要给出两句后续用法：' + second,
+      )
+    })
   })
 
   describe('写入侧审核：工具返回值', () => {
@@ -305,6 +328,33 @@ describe('工具注册与执行', () => {
       const out = await tool('lattice_recall').execute({ query: '任意查询' })
       assert.ok(out.includes('没有找到'), '输出: ' + out)
       assert.ok(out.includes('库：'), '应当附带库现状，输出: ' + out)
+    })
+
+    /**
+     * 「一直只查不写」到第五次才提一次，写过之后不再提。
+     *
+     * 两个计数都手工归零：这条用例要的正是「库里有内容、但本进程还没写过」的状态，
+     * 而「库里有内容」只能靠先写一条造出来。不归零测到的就是「写过之后不再提」那半边。
+     */
+    it('第五次召回才提一次「还没写过记忆」，写过之后不再提', async () => {
+      await tool('lattice_write').execute({ text: '系统代理必须走本地端口，否则境外源会超时。' })
+      const rt = getRuntime(cfg())
+      rt.writesSeen = 0
+      rt.recallTicks = 0
+      const outs = []
+      for (let i = 0; i < 4; i++) outs.push(await tool('lattice_recall').execute({ query: '代理' }))
+      assert.equal(
+        outs.some((o) => o.includes('还没有写入过记忆')),
+        false,
+        '前四次不该出现：' + outs.map((o) => o.slice(-40)).join(' | '),
+      )
+      const fifth = await tool('lattice_recall').execute({ query: '代理' })
+      assert.ok(fifth.includes('本次会话第 5 次召回'), '第五次要提一次：' + fifth.slice(-90))
+      // 写过之后不再提：第 10 次召回应同样没有那句。
+      await tool('lattice_write').execute({ text: '再写一条，让本进程的写入次数非零。' })
+      let tenth = ''
+      for (let i = 0; i < 5; i++) tenth = await tool('lattice_recall').execute({ query: '代理' })
+      assert.equal(tenth.includes('还没有写入过记忆'), false, '写过之后不该再提：' + tenth.slice(-60))
     })
 
     it('结果带库现状一行，便于判断库有多大', async () => {

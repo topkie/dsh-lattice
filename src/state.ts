@@ -39,6 +39,15 @@ export interface Runtime {
   cfg: RuntimeConfig
   /** 库文件路径，健康检查与排障要用。 */
   file: string
+  /**
+   * 本进程内召回了几次。只用来决定「该写记忆了」那条提示什么时候出现。
+   *
+   * 为什么记在进程里而不是库里：这是「这一次用得怎么样」的计数，与记忆内容无关。
+   * 写进库要多一张表、多一次写，还得决定什么时候清零 —— 而进程重启就是最自然的清零。
+   */
+  recallTicks?: number
+  /** 本进程内写入过几次。非零之后不再提示「该写了」—— 明显知道怎么写的人不需要被提醒。 */
+  writesSeen?: number
 }
 
 let current: Runtime | null = null
