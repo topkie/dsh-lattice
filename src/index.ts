@@ -232,14 +232,14 @@ const CONFIG_ROUTE_PATH = '/api/lattice-config'
 /**
  * 等宿主把一次配置改动落到 describe() 上：总预算与轮询间隔。
  *
- * 实测生效延迟 30–130 ms（见 waitForOwnEntry）。1200 ms 是四倍余量：超了说明宿主真的没接，
+ * 实测生效延迟 30–140 ms（见 waitForOwnEntry）。1200 ms 是实测量级的八倍多：超了说明宿主真的没接，
  * 那该报 pending 让用户知道，而不是让界面无限等。
  */
 const APPLY_WAIT_MS = 1200 satisfies ThresholdValue<
   'chosen',
   {
     area: '配置'
-    why: '宿主把一次配置改动反映到 describe() 上是异步的：0.9.1 本机实测 30–140 ms 之后才看得到新值（update 返回时 describe 里仍是旧值）。1200 ms 是实测上限的十倍余量，不是测出来的最优点 —— 取大一点只让「宿主没接」这种故障晚一秒被报出来，取小了会把正常生效误报成 pending'
+    why: '宿主把一次配置改动反映到 describe() 上是异步的：0.9.1 本机实测 30–140 ms 之后才看得到新值（update 返回时 describe 里仍是旧值）。1200 ms 是实测上限的八倍多，不是测出来的最优点 —— 取大一点只让「宿主没接」这种故障晚一秒被报出来，取小了会把正常生效误报成 pending'
     failsWhen: [
       '宿主改成分批或延迟提交（生效延迟变大）',
       '机器很忙时改动落地的延迟',
