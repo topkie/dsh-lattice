@@ -52,17 +52,34 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 ## 安装
 
-npm 上的 `dsh-lattice` 目前只是一个占位包：`npm view dsh-lattice` 能查到 `0.0.0`，包的 description 写明请勿安装。
-可用版本从源码装，需要 Node 22.13 以上、git 与 pnpm ≥ 9
-（与 [开发指南](docs/DEVELOPMENT.md) 的要求一致）。`node` 要在 `PATH` 里 —— 有几个依赖的
-安装脚本会直接调用 `node` 命令，找不到就会装出缺原生二进制的半成品。
+三种装法，从最省事到最灵活。三种装完都要重启宿主；记忆存在本机数据目录里，换装法不会丢数据。
 
-包管理器默认不跑依赖的构建脚本，这是第二个来源：npm 12 实测拦下 `onnxruntime-node`、`sharp`、
-`protobufjs` 三个包的安装脚本，效果与上面相同 —— 装得上、写得进，但召回退回纯词面。
-判据是 `lattice_ping` 的 `caches.encoder.state`，不是 `loaded` 就说明编码器没起来。
-在本仓库里装不会遇到这一步：`pnpm-workspace.yaml` 已放行这四个包。
+当前 npm 上的 `dsh-lattice` 还只是一个占位包（`npm view dsh-lattice` 能查到 `0.0.0`，
+包的 description 写明请勿安装），GitHub 上的发布也还没开始 —— 前两种等正式版上线后可用，
+现在能走的是第三种。
 
-### 从源码装
+### 一、插件管理器（图形化，最省事）
+
+在宿主的插件管理界面里搜索 `dsh-lattice`，点安装，重启宿主。依赖登记与插件清单由界面代做，
+不需要手改文件。装完在设置的「lattice 记忆库」页看得到入口就说明装对了；看不到就把
+`dsh-lattice` 加进 profile 目录 `package.json` 的 `dsh.profile.bundles` 数组再重启。
+
+### 二、npm
+
+在**宿主 profile 目录**（通常在用户目录下 `.dsh/profiles/<profile 名>/`）里装：
+
+```bash
+pnpm add dsh-lattice
+```
+
+再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
+要固定版本就写 `pnpm add dsh-lattice@0.10.0`；之后升级用 `pnpm update dsh-lattice` 再重启。
+
+### 三、GitHub 源码
+
+想改代码、或者要用还没发到 npm 的提交时走这条。需要 Node 22.13 以上、git 与 pnpm ≥ 9。
+`node` 要在 `PATH` 里 —— 有几个依赖的安装脚本会直接调用 `node` 命令，找不到就会装出
+缺原生二进制的半成品。
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git
@@ -71,26 +88,31 @@ pnpm install --no-frozen-lockfile
 pnpm run build
 ```
 
-然后在**宿主 profile 目录**（通常在用户目录下 `.dsh/profiles/<profile 名>/`）里把它登记为依赖，
-路径换成上一步那个目录的绝对路径：
+然后在 profile 目录把它登记为依赖，路径换成上一步那个目录的绝对路径：
 
 ```bash
 pnpm add "file:<dsh-lattice 目录的绝对路径>"
 ```
 
 再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
-宿主的插件管理界面如果支持从本地目录安装，走界面也可以 —— 它会替你改这两处。
-
-更新到新版本：在源码目录 `git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
-再到 profile 目录重跑一次上面那条 `pnpm add`，重启宿主。
+更新到新提交：源码目录 `git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
+再到 profile 目录重跑一次那条 `pnpm add`，重启。
 
 ### 第一次加载要下模型
 
-模型权重不在包里：装依赖只装运行时（`@huggingface/transformers`），第一次加载编码器才去
-`huggingface.co` 取 `Xenova/bge-small-zh-v1.5`（约 23 MB），拿不到再试 `modelscope.cn`（魔搭），
-前一条成功就不再试后一条。两条都不通时编码器停在未加载状态、召回退回纯词面 ——
-表现与上面两种一模一样，只看行为分不出来。界面「配置」页会逐条列出试过哪个源、各花了多久、
-错在哪一句，所以先看那里。配置项 `encoderMirror` 决定第二条源；填成官方地址就只试官方一次。
+模型权重不在包里：第一次加载编码器才去 `huggingface.co` 取 `Xenova/bge-small-zh-v1.5`
+（约 23 MB），拿不到再试 `modelscope.cn`（魔搭），前一条成功就不再试后一条。两条都不通时
+编码器停在未加载状态、召回退回纯词面 —— 只看行为分不出来是哪一步的问题。界面「配置」页
+会逐条列出试过哪个源、各花了多久、错在哪一句，所以先看那里。配置项 `encoderMirror` 决定
+第二条源；填成官方地址就只试官方一次。
+
+### 装上了但召回只走词面
+
+包管理器默认不跑依赖的构建脚本：npm 12 实测拦下 `onnxruntime-node`、`sharp`、`protobufjs`
+三个包的安装脚本，效果是写得进、召回退回纯词面。判据是 `lattice_ping` 的
+`caches.encoder.state`，不是 `loaded` 就说明编码器没起来。走第三种时在本仓库里 `pnpm install`
+不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；前两种装的是发布出来的包，
+碰不碰得到取决于宿主或 npm 的设置。
 
 ### 确认装好了
 
@@ -103,8 +125,9 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 ### 卸载
 
-在 profile 目录 `pnpm remove dsh-lattice`，把名字从 `dsh.profile.bundles` 里删掉，重启宿主。
-记忆数据在独立的数据目录里，不会被这一步删掉。
+按装法对应着来：插件管理器里卸载；命令行装的在 profile 目录 `pnpm remove dsh-lattice` 并把名字
+从 `dsh.profile.bundles` 里删掉；第三种还可以顺手删掉 clone 下来的目录。都要重启宿主。
+记忆数据在独立的数据目录里，这几步都不会删它。
 
 ## 配置
 
@@ -125,6 +148,10 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 | `mmapSize` | `0` | SQLite mmap 窗口字节数；0 = 按机器内存与库大小自动 |
 | `cacheSize` | `0` | SQLite 页缓存字节数；0 = 自动 |
 | `busyTimeout` | `0` | 写锁等待上限毫秒；0 = 自动 |
+
+其中 `viewBudget` 与 `topN` 能在设置页「lattice 记忆库 → 配置」里直接改，改完即时生效；
+其余十三项要在 profile 的 `cordis.patch.yml` 里改，然后重启宿主 —— 它们要么在建连接时用掉，
+要么被写进上下文快照，改了也不会立刻按新值走。
 
 > 落位判定需要**余弦与词面同时达标**：同一大类内部，不同主题的余弦可能高到 0.73，
 > 而同一主题最低约 0.75，仅凭余弦会静默合并不同主题。
