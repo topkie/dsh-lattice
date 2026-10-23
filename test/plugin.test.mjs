@@ -18,7 +18,7 @@ import { closeRuntime } from '../dist/state.js'
  * 为什么这两条要分开测：实测的那次失败**没有报错**，只是路由没注册 ——
  * 「静默跳过」正是缺陷的直接形态，所以要同时钉住「给了就注册」与「没给不抛也不注册」。
  */
-function fakeCtx({ webServer } = {}) {
+function fakeCtx({ webServer, settings } = {}) {
   const registered = []
   const routes = []
   const injected = []
@@ -29,12 +29,14 @@ function fakeCtx({ webServer } = {}) {
     get: (k) => {
       if (k === 'tools') return { register: (t) => registered.push(t) }
       if (k === 'webServer') return webServer
+      if (k === 'settings') return settings
       return undefined
     },
     effect: (fn) => fn(),
     inject: (deps, callback) => {
       injected.push(deps)
-      if (webServer === undefined) return
+      // 契约：deps 里每一项都拿得到才执行回调（cordis 的 inject 就是这个语义）。
+      if (!deps.every((dep) => ctx.get(dep) !== undefined)) return
       callback(Object.assign({}, ctx, { webServer }))
     },
   }
@@ -143,7 +145,8 @@ describe('插件契约', () => {
     // 硬约束：这条路由只能是**条件**注入，不能进模块级 inject —— 进去就等于
     // 「没有 Web 载体的 profile 里整个插件都不激活」，连四个工具一起没。
     assert.deepEqual([...inject], ['tools'], '模块级 inject 不得包含 webServer')
-    assert.deepEqual(ctx.injected, [['webServer']], '只对 webServer 做条件注入')
+    // 配置路由要多一样宿主服务（settings），所以是第二段条件注入 —— 两段都不是模块级 inject。
+    assert.deepEqual(ctx.injected, [['webServer'], ['webServer', 'settings']], '只做条件注入')
 
     // 其余路由是陆续加的：目录与搜索（共三条只读）、删除（写端点）、
     // 日志导出（只读）与日志清空（写端点）、
@@ -154,6 +157,7 @@ describe('插件契约', () => {
     // 整理入口是两条写路由（规划 / 取消；状态并入体检，不单开只读路由）。
     // 清空「学到的入口」是一条写路由。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
+    // 没有 settings 服务时配置路由不挂（它在第二段注入里），所以这里仍是 15。
     assert.equal(routes.length, 15, '六条只读路由 + 九条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-archive',
@@ -176,6 +180,84 @@ describe('插件契约', () => {
       assert.equal(route.kind, 'exact')
       assert.equal(typeof route.handler, 'function')
     }
+  })
+
+  it('配置路由只在宿主提供 settings 时挂上', () => {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    const settings = { describe: () => [], update: () => ({}) }
+    const ctx = fakeCtx({ webServer, settings })
+    apply(ctx, baseConfig)
+    assert.deepEqual(ctx.injected, [['webServer'], ['webServer', 'settings']])
+    const paths = routes.map((r) => r.path)
+    assert.ok(paths.includes('/api/lattice-config'), '有条配置路由：' + paths.join(','))
+    assert.equal(routes.length, 16, '十五条原有路由 + 一条配置路由')
+  })
+
+  it('配置路由认自己那一条，别家的命名空间不接', async () => {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    const calls = []
+    const settings = {
+      // 形状照 dsh-settings 的 describe 返回：一个数组，每条带 ns / schema / revision。
+      describe: () => [
+        { ns: 'billion-context', revision: 3, schema: { properties: { budget: {} } } },
+        { ns: 'another-plugin', revision: 1, schema: { properties: { quota: {} } } },
+        { ns: 'dsh-lattice', revision: 7, schema: { properties: { viewBudget: {}, topN: {} } } },
+      ],
+      update: (ns, patch, revision) => {
+        calls.push({ ns, patch, revision })
+        return { ok: true }
+      },
+    }
+    apply(fakeCtx({ webServer, settings }), baseConfig)
+    const route = routes.find((r) => r.path === '/api/lattice-config')
+    assert.ok(route !== undefined)
+
+    const read = fakeRes()
+    await route.handler(fakeReq({ method: 'GET', url: '/api/lattice-config' }), read)
+    assert.equal(read.out.status, 200)
+    assert.equal(read.out.body.ns, 'dsh-lattice')
+    assert.equal(read.out.body.entry.revision, 7)
+
+    // 认自己靠 schema 里的字段名，不靠包名也不是数组下标。
+    const imposter = fakeRes()
+    await route.handler(
+      fakeReq({ body: JSON.stringify({ ns: 'billion-context', patch: { budget: 1 }, confirm: true }) }),
+      imposter,
+    )
+    assert.equal(imposter.out.status, 400)
+    assert.equal(imposter.out.body.error, 'wrong-ns')
+    assert.equal(calls.length, 0)
+
+    // 缺 confirm 一律拒：改配置是写动作，界面上要有明确的一次点击。
+    const noConfirm = fakeRes()
+    await route.handler(
+      fakeReq({ body: JSON.stringify({ ns: 'dsh-lattice', patch: { viewBudget: 6000 } }) }),
+      noConfirm,
+    )
+    assert.equal(noConfirm.out.status, 400)
+    assert.equal(noConfirm.out.body.error, 'no-confirm')
+
+    const write = fakeRes()
+    await route.handler(
+      fakeReq({
+        body: JSON.stringify({ ns: 'dsh-lattice', patch: { viewBudget: 6000 }, revision: 7, confirm: true }),
+      }),
+      write,
+    )
+    assert.equal(write.out.status, 200)
+    assert.deepEqual(calls, [{ ns: 'dsh-lattice', patch: { viewBudget: 6000 }, revision: 7 }])
   })
 
   /**
@@ -566,7 +648,7 @@ describe('插件契约', () => {
   it('宿主没有 webServer 时不注册路由、不抛，五个工具照常在', () => {
     const ctx = fakeCtx()
     assert.doesNotThrow(() => apply(ctx, baseConfig))
-    assert.deepEqual(ctx.injected, [['webServer']], '依赖照样声明，只是不会执行')
+    assert.deepEqual(ctx.injected, [['webServer'], ['webServer', 'settings']], '依赖照样声明，只是不会执行')
     assert.equal(ctx.routes.length, 0, '没有服务就不该有路由')
     // 与上一条合起来钉死「静默跳过」：不报错，但也不能什么都不做。
     assert.deepEqual(ctx.registered.map((t) => t.name).sort(), [

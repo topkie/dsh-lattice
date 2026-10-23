@@ -203,6 +203,19 @@ const LOG_EXPORT_ROUTE_PATH = '/api/lattice-log-export'
 const LOG_CLEAR_ROUTE_PATH = '/api/lattice-log-clear'
 
 /**
+ * 配置读写：界面「配置」页用它读可改字段的现状、写新值。
+ *
+ * 为什么不由本插件自己解析 `cordis.patch.yml`：宿主已经有一层做这件事的服务
+ * （`dsh-settings` + `dsh-config-editor`），它负责按 schema 生成表单、保留 YAML 注释、
+ * 原子写盘、加文件锁、写后热重载。自己再写一份文本级编辑器就是同一份文件两个写者 ——
+ * 宿主的配置编辑器与本插件先后写，后写的覆盖先写的，而两边都以为自己成功了。
+ *
+ * 这条路只碰**标了 volatile 的字段**：宿主对非 volatile 字段会直接拒绝
+ * （`Config field "..." is not volatile`），不是本插件另立规矩。
+ */
+const CONFIG_ROUTE_PATH = '/api/lattice-config'
+
+/**
  * 请求体上限。删除请求只有一个整数 id，几百字节足够。
  *
  * 为什么要有：`readJson` 是**累积**式的，没有上限就意味着任何能连上回环的人都能让宿主
@@ -259,28 +272,69 @@ const CONFIG_TOP_N_DEFAULT = 24 satisfies ThresholdValue<
 >
 
 export const Config = z.object({
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(true).description('总开关。关掉后本插件不注册工具与路由，改后需重启宿主'),
   /** 数据目录；留空表示 <数据目录>/lattice */
-  dataDir: z.string().default(''),
+  dataDir: z
+    .string()
+    .default('')
+    .description('数据目录；留空用 <DSH_HOME>/lattice。改它等于换一个库，需重启宿主'),
   /** 关掉即纯词面模式（降级路径） */
-  encoderEnabled: z.boolean().default(true),
-  encoderModel: z.string().default(DEFAULT_ENCODER_MODEL),
+  encoderEnabled: z.boolean().default(true).description('关掉即纯词面模式（不加载向量模型）。改后需重启宿主'),
+  encoderModel: z
+    .string()
+    .default(DEFAULT_ENCODER_MODEL)
+    .description('向量模型名。换模型要重建全库向量，改后需重启宿主'),
   /** 模型下载源；留空用官方源，网络受限环境可指向镜像 */
-  encoderMirror: z.string().default(''),
+  encoderMirror: z
+    .string()
+    .default('')
+    .description('模型下载源；留空用官方源。国内网络打不开 huggingface.co 时填镜像，改后需重启宿主'),
   /** 模型缓存目录；留空用运行时默认位置 */
-  encoderCacheDir: z.string().default(''),
+  encoderCacheDir: z.string().default('').description('模型缓存目录；留空用运行时默认位置。改后需重启宿主'),
   /** 并入阈值（余弦） */
-  tauJoin: z.number().min(0.6).max(0.95).default(DEFAULT_THRESHOLDS.tauJoin),
+  tauJoin: z
+    .number()
+    .min(0.6)
+    .max(0.95)
+    .default(DEFAULT_THRESHOLDS.tauJoin)
+    .description('有向量时并入已有主题所需的余弦下限。调高更保守，调低更易误并。改后需重启宿主'),
   /** 并入所需的词面重叠（bigram-Jaccard；实测标定依据见 pipeline/write.ts） */
-  tauLex: z.number().min(0.02).max(0.5).default(DEFAULT_THRESHOLDS.tauLex),
+  tauLex: z
+    .number()
+    .min(0.02)
+    .max(0.5)
+    .default(DEFAULT_THRESHOLDS.tauLex)
+    .description('有向量时并入所需的词面重叠（相邻二字组 Jaccard）。改后需重启宿主'),
   /** 无向量（encoder 降级）时并入所需的词面重叠 */
-  tauLexOnly: z.number().min(0.02).max(0.6).default(DEFAULT_THRESHOLDS.tauLexOnly),
+  tauLexOnly: z
+    .number()
+    .min(0.02)
+    .max(0.6)
+    .default(DEFAULT_THRESHOLDS.tauLexOnly)
+    .description('编码器降级、没有向量时并入所需的词面重叠，比 tauLex 高。改后需重启宿主'),
   /** 新建主题阈值 */
-  tauNew: z.number().min(0.2).max(0.8).default(DEFAULT_THRESHOLDS.tauNew),
+  tauNew: z
+    .number()
+    .min(0.2)
+    .max(0.8)
+    .default(DEFAULT_THRESHOLDS.tauNew)
+    .description('新建主题阈值：与所有已有主题的相似度都低于它才新建。改后需重启宿主'),
   /** 注入字符预算 */
-  viewBudget: z.number().min(1000).max(20000).default(DEFAULT_BUDGET),
+  viewBudget: z
+    .number()
+    .min(1000)
+    .max(20000)
+    .default(DEFAULT_BUDGET)
+    .volatile()
+    .description('单次召回注入的字符上限（不是固定长度，装不下第二条摘要就停）。改后下一次调用即生效'),
   /** 交注入层的候选数 */
-  topN: z.number().min(5).max(50).default(CONFIG_TOP_N_DEFAULT),
+  topN: z
+    .number()
+    .min(5)
+    .max(50)
+    .default(CONFIG_TOP_N_DEFAULT)
+    .volatile()
+    .description('交注入层的候选条数；实际条数受 viewBudget 限制。改后下一次调用即生效'),
   /**
    * 下面三项与**机器**相关，留 0 表示按机器内存与库大小自动推导（见 util/memory.ts）。
    * 之所以做成可选覆盖而不是固定默认值：合理取值取决于内存与磁盘，写死必然在别的机器上不合适。
@@ -309,6 +363,23 @@ interface HostServices {
   tools: { register(definition: unknown): unknown }
   /** 宿主 Web 服务；本插件只用 exact 路由这一小块。 */
   webServer: { register(route: { kind: string; path: string; handler: RouteHandler }): () => void }
+  /**
+   * 宿主设置服务（`dsh-settings`）。只用到「读现状」与「按命名空间改值」两项；
+   * 它自己的注入依赖是 configEditor 与 profileContext，与本插件无关。
+   */
+  settings: SettingsSlice
+}
+
+/**
+ * 设置服务的切片。命名空间（ns）是 profile 里那条 entry 的 id，不是包名。
+ *
+ * 返回值形状由宿主决定：`describe()` 给每个「含 volatile 字段」的命名空间一条描述
+ * （schema、当前值、revision）。本插件不复制那份形状，只把它原样转给界面 ——
+ * 复制一份就得跟着宿主版本走，而界面要的正是宿主说的那份。
+ */
+interface SettingsSlice {
+  describe(options?: unknown): unknown
+  update(namespace: string, patch: Record<string, unknown>, expectedRevision?: number): unknown
 }
 
 /**
@@ -334,6 +405,20 @@ type RouteHandler = (req: IncomingMessage, res: ServerResponse) => void | Promis
  * `config` 的类型仍是 `unknown`：它的形状由本文件的 Config schema 定义，而 z 的表在编译期
  * 是宽口径（见 src/modules.d.ts）—— 所以下面读 cfg.xxx 时每个取值都自己给了默认值。
  */
+/**
+ * 读一个可能被标了 volatile 的数值配置。
+ *
+ * schemastery 的 .volatile() 把字段解析成稳定引用（`get()` 每次返回当前值），没标的字段
+ * 就是普通值 —— 两种形状都要能吃，所以先看有没有 get。非法值退回默认值而不是抛错：
+ * 这个位置在激活路径上，为一个配置项抛错会让插件整个不加载。
+ */
+function liveNumber(value: unknown, fallback: number): number {
+  const ref = value as { get?: unknown } | null | undefined
+  const raw = typeof ref?.get === 'function' ? (ref as { get(): unknown }).get() : value
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : fallback
+}
+
 export function apply(ctx: Context, config: unknown): void {
   const cfg = (config ?? {}) as Record<string, unknown>
   if (cfg.enabled === false) return
@@ -355,8 +440,16 @@ export function apply(ctx: Context, config: unknown): void {
       tauLexOnly: Number(cfg.tauLexOnly ?? DEFAULT_THRESHOLDS.tauLexOnly),
       tauNew: Number(cfg.tauNew ?? DEFAULT_THRESHOLDS.tauNew),
     },
-    viewBudget: Number(cfg.viewBudget ?? DEFAULT_BUDGET),
-    topN: Number(cfg.topN ?? CONFIG_TOP_N_DEFAULT),
+    // 这两个字段在 Config 里标了 volatile：宿主把它们解析成稳定引用（可 get() 取当前值），
+    // 界面改完不重载插件就能生效。所以这里必须是 getter —— 写成属性快照的话，宿主把新值
+    // 写进配置文件、引用也更新了，我们手里还是旧数字，界面上会出现「改了、显示也变了、
+    // 行为没变」的假生效。读一次的开销是两次属性访问。
+    get viewBudget() {
+      return liveNumber(cfg.viewBudget, DEFAULT_BUDGET)
+    },
+    get topN() {
+      return liveNumber(cfg.topN, CONFIG_TOP_N_DEFAULT)
+    },
     resources: {
       mmapSize: Number(cfg.mmapSize ?? 0) > 0 ? Number(cfg.mmapSize) : undefined,
       cacheSize: Number(cfg.cacheSize ?? 0) > 0 ? Number(cfg.cacheSize) : undefined,
@@ -488,6 +581,23 @@ export function apply(ctx: Context, config: unknown): void {
         for (const dispose of disposers) dispose()
       }
     }, 'dsh-lattice: web routes')
+  })
+
+  // 配置读写单独一段注入。为什么把 'settings' 也写成激活条件：loader 是并发起所有顶层
+  // 条目的，dsh-settings 的 fiber 不保证比 webServer 先 ACTIVE；写成激活条件之后，
+  // 两样齐了才挂这条路由，缺席时它停在 PENDING、零副作用，插件其余部分照常工作。
+  ctx.inject(['webServer', 'settings'], (ctx: Context) => {
+    const webServer = hostService(ctx, 'webServer')!
+    const settings = hostService(ctx, 'settings')!
+    ctx.effect(
+      () =>
+        webServer.register({
+          kind: 'exact',
+          path: CONFIG_ROUTE_PATH,
+          handler: (req, res) => configRoute(settings, req, res),
+        }),
+      'dsh-lattice: config route',
+    )
   })
 
   tools.register(
@@ -883,6 +993,151 @@ function guardWrite(req: IncomingMessage, res: ServerResponse): boolean {
     return false
   }
   return true
+}
+
+/**
+ * 本插件在宿主设置里的命名空间（profile 里那条 entry 的 id）。
+ *
+ * 第一次读到就记住，写的时候只认它：ns 由浏览器半回传，若照单全收，等于让任何能连上
+ * 本机回环的人借这条路由改**别的插件**的配置。记住自己那一个之后，越界的 ns 直接拒。
+ */
+let ownNamespace: string | null = null
+
+/** 从 describe() 的返回里挑出「本插件那一条」。形状由宿主定，所以三种常见容器都试。 */
+function settingEntries(described: unknown): unknown[] {
+  if (Array.isArray(described)) return described
+  const row = described as Record<string, unknown> | null
+  if (row === null || typeof row !== 'object') return []
+  for (const key of ['namespaces', 'entries', 'items']) {
+    const value = row[key]
+    if (Array.isArray(value)) return value
+  }
+  return []
+}
+
+/**
+ * 认自己那一条的办法是看 schema 里有没有本插件特有的字段名，而不是比对包名 ——
+ * ns 是 profile entry 的 id（用户可以在 profile 里改名），包名不在描述里。
+ */
+function pickOwnEntry(described: unknown): { ns: string; entry: unknown } | null {
+  for (const item of settingEntries(described)) {
+    const row = item as Record<string, unknown> | null
+    if (row === null || typeof row !== 'object') continue
+    const ns = typeof row.ns === 'string' ? row.ns : typeof row.namespace === 'string' ? row.namespace : ''
+    if (ns === '') continue
+    const schema = row.schema as Record<string, unknown> | undefined
+    const props = (schema?.properties ?? schema?.dict) as Record<string, unknown> | undefined
+    if (props !== undefined && 'viewBudget' in props && 'topN' in props) return { ns, entry: row }
+  }
+  return null
+}
+
+/** 宿主设置里有哪些命名空间 —— 认不出自己时回给界面，用来判断是「没列出来」还是「列错了」。 */
+function namespaceIds(described: unknown): string[] {
+  const out: string[] = []
+  for (const item of settingEntries(described)) {
+    const row = item as Record<string, unknown> | null
+    if (row === null || typeof row !== 'object') continue
+    const ns = typeof row.ns === 'string' ? row.ns : typeof row.namespace === 'string' ? row.namespace : ''
+    if (ns !== '') out.push(ns)
+  }
+  return out
+}
+
+/**
+ * 配置页的数据源：GET 读现状、POST 改一个字段。
+ *
+ * 写走的不是本插件自己的存储，而是宿主的设置服务（见 CONFIG_ROUTE_PATH 的注释）。
+ * 于是「改完是否生效」不取决于我们：宿主对 volatile 字段是就地更新引用，本插件那两个
+ * getter 下一次读就拿到新值；非 volatile 字段宿主直接拒（`is not volatile`），
+ * 本插件不另立一套「允许改但不生效」的规矩。
+ */
+async function configRoute(
+  settings: SettingsSlice,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    if (!guardReadOnly(req, res)) return
+    try {
+      const described = settings.describe()
+      const own = pickOwnEntry(described)
+      ownNamespace = own === null ? null : own.ns
+      if (own === null) {
+        jsonOut(res, 200, {
+          ok: false,
+          error: 'not-listed',
+          // 这条是真的会发生的：宿主只列出「至少有一个字段标了 volatile」的命名空间。
+          message: '宿主设置里没有本插件；Config 里至少要有一个字段标了 volatile',
+          namespaces: namespaceIds(described),
+        })
+        return
+      }
+      jsonOut(res, 200, { ok: true, ns: own.ns, entry: own.entry })
+    } catch (e) {
+      jsonOut(res, 500, { ok: false, error: 'describe-failed', message: reasonOf(e) })
+    }
+    return
+  }
+
+  if (!guardWrite(req, res)) return
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch (e) {
+    jsonOut(res, 400, { ok: false, error: 'bad-body', message: reasonOf(e) })
+    return
+  }
+  const raw = (body ?? {}) as Record<string, unknown>
+  if (raw.confirm !== true) {
+    jsonOut(res, 400, { ok: false, error: 'no-confirm', message: '改配置要带 confirm: true' })
+    return
+  }
+  const patch = raw.patch
+  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+    jsonOut(res, 400, {
+      ok: false,
+      error: 'bad-patch',
+      message: 'patch 必须是对象，形如 {"viewBudget": 6000}',
+    })
+    return
+  }
+  const keys = Object.keys(patch as Record<string, unknown>)
+  if (keys.length === 0) {
+    jsonOut(res, 400, { ok: false, error: 'empty-patch', message: 'patch 里没有任何字段' })
+    return
+  }
+  const ns = typeof raw.ns === 'string' ? raw.ns : ''
+  if (ownNamespace === null) {
+    try {
+      const own = pickOwnEntry(settings.describe())
+      ownNamespace = own === null ? null : own.ns
+    } catch (e) {
+      jsonOut(res, 500, { ok: false, error: 'describe-failed', message: reasonOf(e) })
+      return
+    }
+  }
+  if (ownNamespace === null || ns !== ownNamespace) {
+    jsonOut(res, 400, {
+      ok: false,
+      error: 'wrong-ns',
+      message: '只接受本插件的命名空间；当前读到的是 ' + String(ownNamespace),
+    })
+    return
+  }
+  const revision = Number(raw.revision)
+  try {
+    const applied = settings.update(
+      ns,
+      patch as Record<string, unknown>,
+      Number.isFinite(revision) ? revision : undefined,
+    )
+    jsonOut(res, 200, { ok: true, applied })
+  } catch (e) {
+    // 409 不是「服务器坏了」：宿主的乐观锁冲突（revision 变了）落在这里，
+    // 界面据此提示「别处刚改过，刷新再试」。
+    jsonOut(res, 409, { ok: false, error: 'update-rejected', message: reasonOf(e) })
+  }
 }
 
 /**
