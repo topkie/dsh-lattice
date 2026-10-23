@@ -50,6 +50,8 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
       ['UNARCHIVE_URL', 'UNARCHIVE_ROUTE_PATH'],
       ['SPLIT_CONFIRM_URL', 'SPLIT_CONFIRM_ROUTE_PATH'],
       ['SPLIT_IGNORE_URL', 'SPLIT_IGNORE_ROUTE_PATH'],
+      // 配置：路径写错的形态是「配置页永远说读不到可改字段」，同样没有编译期信号。
+      ['CONFIG_URL', 'CONFIG_ROUTE_PATH'],
     ]
     for (const [clientName, hostName] of pairs) {
       assert.equal(
@@ -58,5 +60,17 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
         clientName + ' 与 ' + hostName + ' 不同值',
       )
     }
+  })
+
+  // 配置表单有两条形状上的约束，写错了不会有任何编译错误，只会「点了没反应」或「改的是空气」：
+  // ① 保存请求必须带 confirm（宿主半的写端点一律要求，缺了就是 400 no-confirm）；
+  // ② 必须把 revision 一起发出去（宿主的乐观锁，不传等于放弃「你改的时候别人没改过」这条检查）。
+  it('配置表单：保存请求带 confirm 与 revision，字段解析认 dict 与 refs', () => {
+    assert.match(client, /function configFields\(/, '浏览器半里没有 configFields：宿主返回的字段形状没人解析')
+    assert.match(client, /root\.dict !== undefined/, 'configFields 不再认根节点的 dict：宿主实测形状就是这样')
+    assert.match(client, /confirm: true/, '保存请求没带 confirm，宿主会直接拒')
+    assert.match(client, /revision: revision/, '保存请求没带 revision，宿主的乐观锁形同虚设')
+    // 字段清单只能来自宿主：写死一份字段名，宿主改配置后界面就会列出不存在的项。
+    assert.match(client, /fields\.map\(/, '配置表单没有遍历宿主给出的字段，清单被写死了')
   })
 })

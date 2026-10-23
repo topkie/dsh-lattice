@@ -113,6 +113,35 @@ function fetchStub(url) {
       viewBudget: 5000,
     },
     '/api/lattice-atoms': { ok: true, total: ROWS.length, offset: 0, limit: 20, rows: ROWS },
+    // 配置表单读这条。形状按宿主实测的来：字段名在根节点的 dict 里、映射到 refs 的 uid，
+    // 不是常见的 properties —— 用例照抄真实形状，写成一个更顺眼的形状就测不出解析错。
+    '/api/lattice-config': {
+      ok: true,
+      ns: 'lattice',
+      entry: {
+        ns: 'lattice',
+        autoGenerate: true,
+        revision: 3,
+        applies: 'live',
+        value: { viewBudget: 5000, topN: 24 },
+        base: { viewBudget: 5000, topN: 24 },
+        user: {},
+        schema: {
+          uid: 7895,
+          refs: {
+            7893: {
+              type: 'number',
+              meta: { min: 1000, max: 20000, default: 5000, description: '单次召回注入的字符上限' },
+            },
+            7894: {
+              type: 'number',
+              meta: { min: 5, max: 50, default: 24, description: '交注入层的候选条数' },
+            },
+            7895: { type: 'object', meta: { default: {} }, dict: { viewBudget: 7893, topN: 7894 } },
+          },
+        },
+      },
+    },
     // 配置页的两个面板都读这条：给一份空库响应，它们走「没有可查的东西」分支。
     '/api/lattice-audit': {
       ok: true,
@@ -252,7 +281,12 @@ describe('界面选项卡：管理与配置分开', () => {
       const panels = view
         .getRoot()
         .children.filter((n) => n !== null && typeof n === 'object' && typeof n.type === 'function')
-      assert.equal(panels.length, 2, '配置页里应当有健康面板与维护面板两个组件')
+      assert.equal(panels.length, 3, '配置页里应当有配置表单、健康面板、维护面板三个组件')
+      assert.deepEqual(
+        panels.map((n) => n.props.key),
+        ['config', 'health', 'maintenance'],
+        '配置页里三个组件的顺序或身份变了',
+      )
       // 读数卡片：配置页要回答「现在按什么在跑」，值来自 /api/lattice-ping-mini。
       const cards = descendantsOf(view.getRoot()).filter((n) =>
         String(n.props.className ?? '')
@@ -264,7 +298,7 @@ describe('界面选项卡：管理与配置分开', () => {
       assert.ok(configText.includes('C:\\Users\\test'), '数据目录的值没有上屏')
       assert.ok(configText.includes('Xenova/bge-small-zh-v1.5'), '编码器没有上屏')
       assert.ok(configText.includes('tauJoin'), '四个写入阈值没有上屏')
-      assert.ok(configText.includes('这一页只读'), '配置页没有写明它只读、改配置要去宿主配置')
+      assert.ok(configText.includes('这些读数是只读的'), '配置页没有写明读数只读、能改的项在下面的表单里')
       assert.equal(
         descendantsOf(view.getRoot()).some(
           (n) => n.type === 'input' && String(n.props.placeholder ?? '').includes('搜索记忆'),
