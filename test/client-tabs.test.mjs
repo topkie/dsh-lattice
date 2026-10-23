@@ -16,7 +16,9 @@ let bundleSeq = 0
 function ensureDocument() {
   globalThis.document = {
     querySelector: () => null,
-    createElement: () => ({ dataset: {} }),
+    createElement: (tag) => ({ dataset: {}, tagName: String(tag).toUpperCase() }),
+    // 导出用例要挂一个 <a> 再点它；别的用例不会用到 body。
+    body: { appendChild: () => {} },
     head: { appendChild: (tag) => styleTags.push(tag) },
   }
 }
@@ -276,16 +278,21 @@ describe('界面选项卡：管理与配置分开', () => {
       await settle()
       const configText = textOf(view.getRoot())
       assert.ok(configText.includes('导出日志'), '配置页里没有状态条上的维护入口')
-      // 两个面板是函数组件，替身不执行它们（只创建元素节点），所以按「直接子元素里有几个
-      // 函数组件」判断它们有没有被放进配置页 —— 没有就数不到这两个。
+      // 三个面板是函数组件，替身不执行它们（只创建元素节点），所以按「直接子元素里有几个
+      // 函数组件」判断它们有没有被放进配置页 —— 没有就数不到这三个。
       const panels = view
         .getRoot()
         .children.filter((n) => n !== null && typeof n === 'object' && typeof n.type === 'function')
-      assert.equal(panels.length, 4, '配置页里应当有配置表单、健康面板、维护面板、导出四个组件')
+      assert.equal(panels.length, 3, '配置页里应当有配置表单、健康面板、维护面板三个组件')
       assert.deepEqual(
         panels.map((n) => n.props.key),
-        ['config', 'health', 'maintenance', 'export'],
-        '配置页里四个组件的顺序或身份变了',
+        ['config', 'health', 'maintenance'],
+        '配置页里三个组件的顺序或身份变了',
+      )
+      // 导出那块是静态节点（两个按钮 + 一句说明），不进函数组件，所以按按钮文本找。
+      assert.ok(
+        descendantsOf(view.getRoot()).some((n) => n.type === 'button' && textOf(n) === '导出 JSON'),
+        '配置页里没有导出按钮',
       )
       // 读数卡片：配置页要回答「现在按什么在跑」，值来自 /api/lattice-ping-mini。
       const cards = descendantsOf(view.getRoot()).filter((n) =>
@@ -340,5 +347,78 @@ describe('界面选项卡：管理与配置分开', () => {
     assert.ok(bgOf(onRule), '选中态没有背景色')
     assert.notEqual(bgOf(onRule), bgOf(tabRule), '选中态与未选中态的背景色一样，看不出选了哪一个')
     assert.match(ruleOf('.lattice-card'), /border-radius:/, '读数卡片没有圆角')
+  })
+
+  /**
+   * 导出：点按钮必须**真的请求导出路由并落盘**，不是打开一个新窗口。
+   *
+   * 这条踩过一次（2026-10-24 用户实测「两个按钮点击无反应」）：原实现用 `window.open`，
+   * 宿主渲染进程不放行新窗口 —— 既不下载也不报错，界面上就是「按钮坏了」。
+   * 所以判据不能只钉「按钮存在」，要钉「点下去 fetch 到了路由、创建了带 download 的 <a> 并点过它」。
+   */
+  it('导出按钮：点下去请求导出路由，并把内容交给一个带 download 的 <a>', async () => {
+    const originalFetch = globalThis.fetch
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    const originalDoc = globalThis.document
+    const clicked = []
+    const appended = []
+    const created = []
+    let requested = ''
+    URL.createObjectURL = () => 'blob:download'
+    URL.revokeObjectURL = () => {}
+    globalThis.fetch = async (url) => {
+      const href = String(url)
+      // 只拦导出这一条；管理页自己的列表与搜索请求照旧走替身数据。
+      if (!href.includes('/api/lattice-export')) return fetchStub(url)
+      requested = href
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'attachment; filename="lattice-memory-20261024.json"' },
+        blob: async () => new Blob(['{"ok":true}'], { type: 'application/json' }),
+        text: async () => '{"ok":true}',
+      }
+    }
+    try {
+      const view = await mount()
+      await settle()
+      // mount 会重装 document，所以替身要在装配之后再换。
+      globalThis.document = {
+        querySelector: () => null,
+        createElement: (tag) => {
+          const node = {
+            tagName: String(tag).toUpperCase(),
+            click: () => clicked.push(node),
+            remove: () => {},
+          }
+          created.push(node)
+          return node
+        },
+        body: { appendChild: (node) => appended.push(node) },
+        head: { appendChild: () => {} },
+      }
+      view.click('配置')
+      await settle()
+      view.click('导出 JSON')
+      await settle()
+
+      assert.match(requested, /\/api\/lattice-export\?format=json$/, '导出按钮没走导出路由')
+      const anchor = created.find((node) => node.tagName === 'A')
+      assert.ok(anchor, '点导出没有创建 <a>：内容不会落盘，用户只会看到按钮没反应')
+      assert.equal(
+        anchor.download,
+        'lattice-memory-20261024.json',
+        '文件名应当取自 content-disposition：客户端自己编的名字和服务端的日期可能差一天',
+      )
+      assert.equal(anchor.href, 'blob:download', '下载地址不是刚取回的内容')
+      assert.equal(clicked.length, 1, '<a> 没有被点过，浏览器不会开始下载')
+      assert.ok(appended.includes(anchor), '<a> 要挂进文档，否则有的浏览器不认这次点击')
+    } finally {
+      globalThis.fetch = originalFetch
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+      globalThis.document = originalDoc
+    }
   })
 })

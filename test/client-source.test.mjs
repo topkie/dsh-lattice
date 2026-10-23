@@ -107,16 +107,27 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
    * 导出按钮：两个格式各一条，都走同一只读路由，格式只放在查询串里。
    *
    * 写错的形态是「点了没反应」或「两个按钮下到同一份文件」—— 浏览器里都没有信号，
-   * 只有点下去的人会发现。所以这里钉住两件事：请求确实走 EXPORT_URL、format 有两个取值。
+   * 只有点下去的人会发现。所以这里钉住三件事：请求确实走 EXPORT_URL、format 有两个取值、
+   * 下载不是 window.open（宿主渲染进程不放行新窗口，点了既不下载也不报错）。
    */
   it('导出按钮：两种格式各走一次路由，格式只在查询串里', () => {
     assert.match(
       client,
-      /window\.open\(EXPORT_URL \+ '\?format=' \+ format, '_blank'\)/,
-      '导出按钮没走 EXPORT_URL：换成别的路径只会下到一份 404 页面',
+      /downloadFile\(EXPORT_URL \+ '\?format=' \+ format, fallback\)/,
+      '导出按钮没走 EXPORT_URL 或没走下载助手：换成别的路径只会下到一份 404 页面',
     )
     for (const format of ['json', 'md']) {
-      assert.match(client, new RegExp("open\\('" + format + "'\\)"), '导出少了一个格式按钮：' + format)
+      assert.match(client, new RegExp("onExport\\('" + format + "'\\)"), '导出少了一个格式按钮：' + format)
     }
+    assert.match(
+      client,
+      /configKids\.push\(exportPanel\(exportMemory\)\)/,
+      '导出界面没接上动作：按钮点了不会有任何请求',
+    )
+    assert.doesNotMatch(
+      client,
+      /window\.open\(/,
+      '导出又用回了 window.open：宿主渲染进程不放行新窗口，点了没反应也没报错',
+    )
   })
 })
