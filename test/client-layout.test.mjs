@@ -13,17 +13,23 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-const bundleRegistrations = []
-const styleTags = []
+let bundleRegistrations = []
+let styleTags = []
 
 // 浏览器半在模块求值时注册 bundle 并注入样式，所以替身必须在 import 之前就位。
-globalThis.window = { __ModuleLoader__: { load: (reg) => bundleRegistrations.push(reg) } }
-globalThis.document = {
-  querySelector: () => null,
-  createElement: () => ({ dataset: {} }),
-  head: { appendChild: (tag) => styleTags.push(tag) },
+// 装配放在用例里、URL 带查询串：同一个进程里还有别的界面用例 import 这份文件，
+// 只要有一个先求值，后面的就命中 ESM 模块缓存 —— factory 与样式一个都取不到。
+async function loadBundle() {
+  bundleRegistrations = []
+  styleTags = []
+  globalThis.window = { __ModuleLoader__: { load: (reg) => bundleRegistrations.push(reg) } }
+  globalThis.document = {
+    querySelector: () => null,
+    createElement: () => ({ dataset: {} }),
+    head: { appendChild: (tag) => styleTags.push(tag) },
+  }
+  await import(new URL('../lib/client.js?layout', import.meta.url).href)
 }
-await import(new URL('../lib/client.js', import.meta.url).href)
 
 /** 带状态的 React 替身：组件的两次挂载取数要真的走完，树里才会有列表。 */
 function createReactStub() {
@@ -141,6 +147,7 @@ function textOf(node) {
 
 describe('界面布局：搜索框固定在列表之外', () => {
   it('搜索条渲染在列表之前，列表自己滚，固定用 sticky 而不是 fixed', async () => {
+    await loadBundle()
     assert.equal(bundleRegistrations.length, 1, '浏览器半应当注册一个 bundle')
 
     const ui = createReactStub()

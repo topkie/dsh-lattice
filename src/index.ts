@@ -6,7 +6,7 @@
 //      （`lattice_feedback` 的工具定义仍在 src/tools/index.ts 里，但未注册给模型）
 //
 // 外加十五条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
-//   /api/lattice-ping-mini      库的规模（最小实跑留下的座位验证，实测通过的那条基线）
+//   /api/lattice-ping-mini      库的规模与「现在按什么在跑」的读数（界面配置页取这一条）
 //   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径（**不含正文**）
 //   /api/lattice-atom           详情：按 id 取一条的全文（点开才取；只读，与工具无关）
 //   /api/lattice-search         搜索：与 lattice_recall 同一条数据路径，但**不记命中**
@@ -34,7 +34,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import type { ThresholdValue } from './threshold-types.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
@@ -583,6 +583,20 @@ function miniPing(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse)
       // 规模含已归档：这一项回答的是「库有多大」，不是「默认列表有多少条」。
       // 用默认口径会让归档悄悄改变库的规模读数 —— 而归档什么都没删。
       atoms: listAtoms(rt.db, { limit: 1, includeArchived: true }).total,
+      // 以下几项是界面「配置」页的读数：回答「现在按什么在跑」。
+      // 全是配置值与库路径，**不加载编码器** —— 报的是「配的是哪个模型」，
+      // 不是「模型此刻在不在内存里」（那是 lattice_ping 的 caches.encoder）。
+      dataDir: dirname(rt.file),
+      encoder: {
+        enabled: cfg.encoderEnabled !== false,
+        model: cfg.encoderModel,
+        mirror: cfg.encoderMirror,
+      },
+      tauJoin: cfg.thresholds.tauJoin,
+      tauLex: cfg.thresholds.tauLex,
+      tauLexOnly: cfg.thresholds.tauLexOnly,
+      tauNew: cfg.thresholds.tauNew,
+      viewBudget: cfg.viewBudget,
     })
   } catch (e) {
     // 读库失败要说出来 —— 页面上一句「取数失败」比空白更能定位问题。
