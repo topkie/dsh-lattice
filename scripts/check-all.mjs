@@ -73,13 +73,14 @@ const STEPS = [
 ]
 
 /**
- * 在 main 上跑门禁时提醒一句。
+ * 在长期分支（main / dev）上跑门禁时提醒一句。
  *
  * 为什么需要它：分支流程的规矩写在文档与记忆卡里，但那些都在**行动路径之外** ——
  * 做任务时按「写码 → 测 → 提交」的惯性走，没有任何一步会提醒「还没建分支」。
- * 实测结果就是：刚写下规矩，下一个任务就直接提交到了 main。
+ * 实测结果就是：刚写下规矩，下一个任务就直接提交到了主干分支。
  *
- * 只提示不阻断：合并后回 main 复验是合法操作，强行失败会让脚本变成阻力然后被绕过。
+ * 两个长期分支都提醒：main 只放发布，dev 是开发汇总，两个都不是干活的地方。
+ * 只提示不阻断：合并后回 dev 复验是合法操作，强行失败会让脚本变成阻力然后被绕过。
  */
 function checkBranch() {
   // 分支由调用方通过环境变量传入（GIT_BRANCH）。
@@ -89,11 +90,16 @@ function checkBranch() {
   // 传空值时如实报「未知」，不猜。
   const branch = (process.env.GIT_BRANCH ?? '').trim()
   if (branch === '') return '分支：未知（未通过 GIT_BRANCH 传入）'
-  if (branch !== 'main') return '分支：' + branch
-  if (process.env.CI === 'true' || process.env.CI === '1') return '分支：main（CI）'
+  if (branch !== 'main' && branch !== 'dev') return '分支：' + branch
+  if (process.env.CI === 'true' || process.env.CI === '1') return '分支：' + branch + '（CI）'
   return (
-    '分支：main —— 提醒：门禁本应在任务分支上跑（feat/xxx），合并后再回 main 复验一次。' +
-    ' 现在这条线是直接在 main 上做吗？'
+    '分支：' +
+    branch +
+    ' —— 提醒：门禁本应在任务分支上跑（feat/xxx），合并后再回 ' +
+    branch +
+    ' 复验一次。现在这条线是直接在 ' +
+    branch +
+    ' 上做吗？'
   )
 }
 

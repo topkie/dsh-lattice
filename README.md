@@ -86,6 +86,9 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 装成了的样子：设置的侧边栏出现「lattice 记忆库」这一页，`lattice_ping` 报的 `version` 与你要装的版本一致。
 
+`git clone` 默认取 `main`，那是发布分支，装到的是最近一次发布的代码。想要开发中的最新改动走第四节，
+那边会切到 `dev`。
+
 ### 二、插件管理器（图形化）
 
 在宿主的插件管理界面里搜索 `dsh-lattice`，点安装，重启宿主。依赖登记与插件清单由界面代做，
@@ -106,12 +109,16 @@ pnpm add dsh-lattice
 ### 四、GitHub 源码
 
 想改代码、或者要用还没发到 npm 的提交时走这条。需要 Node 22.13 以上、git 与 pnpm ≥ 9。
+
+仓库有两个长期分支：`main` 只放发布，`dev` 是开发汇总。默认 clone 拿到 `main`，「还没发到 npm 的
+提交」在 `dev` 上，所以要显式切过去。
 `node` 要在 `PATH` 里 —— 有几个依赖的安装脚本会直接调用 `node` 命令，找不到就会装出
 缺原生二进制的半成品。
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git
 cd dsh-lattice
+git checkout dev
 pnpm install --no-frozen-lockfile
 pnpm run build
 ```
@@ -123,8 +130,9 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 ```
 
 再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
-更新到新提交：源码目录 `git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
-再到 profile 目录重跑一次那条 `pnpm add`，重启。
+更新到新提交：源码目录（在 `dev` 上）`git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
+再到 profile 目录重跑一次那条 `pnpm add`，重启。想在发布版本与开发版本之间切换，就在源码目录
+`git checkout main` 或 `git checkout dev` 再走一遍这三步。
 
 ### 第一次加载要下模型
 

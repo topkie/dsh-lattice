@@ -27,6 +27,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 只允许从 main 发布：main 只放发布过的提交，dev 才是开发汇总。任何分支上推一个 v* tag
+      # 都会触发这个 workflow，所以这条断言是「只能在 main 上发版」唯一的机制保障 ——
+      # 少了它，那条规矩就只是文档里的一句话。
+      # 判据是「tag 的提交是 main 的祖先」，不是「等于 main 末端」：发布之后 main 还会前进，
+      # 旧 tag 仍然成立。--depth=1 只取 main 末端，不影响 is-ancestor 的结论。
+      - name: 核对 tag 在 main 上
+        run: |
+          git fetch --depth=1 origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "tag $GITHUB_REF_NAME 指向的提交不在 main 上 —— 只在 main 上发布"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME 在 main 上"
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.9
@@ -57,9 +71,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # tag 可能落在任意分支上，所以不能假设 main 已经绿过。与 CI 同一条命令（11 项，
-      # 含构建与 499 条测试）—— 发布前跑这一遍是「发出去的东西至少和合入时一样」，
-      # 不是重复劳动。
+      # 上一步已确认这个提交在 main 上，但「在 main 上」不等于「这份代码刚跑过门禁」——
+      # tag 可能补打在几天前的提交上。与 CI 同一条命令（11 项，含构建与 499 条测试），
+      # 发布前跑这一遍是「发出去的东西至少和它写的时候一样」，不是重复劳动。
       - run: node scripts/check-all.mjs
 
       # dist/ 不在版本控制里，上一步已构建。这一步把六项白名单实际打进去什么、体积多少

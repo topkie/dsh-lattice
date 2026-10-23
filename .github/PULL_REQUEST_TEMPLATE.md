@@ -21,7 +21,7 @@ tests …… / fail 0
 
 ## 提交前自检
 
-- [ ] 从 `main` 签出的任务分支；没有在 `main` 上直接提交
+- [ ] 从 `dev` 签出的任务分支；没有直接往 `dev` 或 `main` 上提交
 - [ ] 门禁 11 项全绿，上面贴了最后一行
 - [ ] 提交信息符合约定式提交，正文写了为什么
 - [ ] 改了依赖就把 `pnpm-lock.yaml` 一起提交（否则 CI 报 `ERR_PNPM_OUTDATED_LOCKFILE`）

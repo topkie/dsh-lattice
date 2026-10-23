@@ -12,11 +12,15 @@
 | 每个版本是什么 | 一批能单独验收的改动。做完打一个 tag，不跳号 |
 | 版本号 | 语义化版本。破坏性改动进 major，新增进 minor，修复进 patch |
 | 0.x 期间的例外 | 破坏性改动可以进 minor，但 CHANGELOG 该段要写 `### Breaking` |
+| 分支 | `main` 只放发布：接收 `dev` 的合并、打 tag。开发与 PR 都在 `dev` 上 |
 
 版本号只有一个来源：`package.json` 的 `version`。插件的 `VERSION` 常量运行时从它读
 （`src/index.ts` 里那三行），`lattice_ping` 报的就是它。所以改版本号只改一处，不要在两处各写一遍。
 
 ## 一、准备
+
+这一节都在 `dev` 上做。版本号与 CHANGELOG 是「要发出去的内容」，得先合进 `dev`、再随 `dev`
+一起进 `main`。`main` 上不直接改文件 —— 那条分支只有两个动作：接收 `dev` 的合并、打 tag。
 
 1. **切 CHANGELOG**。把 `[Unreleased]` 改成 `## [x.y.z] - YYYY-MM-DD`，并在文件顶部重开一个空的
    `## [Unreleased]`。该段按 `Added` / `Changed` / `Fixed` / `Breaking` 分类，每条写清后果而不只是
@@ -42,6 +46,7 @@
 5. **干净副本装一遍**。涉及依赖、构建或 `files` 白名单的改动必须做，其余可选：
 
    ```bash
+   git checkout main                     # 验的是要发出去的那份，不是 dev 上的中间态
    git worktree add ../clean --detach HEAD
    cd ../clean && pnpm install --frozen-lockfile && pnpm run build
    ```
@@ -49,11 +54,23 @@
    `--frozen-lockfile` 与 CI 用的是同一个开关。它红了说明 `pnpm-lock.yaml` 与 `package.json`
    不同步，本地能装而 CI 装不上就是这一类。
 
-## 二、提交与打 tag
+## 二、合进 main 与打 tag
+
+前提：「一、准备」里的改动已经在 `dev` 上、门禁绿过。
 
 ```bash
+git checkout dev
+git pull --ff-only origin dev
 git checkout main
-git merge --ff-only <任务分支>        # 分支上已 squash 成一条时用这个
+git pull --ff-only origin main
+git merge --ff-only dev
+```
+
+`--ff-only` 是刻意的：它红了说明 `main` 上有 `dev` 没有的提交（多半是有人在 `main` 上直接改过）。
+停下查清那一笔是什么，不要用 `--no-ff` 盖过去 —— 一旦两条分支分叉，之后每次发版都得手工合一次，
+而分叉本身就说明有人绕过了流程。
+
+```bash
 git tag -a vX.Y.Z -m "X.Y.Z：<一句话>"
 git push origin main
 git push origin vX.Y.Z
@@ -80,7 +97,7 @@ CHANGELOG 里该段（从 `## [x.y.z]` 到下一个 `## [` 之前）→ Publish�
 推 tag 之后由 `.github/workflows/release.yml` 发，不需要在本机操作。它按顺序做四件事：
 
 1. 核对 tag 与 `package.json` 的版本一致（`v0.10.0` 对 `0.10.0`），不一致直接失败；
-2. 跑一遍门禁 —— tag 可能落在任意分支上，不能假设 `main` 已经绿过；
+2. 核对 tag 指向的提交在 `main` 上（不在就直接失败），然后跑一遍门禁；
 3. `npm pack --dry-run`，把六项白名单实际打进包里什么、体积多少留在日志里；
 4. `npm publish --access public --provenance`。
 
@@ -138,6 +155,7 @@ npm view dsh-lattice version dist-tags
 | 推了 tag 但 CI 发布失败（npm 上还没有这个版本） | 修好后删 tag 重推：`git push --delete origin vX.Y.Z` 加 `git tag -d vX.Y.Z`，再重打重推 | 删 tag 会再触发一次发布流程；若上一次其实已经发成功，重推只会撞「该版本已存在」 |
 | trusted publisher 漏登记，或 workflow 改了文件名 | 到包设置页补登记或改名字，然后删 tag 重推 | 登记与那次 CI 运行之间没有重试，必须重推来触发 |
 | tag 打早了（不是要发的那个提交） | 同上，删 tag 重打 | 一旦 npm 上已有这个版本，改内容就只能发下一个号 |
+| workflow 报「tag 不在 main 上」 | 删 tag，把那笔提交合进 `dev`、再按第二节合进 `main`，重打重推 | 这一步失败时 npm 上还没有新版本，可以安全重试 |
 
 一条实测过的限制：用**绕过双因子**的 granular token 不能 unpublish，会返回
 `403 ... may not perform this action`。要保留「24 小时内可收回」这个能力，就得用能过双因子的方式登录；
@@ -148,6 +166,9 @@ npm view dsh-lattice version dist-tags
 npm 上有 `dsh-lattice@0.0.0` 与一个 `0.0.0-stage`，都是占位：前者是首次发布时随版本建立的占位包，
 后者是 npm 在首次发布流程里自动写入的临时版本，已标记为弃用。正式版本发出去之后，`latest` 会指向
 正式版本，这两个占位不需要手动处理。
+
+`本地已建 `dev`（与 `main` 同起点），远端仓库尚未推送 —— 建远端时两个分支一起推，
+并把默认分支留在 `main`（`git clone` 拿到的应当是发布版本）。
 
 `.github/workflows/release.yml` 已就位，但**首次使用前要先做上面那次 trusted publisher 登记**，
 否则推 tag 会在 publish 这一步失败。这种失败是可恢复的：npm 上还没有新版本，补登记后删 tag 重推即可。
