@@ -42,6 +42,8 @@
 （`WRITE_COST_MEASURED_MS` 原先既没有测试、又缺测量条件，所以各记一次），`DUP_LEX` 也不再出现在
 `--needs-review` 里，重排去重这一类因此是 0 条。
 
+另：七个选择值（`tauJoin` / `tauLex` / `tauNew` / `tauLexOnly` / `DUP_LEX` / `DUP_TEXT` / `NEAR_COS_MIN`）在 2026-10-23 做过一次灵敏度实测 —— 建一个 98 条记忆的库，每个量取当前值附近几档看结果怎么变。七个都保持现值：五个给出了「当前值坐在什么位置上」（`NEAR_COS_MIN` 0.70 是零孤立点的最后一档；`DUP_TEXT` 的两类分布相差 0.68；`tauJoin` 与 `tauLex` 各自换档会让主题数变 15%–46%），两个测不出（`tauNew` 与 `DUP_LEX` 的触发分支在这批数据里一次都没走到）。表与判定见 `docs/THRESHOLDS.md` 第 8 节。
+
 | 分类 | 影响 | 自查命令（在仓库根跑） |
 |---|---|---|
 | 落位判据（9 条 = `--unguarded` 8 + `--needs-review` 1） | 写一条记忆时「并入已有主题还是新建」的判定线与候选规模。三条并列阈值只在一次内部中文标定里定过，登记项缺编码模型与语料规模 —— 换编码模型或换领域时要重标，但仓库里推不出怎么重标 | `node scripts/print-thresholds.mjs --unguarded --area=落位`（8 条）；`node scripts/print-thresholds.mjs --needs-review`（1 条，段为落位） |
