@@ -216,6 +216,37 @@ const LOG_CLEAR_ROUTE_PATH = '/api/lattice-log-clear'
 const CONFIG_ROUTE_PATH = '/api/lattice-config'
 
 /**
+ * 等宿主把一次配置改动落到 describe() 上：总预算与轮询间隔。
+ *
+ * 实测生效延迟 30–130 ms（见 waitForOwnEntry）。1200 ms 是四倍余量：超了说明宿主真的没接，
+ * 那该报 pending 让用户知道，而不是让界面无限等。
+ */
+const APPLY_WAIT_MS = 1200 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '配置'
+    why: '宿主把一次配置改动反映到 describe() 上是异步的：0.9.1 本机实测 30–140 ms 之后才看得到新值（update 返回时 describe 里仍是旧值）。1200 ms 是实测上限的十倍余量，不是测出来的最优点 —— 取大一点只让「宿主没接」这种故障晚一秒被报出来，取小了会把正常生效误报成 pending'
+    failsWhen: [
+      '宿主改成分批或延迟提交（生效延迟变大）',
+      '机器很忙时改动落地的延迟',
+      '用户对「保存」按钮转圈的容忍度',
+    ]
+    guardedBy: ['test/plugin.test.mjs']
+    affects: '配置页点保存之后最多等多久；等到了回带新值，等不到回 pending 让用户知道宿主还没确认'
+  }
+>
+const APPLY_POLL_MS = 20 satisfies ThresholdValue<
+  'chosen',
+  {
+    area: '配置'
+    why: '轮询 describe() 的间隔：describe 是同步调用、开销很小，20 ms 让一次 1200 ms 的等待最多问 60 次，够密到看不出延迟，又不至于空转'
+    failsWhen: ['宿主 describe() 变慢（同步读全量配置）']
+    guardedBy: ['test/plugin.test.mjs']
+    affects: '等待宿主生效时的轮询密度与最多轮询次数'
+  }
+>
+
+/**
  * 请求体上限。删除请求只有一个整数 id，几百字节足够。
  *
  * 为什么要有：`readJson` 是**累积**式的，没有上限就意味着任何能连上回环的人都能让宿主
@@ -995,14 +1026,6 @@ function guardWrite(req: IncomingMessage, res: ServerResponse): boolean {
   return true
 }
 
-/**
- * 本插件在宿主设置里的命名空间（profile 里那条 entry 的 id）。
- *
- * 第一次读到就记住，写的时候只认它：ns 由浏览器半回传，若照单全收，等于让任何能连上
- * 本机回环的人借这条路由改**别的插件**的配置。记住自己那一个之后，越界的 ns 直接拒。
- */
-let ownNamespace: string | null = null
-
 /** 从 describe() 的返回里挑出「本插件那一条」。形状由宿主定，所以三种常见容器都试。 */
 function settingEntries(described: unknown): unknown[] {
   if (Array.isArray(described)) return described
@@ -1064,7 +1087,37 @@ function namespaceIds(described: unknown): string[] {
 }
 
 /**
- * 配置页的数据源：GET 读现状、POST 改一个字段。
+ * 等宿主把这次改动反映到 describe() 上，最多等 APPLY_WAIT_MS。
+ *
+ * 实测（2026-10-24，本机 0.9.1）：`settings.update()` 返回时 describe() 里还是**旧值**，
+ * 约 30–130 ms 后才变成新值（POST 往返 25 ms，值在 137 ms 内出现）。所以「更新后的那一条」
+ * 不能在手边直接取 —— 取到的必然是 POST 之前的状态，界面拿它当新基线就会把输入框弹回旧值。
+ *
+ * 超时返回最后一次读到的（可能是旧值），由调用方标记 `pending` 让界面说清楚「还没确认」，
+ * 而不是把一个没生效的值当成已经生效。
+ */
+async function waitForOwnEntry(settings: SettingsSlice, patch: Record<string, unknown>): Promise<unknown> {
+  const deadline = Date.now() + APPLY_WAIT_MS
+  let last: unknown = null
+  for (;;) {
+    try {
+      const own = pickOwnEntry(settings.describe())
+      if (own !== null) {
+        last = own.entry
+        const row = own.entry as Record<string, unknown>
+        const value = row.value as Record<string, unknown> | undefined
+        const seen = value !== undefined && Object.keys(patch).every((key) => value[key] === patch[key])
+        if (seen) return own.entry
+      }
+    } catch {
+      // describe 抛错时继续等：宿主可能正在重建设置。
+    }
+    if (Date.now() >= deadline) return last
+    await new Promise((resolve) => setTimeout(resolve, APPLY_POLL_MS))
+  }
+}
+
+/** * 配置页的数据源：GET 读现状、POST 改一个字段。
  *
  * 写走的不是本插件自己的存储，而是宿主的设置服务（见 CONFIG_ROUTE_PATH 的注释）。
  * 于是「改完是否生效」不取决于我们：宿主对 volatile 字段是就地更新引用，本插件那两个
@@ -1083,7 +1136,6 @@ async function configRoute(
     try {
       const described = settings.describe()
       const own = pickOwnEntry(described)
-      ownNamespace = own === null ? null : own.ns
       if (own === null) {
         jsonOut(res, 200, {
           ok: false,
@@ -1130,21 +1182,24 @@ async function configRoute(
     jsonOut(res, 400, { ok: false, error: 'empty-patch', message: 'patch 里没有任何字段' })
     return
   }
+  // 每次都现认，不缓存：ns 由浏览器半回传，照单全收等于让任何能连上本机回环的人
+  // 借这条路由改**别的插件**的配置；而把它记在模块变量里，就变成「进程第一次读到什么
+  // 就永久认什么」—— 宿主换了 profile 或给条目改过 id 之后，那条缓存是错的。
+  // describe() 是一次同步调用，现认的成本可以忽略。
   const ns = typeof raw.ns === 'string' ? raw.ns : ''
-  if (ownNamespace === null) {
-    try {
-      const own = pickOwnEntry(settings.describe())
-      ownNamespace = own === null ? null : own.ns
-    } catch (e) {
-      jsonOut(res, 500, { ok: false, error: 'describe-failed', message: reasonOf(e) })
-      return
-    }
+  let ownNs: string | null = null
+  try {
+    const own = pickOwnEntry(settings.describe())
+    ownNs = own === null ? null : own.ns
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'describe-failed', message: reasonOf(e) })
+    return
   }
-  if (ownNamespace === null || ns !== ownNamespace) {
+  if (ownNs === null || ns !== ownNs) {
     jsonOut(res, 400, {
       ok: false,
       error: 'wrong-ns',
-      message: '只接受本插件的命名空间；当前读到的是 ' + String(ownNamespace),
+      message: '只接受本插件的命名空间；当前读到的是 ' + String(ownNs),
     })
     return
   }
@@ -1155,17 +1210,11 @@ async function configRoute(
       patch as Record<string, unknown>,
       Number.isFinite(revision) ? revision : undefined,
     )
-    // 把更新后的那一条一并回带。界面保存后要立刻显示新值：让它自己再打一遍 GET，
-    // 拿到的是缓存或尚未刷新的旧值，输入框就会「弹回」——用户看到的是保存失败的样子。
-    // 这里读不到也不报错：界面收到没有 entry 的响应时会退回「再取一次」。
-    let entry: unknown = null
-    try {
-      const own = pickOwnEntry(settings.describe())
-      if (own !== null) entry = own.entry
-    } catch {
-      entry = null
-    }
-    jsonOut(res, 200, { ok: true, applied, entry })
+    // 把真正更新后的那一条回带。update 返回时 describe 还是旧值（见 waitForOwnEntry），
+    // 所以必须等它变；等不到就标 pending，让界面说「已提交，宿主还没确认」，
+    // 而不是拿一个旧值当新基线把输入框弹回去。
+    const entry = await waitForOwnEntry(settings, patch as Record<string, unknown>)
+    jsonOut(res, 200, { ok: true, applied, entry, pending: entry === null })
   } catch (e) {
     // 409 不是「服务器坏了」：宿主的乐观锁冲突（revision 变了）落在这里，
     // 界面据此提示「别处刚改过，刷新再试」。

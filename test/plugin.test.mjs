@@ -275,6 +275,48 @@ describe('插件契约', () => {
   })
 
   /**
+   * 宿主对 volatile 字段的提交是**异步**的：实测 update 返回时 describe 还是旧值，30–130 ms 后才变
+   * （2026-10-24 本机实测）。这条用例把那个延迟做进替身里 —— 用同步替身测「回带的是新值」，
+   * 测出来的只是替身的性质，测不到真实宿主的时序。
+   */
+  it('宿主异步生效时，POST 等到值真的变了再回带', async () => {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    let own = { revision: 1, value: { viewBudget: 5000, topN: 24 } }
+    const settings = {
+      describe: () => [{ ns: 'lattice', revision: own.revision, value: own.value }],
+      update: (ns, patch) => {
+        // 先返回，稍后才反映到 describe —— 与真实宿主同序。
+        setTimeout(() => {
+          own = { revision: own.revision + 1, value: { ...own.value, ...patch } }
+        }, 40)
+        return {}
+      },
+    }
+    apply(fakeCtx({ webServer, settings }), baseConfig)
+    const route = routes.find((r) => r.path === '/api/lattice-config')
+    const res = fakeRes()
+    await route.handler(
+      fakeReq({
+        body: JSON.stringify({ ns: 'lattice', patch: { viewBudget: 6000 }, revision: 1, confirm: true }),
+      }),
+      res,
+    )
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.pending, false, '宿主已经生效，不该标 pending')
+    assert.equal(
+      res.out.body.entry.value.viewBudget,
+      6000,
+      '回带的必须是更新后的值：拿 update 返回时的旧值当新基线，界面就会把输入框弹回去',
+    )
+  })
+
+  /**
    * 写端点的三道栅栏。替身 req/res，按 node:http 的形状给最小字段。
    *
    * 只断言**本插件的行为**（AGENTS.md 第七节）：这里不验宿主会不会做某事，
