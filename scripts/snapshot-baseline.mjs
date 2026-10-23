@@ -142,7 +142,7 @@ const record = {
 writeFileSync(join(DEST_DIR, 'snapshot.json'), JSON.stringify(record, null, 2), 'utf8')
 
 console.log('另存快照 → ' + DEST)
-console.log('  入口规则   ' + rule + '（来自库自己的 meta 表，不是当前代码）')
+console.log('  入口规则   ' + rule + '（来自库里的记录：v5 起是 build_info，旧库才是 meta 表；不是当前代码）')
 console.log('  规模       atom ' + facts.atoms + ' / topic ' + facts.topics + ' / entry ' + facts.entries)
 console.log('  自检       integrity ' + integrity + '，规模与来源一致')
 console.log('  sha256     ' + sha256.slice(0, 16) + '…')

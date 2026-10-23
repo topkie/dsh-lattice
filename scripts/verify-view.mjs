@@ -1,9 +1,12 @@
 // 用真实模型验证注入组装：预算是否用满、装了几条、超预算次数是否为零。
+// 预算取自实现的 DEFAULT_BUDGET（不是脚本里的字面量），所以这条脚本的口径跟着默认值走。
 //
 // 旧口径量的是锚 / 入口 / 路三段的字符占比，与当时的三段配额（55/20/25）对照。
 // 三段与配额在机制替换（0.5.0）里删掉了：现在的口径是「按余弦序逐条装到字符预算」，
 // 所以这里改成量四件事 —— 超预算次数（必须 0）、装了几条、用了预算的百分之多少、
 // 未入选时有没有说明。判据不在这条脚本里，它只报数字；三库对照另有脚本。
+// 「占预算」列在这个库里必然很低（只有 10 条笔记，装不满 5000）：它是样本量的读数，不是
+// 预算没被用上。要判断填充率，看三库对照（各库上千条），不看这一列。
 //
 // 用法：node scripts/verify-view.mjs
 
@@ -13,7 +16,7 @@ import { openVault } from '../dist/db/open.js'
 import { ensureEncoder, encode } from '../dist/encoder/index.js'
 import { createWriteCtx, writeAtom } from '../dist/pipeline/write.js'
 import { recall } from '../dist/pipeline/search.js'
-import { assembleView } from '../dist/pipeline/view.js'
+import { assembleView, DEFAULT_BUDGET } from '../dist/pipeline/view.js'
 
 const OUT = '.probe'
 mkdirSync(OUT, { recursive: true })
@@ -34,7 +37,9 @@ const NOTES = [
   'FTS5 的 trigram 分词器对两字中文查询返回零命中。',
 ]
 
-const BUDGET = 6000
+// 预算从实现取，不在脚本里另写一个数字。写死的 6000 在默认值改成 5000 之后仍在按旧值量，
+// 「超预算 0 次」量的是 6000 这个数，与当前默认无关 —— 那正是这个字段曾经骗过的地方。
+const BUDGET = DEFAULT_BUDGET
 const f = join(OUT, 'view-verify.db')
 for (const s of ['', '-wal', '-shm']) rmSync(f + s, { force: true })
 const { db } = openVault(f)

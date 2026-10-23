@@ -85,13 +85,28 @@ export function copyToWork(src, dest) {
   return dest
 }
 
-/** 一行式说明「这个库是哪套规则建的」——对照可不可比，看的就是它。 */
+/**
+ * 一行式说明「这个库是哪套规则建的」——对照可不可比，看的就是它。
+ *
+ * v5 起自描述在 `build_info.entry_rule`，`meta` 表已删（0.8.0）。这里仍保留 meta 的回退：
+ * 0.5.0 之前建的库在本机还存在，它们只有 meta。**顺序不能反** —— 先查 meta，在 v5 库上会
+ * 一律命中 catch 并返回「（未记录）」，于是 `verify-entry-quality` 的 before/after 规则永远
+ * 相等，规则比较退化成恒真：没有报错，也没有比较。
+ */
 export function ruleOf(db) {
+  try {
+    const row = db.prepare('SELECT entry_rule FROM build_info WHERE id = 1').get()
+    if (row !== undefined && row.entry_rule !== null && row.entry_rule !== undefined) {
+      return String(row.entry_rule)
+    }
+  } catch {
+    // 更老的库没有 build_info 表，往下走 meta 回退。
+  }
   try {
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('entry_rule')
     return row === undefined ? '（未记录）' : String(row.value)
   } catch {
-    return '（无 meta 表）'
+    return '（未记录）'
   }
 }
 
