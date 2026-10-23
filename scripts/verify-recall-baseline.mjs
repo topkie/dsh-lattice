@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs'
 import { openVault } from '../dist/db/open.js'
 import { encode, ensureEncoder } from '../dist/encoder/index.js'
 import { recall } from '../dist/pipeline/search.js'
-import { assembleView } from '../dist/pipeline/view.js'
+import { assembleView, DEFAULT_BUDGET } from '../dist/pipeline/view.js'
 import { argOf, describeDb, requireGold, ruleOf } from './lib/compare-db.mjs'
 
 const MODEL = 'Xenova/bge-small-zh-v1.5'
@@ -68,7 +68,7 @@ for (const c of gold) {
   if (i12 >= 0) hit12++
   if (i24 >= 0) hit24++
   ranks.push(i24 >= 0 ? i24 + 1 : 99)
-  chars += assembleView(db, r, { budget: 6000 }).text.length
+  chars += assembleView(db, r, { budget: DEFAULT_BUDGET }).text.length
 }
 const pct = (x) => ((x / gold.length) * 100).toFixed(1) + '%'
 console.log('库 ' + describeDb(DB) + '  规则 ' + ruleOf(db) + '   gold ' + gold.length + ' 条')

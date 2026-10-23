@@ -155,6 +155,8 @@ export const WRITE_COST_MEASURED_MS = 3.5 satisfies ThresholdValue<
   {
     tool: '无脚本（本机磁盘上写一条记录并计时）'
     finding: '本机磁盘单条写入 3.5 ms，写锁等待时间以它为基数；换机器后这个数会变，届时等待时间自动跟着变'
+    encoderModel: '不适用（磁盘写入计时，不用向量）'
+    scale: '本机磁盘上写一条记录，多次计时取均值'
     failsWhen: ['磁盘延迟', '机器负载']
     affects: '写锁等待时间的推导基数：慢盘上按它放大，而不是拍一个更大的常数'
     display: '{v} ms（本机实测的单条写入耗时）'

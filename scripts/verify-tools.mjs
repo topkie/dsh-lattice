@@ -10,6 +10,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { apply } from '../dist/index.js'
 import { closeRuntime } from '../dist/state.js'
+import { DEFAULT_BUDGET } from '../dist/pipeline/view.js'
 
 const OUT = '.probe'
 mkdirSync(OUT, { recursive: true })
@@ -28,7 +29,7 @@ const cfg = {
   tauLex: 0.05,
   tauLexOnly: 0.1,
   tauNew: 0.5,
-  viewBudget: 6000,
+  viewBudget: DEFAULT_BUDGET,
   topN: 24,
   mmapSize: 0,
   cacheSize: 0,

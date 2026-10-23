@@ -146,7 +146,6 @@ describe('A 组 · 工具层：scope 透传', () => {
       tauLex: 0.05,
       tauLexOnly: 0.1,
       tauNew: 0.5,
-      viewBudget: 6000,
       topN: 24,
       mmapSize: 0,
       cacheSize: 0,

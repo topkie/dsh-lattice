@@ -344,7 +344,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauJoin, {
       tool: 'scripts/probe-threshold.mjs（真实编码模型）',
-      scale: '8 组 × 3 条同义改写',
+      encoderModel: 'Xenova/bge-small-zh-v1.5',
+      scale: '8 组 × 3 条同义改写（同主题 24 对、跨主题 252 对）',
+      at: '2026-10-23（重跑脚本，三档数字与记录一致）',
       finding:
         '同主题余弦 min 0.811 / p50 0.897 / max 0.956，跨主题 0.375 / 0.509 / 0.633，两类完全分离；' +
         '0.78 取在同类下界 0.811 之下（误并是静默的知识损坏，漏并只是多一个主题）',
@@ -364,6 +366,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauLex, {
       tool: 'scripts/probe-threshold.mjs',
+      encoderModel: 'Xenova/bge-small-zh-v1.5',
+      scale: '8 组 × 3 条同义改写（同主题 24 对、跨主题 252 对）',
+      at: '2026-10-23（重跑脚本，数字与记录一致）',
       finding:
         '同主题原文 bigram-Jaccard min 0.059 / p50 0.229 / max 0.471，跨主题 max 0.061；' +
         '0.05 贴住噪声上界取',
@@ -383,6 +388,9 @@ export const THRESHOLDS: readonly ThresholdEntry[] = [
     area: '落位',
     ...recheckable(() => DEFAULT_THRESHOLDS.tauNew, {
       tool: 'scripts/probe-threshold.mjs（推断：原条目只引设计说明判定表，脚本路径是从 tauJoin 那一条推来的）',
+      encoderModel: 'Xenova/bge-small-zh-v1.5（推断：与 tauJoin 同一次测量）',
+      scale: '同一次实测的跨主题分布（252 对）',
+      at: '2026-10-23（重跑脚本，跨主题 max 仍是 0.633）',
       finding: '跨主题余弦 max 0.633，0.5 取在该上界之下作「全新」的下界',
       guardedBy: ['test/write.test.mjs'],
     }),

@@ -33,17 +33,18 @@
 ### 已知限制（首个对外发布版）
 
 这一版不是「全部做完」。下面这份表把代码里**待评审的阈值**按它们在管线里作用的位置归成 11 类：
-此前它们记在仓库内一份临时清单里（5 条缺测量条件 + 78 条没有按常量名断言的测试，按条目计 83 条），
+此前它们记在仓库内一份临时清单里（1 条缺测量条件 + 78 条没有按常量名断言的测试，按条目计 79 条），
 清单已删除，改为对外可读的限制说明 —— 每类给出条数、影响与一条自查命令。
 
 两点读表须知。**其一**，标着 `--unguarded` 的类别合计 78 条，共同点是：没有测试按常量名断言它们的
 默认值，所以改了默认值测试不会红，只能靠评审发现；这一层原来由门禁里的存量比对守着，现在换成了这张表。
-**其二**，11 类合计 82 个名字，比 83 条少 1 —— `WRITE_COST_MEASURED_MS` 同时属于「资源与等待」
-（没有测试断言）和「缺测量条件」两个集合，在原来的清单里各记一次。
+**其二**，11 类合计 79 个名字，与 79 条一一对应。2026-10-23 给四条补上测量条件之后两个集合不再有交集
+（`WRITE_COST_MEASURED_MS` 原先既没有测试、又缺测量条件，所以各记一次），`DUP_LEX` 也不再出现在
+`--needs-review` 里，重排去重这一类因此是 0 条。
 
 | 分类 | 影响 | 自查命令（在仓库根跑） |
 |---|---|---|
-| 落位判据（11 条 = `--unguarded` 8 + `--needs-review` 3） | 写一条记忆时「并入已有主题还是新建」的判定线与候选规模。三条并列阈值只在一次内部中文标定里定过，登记项缺编码模型与语料规模 —— 换编码模型或换领域时要重标，但仓库里推不出怎么重标 | `node scripts/print-thresholds.mjs --unguarded --area=落位`（8 条）；`node scripts/print-thresholds.mjs --needs-review`（5 条，其中 3 条的段为落位） |
+| 落位判据（9 条 = `--unguarded` 8 + `--needs-review` 1） | 写一条记忆时「并入已有主题还是新建」的判定线与候选规模。三条并列阈值只在一次内部中文标定里定过，登记项缺编码模型与语料规模 —— 换编码模型或换领域时要重标，但仓库里推不出怎么重标 | `node scripts/print-thresholds.mjs --unguarded --area=落位`（8 条）；`node scripts/print-thresholds.mjs --needs-review`（1 条，段为落位） |
 | 入口抽取与词项（20 条） | 哪些词能成为入口、词项权重、学习冷却与遗忘。含两个非纯数值常量（一个内联表达式、一条判据线），扫描器按定义处登记，不按数值。20 条都没有按常量名断言的测试 | `node scripts/print-thresholds.mjs --unguarded --area=入口`（20 条） |
 | 召回融合（8 条） | 三路各取多少条、RRF 的平滑常数、候选上限。改小会漏召，改大拖慢并稀释注入预算 | `node scripts/print-thresholds.mjs --unguarded --area=召回融合`（8 条） |
 | 注入组装（9 条） | 每段的字符预算与条数上限。改小会少给内容，改大可能超出宿主给的空间 | `node scripts/print-thresholds.mjs --unguarded --area=注入`（9 条） |
@@ -52,25 +53,28 @@
 | 图扩展（5 条） | 近邻边数、余弦线、出度上限、声明边的置信度与类型长度。库越大，扩展耗时与孤立率越依赖这几条 | `node scripts/print-thresholds.mjs --unguarded --area=图扩展`（5 条） |
 | 降级日志（8 条） | 队列长度、导出上限、单文件与总量上限。决定日志占多少磁盘、失败窗口里丢多少条 | `node scripts/print-thresholds.mjs --unguarded --area=降级日志`（8 条） |
 | 资源与等待（5 条） | mmap 与页缓存比例、写锁等待的倍数、一次写入的实测耗时。小内存机器上页缓存会变小，等待时间也跟着变 | `node scripts/print-thresholds.mjs --unguarded --area=资源`（5 条） |
-| 重排去重（1 条，只出现在 `--needs-review`） | `DUP_LEX`：同一来源内按词面重叠判重复的线。只在构造的对照句对上定过，缺编码模型与语料规模记录 —— 换语言或换切分粒度时要重看 | `node scripts/print-thresholds.mjs --needs-review`（5 条，其中 1 条的段为重排去重） |
+| 重排去重（0 条待评审） | `DUP_LEX` / `DUP_TEXT`：同一来源内按词面重叠判重复的线。有测试按常量名断言默认值，测量条件也补上了记录，只剩测量日期缺失（见下节）。仍值得留意：换语言、换切分粒度时要重看 | `node scripts/print-thresholds.mjs --unguarded --area=重排去重`（0 条） |
 | 显式删除（1 条） | `FORGOTTEN_SCAN_LIMIT`：一次删除扫描多少条。库很大时，一次调用可能漏掉超出上限的条目，需要再跑一次 | `node scripts/print-thresholds.mjs --unguarded --area=显式删除`（1 条） |
 
 门禁第 6 项 `thresholds-review` 现在报的就是上面这两组条数（`--check-review` 打印当前
 needsReview / unguarded 条数后正常退出），不再与一份存量文件比对；新增数值常量没登记仍由门禁
 第 5 项 `thresholds` 当场判红。
 
-#### 测量日期缺失（12 条，跨上面多类）
+#### 测量日期缺失（8 条，跨上面多类）
 
-`node scripts/print-thresholds.mjs --undated` 报出 12 条可复算、但没有记录测量日期的阈值：
-`DEFAULT_THRESHOLDS.tauJoin` / `tauLex` / `tauNew` / `tauLexOnly`（落位）、`DEFAULT_KNN_K`（重聚类）、
-`NEAR_K` / `NEAR_COS_MIN` / `GRAPH_INFER_MAX_ATOMS`（图扩展）、`REFERENCE_QUANTILE`（召回判定）、
+`node scripts/print-thresholds.mjs --undated` 报出 8 条可复算、但没有记录测量日期的阈值：
+`DEFAULT_THRESHOLDS.tauLexOnly`（落位）、`DEFAULT_KNN_K`（重聚类）、
+`NEAR_K` / `NEAR_COS_MIN` / `GRAPH_INFER_MAX_ATOMS`（图扩展）、
 `DUP_LEX` / `DUP_TEXT`（重排去重）、`WRITE_COST_MEASURED_MS`（资源）。
 
-一条都没有补日期，原因一致：这些登记项的来历里记着标定方法、语料规模与结论，但没有一条写着测量是哪天做的；
-仓库的规矩是「原记录没有就留空，不猜」，而提交日期不是测量日期，填进去就是编造。
-其中 10 条已经按段落在上表的类里；`tauJoin` 与 `REFERENCE_QUANTILE` 不在这 83 条里 ——
-它们的条件与测试都齐，只缺日期，所以只在这一条里出现。要补日期得重跑各自的标定，
-有的要真实编码模型，有的要基准库，那一轮不在这版的范围内。
+2026-10-23 补上了四条（`tauJoin` / `tauLex` / `tauNew` / `REFERENCE_QUANTILE`）：它们的测量脚本都还在仓库里，
+重跑一遍数字与登记项记的一致，就把当天作为复算日期写进去。剩下这 8 条不补，原因分两种：
+`DEFAULT_KNN_K` / `NEAR_K` / `NEAR_COS_MIN` / `GRAPH_INFER_MAX_ATOMS` 的来历是一次性探针，脚本没有留在仓库里，
+重跑不了；`DUP_LEX` / `DUP_TEXT` / `WRITE_COST_MEASURED_MS` 今天能算，但算出来的口径与原记录不同
+（词面重叠按多集算是 0.708、原记录 0.64；写入耗时在内存库上是 0.004 ms/行、原记录 3.5 ms 含 WAL 与磁盘），
+拿不同口径的数冒充原测量没有意义。仓库的规矩是「原记录没有就留空，不猜」——提交日期不是测量日期。
+
+其中 6 条已经按段落在上表的类里；`DUP_LEX` 与 `DUP_TEXT` 不在这 79 条里，它们有测试、条件也齐，只缺日期。
 
 #### 留在登记表里的 12 条（跨上面多类）
 
@@ -274,8 +278,8 @@ Recall@12 0.95（19/20）。仓库里只有这一份结果文件，也没有 Lon
 - 6 条可复算的阈值仍缺编码模型名与语料规模（与 0.3.0 相同），等开源发版前的重标补上
 
 > 勘误：本节两个数字已过时，且「等重标补上」不会再兑现 —— 重标链路整体移除，那两个字段
-> 不会自动补齐。当前值见本文件顶部「已知限制」一节：留表 12 条、`--needs-review` 5 条、
-> `--undated` 12 条。历史段的数字保持原样，不改写已发布版本的记录。
+> 不会自动补齐。当前值见本文件顶部「已知限制」一节：留表 12 条、`--needs-review` 1 条、
+> `--undated` 8 条。历史段的数字保持原样，不改写已发布版本的记录。
 
 ## [0.3.0] - 2026-10-21
 

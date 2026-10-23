@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs'
 import { openVault } from '../dist/db/open.js'
 import { ensureEncoder, encode } from '../dist/encoder/index.js'
 import { recall } from '../dist/pipeline/search.js'
-import { assembleView } from '../dist/pipeline/view.js'
+import { assembleView, DEFAULT_BUDGET } from '../dist/pipeline/view.js'
 import { copyToWork, describeDb, requireBeforeDb, requireGold, ruleOf } from './lib/compare-db.mjs'
 
 const OUT = '.probe'
@@ -49,7 +49,7 @@ async function score() {
     const r = recall(db, c.query, vq, { topN: 24 })
     if (r.hits.slice(0, 12).some((h) => cardOf.get(h.id) === c.target)) h12++
     if (r.hits.slice(0, 24).some((h) => cardOf.get(h.id) === c.target)) h24++
-    chars += assembleView(db, r, { budget: 6000 }).text.length
+    chars += assembleView(db, r, { budget: DEFAULT_BUDGET }).text.length
   }
   return { h12, h24, chars: chars / gold.length }
 }

@@ -51,7 +51,6 @@ describe('atom-detail', () => {
       tauJoin: 0.75,
       tauLex: 0.05,
       tauNew: 0.38,
-      viewBudget: 6000,
       topN: 24,
     }
   }

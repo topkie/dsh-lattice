@@ -61,7 +61,7 @@ for (const q of QUERIES) {
   const pct = (v.text.length / BUDGET) * 100
   // 未入选的两种来源：同源真重复被压掉的、预算装不下的。两者都会在尾巴里说一句。
   const hasTail = /另有 \d+ 条|预算装不下了/.test(v.text)
-  rows.push({ len: v.text.length, pct, anchors: v.anchors })
+  rows.push({ len: v.text.length, pct, count: v.anchors })
   console.log(
     q.padEnd(14) +
       String(v.text.length).padStart(6) +
@@ -80,10 +80,10 @@ console.log(
     ' 字符（预算的 ' +
     avg('pct').toFixed(0) +
     '%），条数 ' +
-    avg('anchors').toFixed(1),
+    avg('count').toFixed(1),
 )
 console.log(
-  '条数区间：' + Math.min(...rows.map((x) => x.anchors)) + '–' + Math.max(...rows.map((x) => x.anchors)),
+  '条数区间：' + Math.min(...rows.map((x) => x.count)) + '–' + Math.max(...rows.map((x) => x.count)),
 )
 console.log('超预算次数:', overBudget, '（必须为 0）')
 console.log('')

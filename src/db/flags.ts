@@ -68,6 +68,6 @@ export const FLAG_ARCHIVED = 16 satisfies ThresholdValue<
     why: '位值由设计说明对 flags 的命名确定（技术文档 §5），不可改；bit4 是 flags 的位定义，改它会把历史行解释错。归档不是删除：内容与边都还在，显式检索仍可见'
     failsWhen: ['（不应变）']
     guardedBy: ['test/archive.test.mjs', 'test/client-source.test.mjs']
-    affects: 'atom.flags 的 bit4：已归档。默认不召回、不进注入三段、列表默认不列；显式检索（lattice_list 给 flags、界面勾「显示已归档」）仍可见。不是删除：内容与边都还在'
+    affects: 'atom.flags 的 bit4：已归档。默认不召回、不进注入的【入选】清单、列表默认不列；显式检索（lattice_list 给 flags、界面勾「显示已归档」）仍可见。不是删除：内容与边都还在'
   }
 >

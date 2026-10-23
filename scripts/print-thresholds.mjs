@@ -857,6 +857,8 @@ const ORIGIN_FIELDS = new Set([
   'finding',
   'why',
   'tool',
+  // 测量条件的两项（类型里从第一天就有，但一直没有条目填过，白名单也就没被触发过）
+  'encoderModel',
   'scale',
   'at',
   'formula',

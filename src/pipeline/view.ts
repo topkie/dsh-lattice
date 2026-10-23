@@ -46,13 +46,7 @@ export interface ViewOptions {
    * 省略时那句话不出现 —— 它只对待拆分候选有意义。
    */
   scene?: string
-  /**
-   * 以下几项是旧形态（三段：锚 / 入口 / 路）的参数。新形态只有两段，
-   * 保留它们是**为了不打断调用方**，值会被忽略。
-   */
-  entriesPerTopic?: number
-  entryLineMaxChars?: number
-  pathLines?: number
+  /** 只在给定的域内召回；省略则不限域。 */
   scope?: string
 }
 

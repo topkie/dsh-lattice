@@ -66,13 +66,13 @@ async function score(db, gold, model, cardOf) {
   let hit12 = 0,
     hit24 = 0,
     chars = 0
-  const { assembleView } = await import('../dist/pipeline/view.js')
+  const { assembleView, DEFAULT_BUDGET } = await import('../dist/pipeline/view.js')
   for (const c of gold) {
     const vq = await encode(c.query, { model })
     const r = recall(db, c.query, vq, { topN: 24 })
     if (r.hits.slice(0, 12).some((h) => cardOf.get(h.id) === c.target)) hit12++
     if (r.hits.slice(0, 24).some((h) => cardOf.get(h.id) === c.target)) hit24++
-    chars += assembleView(db, r, { budget: 6000 }).text.length
+    chars += assembleView(db, r, { budget: DEFAULT_BUDGET }).text.length
   }
   return { hit12, hit24, chars: chars / gold.length }
 }

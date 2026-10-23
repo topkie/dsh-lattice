@@ -70,7 +70,6 @@ describe('降级日志', () => {
       encoderMirror: '',
       encoderCacheDir: '',
       thresholds: { tauJoin: 0.78, tauLex: 0.05, tauLexOnly: 0.1, tauNew: 0.5 },
-      viewBudget: 6000,
       topN: 24,
       resources: {},
     }
@@ -548,7 +547,6 @@ function routeSet() {
     tauJoin: 0.75,
     tauLex: 0.05,
     tauNew: 0.38,
-    viewBudget: 6000,
     topN: 24,
   })
   return routes
@@ -572,7 +570,6 @@ function toolSet() {
     tauJoin: 0.75,
     tauLex: 0.05,
     tauNew: 0.38,
-    viewBudget: 6000,
     topN: 24,
   })
   return registered

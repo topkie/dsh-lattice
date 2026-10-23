@@ -214,7 +214,6 @@ describe('健康面板（只读体检路由的展示端）', () => {
       tauJoin: 0.75,
       tauLex: 0.05,
       tauNew: 0.38,
-      viewBudget: 6000,
       topN: 24,
     }
   })

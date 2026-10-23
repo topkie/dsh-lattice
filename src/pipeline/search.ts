@@ -623,6 +623,8 @@ export const DUP_LEX = 0.72 satisfies ThresholdValue<
     area: '重排去重'
     tool: '无脚本（构造的对照句对，直接算 bigram-Jaccard）'
     finding: '0.5 时「系统代理必须走本地端口……」与「系统代理配置本地端口……」的 bigram-Jaccard 为 0.64，两者讲同一件事但各有信息、不该折叠；取 0.72 后只有几乎逐字重复才被压制（同一段文本 Jaccard 为 1.0）'
+    encoderModel: '不适用（纯词面 bigram-Jaccard，不用向量）'
+    scale: '构造的对照句对：1 组近义改写 + 1 组逐字相同'
     failsWhen: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）']
     guardedBy: ['test/archive.test.mjs']
     affects: '重复压制：词面重叠低于此值即不判重复（两票中的词面票）'

@@ -64,7 +64,7 @@ export const DELTA_PEAK = 0.06 satisfies ThresholdValue<
 
 ## 4. 登记表怎么读
 
-跑 node scripts/print-thresholds.mjs 得到一张表。2026-10-22 的规模是 128 行（一行可能是一个键的多个取值，也可能是几个同类键排在同一行），分三类：可复算 20 行、由公式算出 8 行、选择 100 行。
+跑 node scripts/print-thresholds.mjs 得到一张表。2026-10-23 的规模是 116 行（一行可能是一个键的多个取值，也可能是几个同类键排在同一行），分三类：可复算 18 行、由公式算出 8 行、选择 90 行。2026-10-22 是 128 行（20 / 8 / 100），少掉的 12 行是随标定与样本链路退役的阈值。
 
 「由公式算出」是可复算的子类，不是第三种来历：值由代码里的算式推出，算式里的量一变值就跟着变。所以它判可复算，要重跑的不是标定而是复算，字段里写 formula: true，--needs-review 会跳过它。
 
@@ -94,10 +94,10 @@ REFERENCE_QUANTILE 是 0.5.0 改机制后新加的：召回判「这次有没有
 
 | 命令 | 查什么 | 在门禁里 | 结果（当前） |
 |---|---|---|---|
-| node scripts/print-thresholds.mjs | 覆盖核对：有没有未登记的数值常量、定位不到定义处的登记项、写了分叉却没解释的项 | thresholds | 128 行 |
-| 同上加 --check-review | 待评审条数：基线文件已删除，只报当前条数；文件被重建时仍做存量比对 | thresholds-review | needsReview 5 条 / unguarded 78 条（基线已删除） |
-| 同上加 --undated | 可复算、但没有记录测量时间的条目（只是信息，不拦） | thresholds-query | 12 条 |
-| 同上加 --needs-review | 声明可复算、但缺编码模型与语料规模的条目 | 手工 | 5 条 |
+| node scripts/print-thresholds.mjs | 覆盖核对：有没有未登记的数值常量、定位不到定义处的登记项、写了分叉却没解释的项 | thresholds | 116 行 |
+| 同上加 --check-review | 待评审条数：基线文件已删除，只报当前条数；文件被重建时仍做存量比对 | thresholds-review | needsReview 1 条 / unguarded 78 条（基线已删除） |
+| 同上加 --undated | 可复算、但没有记录测量时间的条目（只是信息，不拦） | thresholds-query | 8 条 |
+| 同上加 --needs-review | 声明可复算、但缺编码模型与语料规模的条目 | 手工 | 1 条 |
 | 同上加 --unguarded | 没有测试按常量名断言默认值的条目 | 手工 | 78 条 |
 | 同上加 --doc-keys | 设计说明的键名 → 代码常量 → 文档给的默认值 | 手工 | 19 条，其中 5 条标着分叉 |
 

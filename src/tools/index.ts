@@ -679,10 +679,10 @@ export const FEEDBACK_TOOL_NAME = 'lattice_feedback'
 export const FEEDBACK_TOOL_SPEC = {
   name: FEEDBACK_TOOL_NAME,
   description:
-    '对上次召回给出反馈：第几条有用（positive）或无关（negative）。ref 是【锚】段的 1-based 序号，不是记忆 id。**当前未启用**：模型侧看不到这个工具，定义留下只为固定参数契约。',
+    '对上次召回给出反馈：第几条有用（positive）或无关（negative）。ref 是上次召回结果里的 1-based 序号（注入文本里【入选】清单的顺序），不是记忆 id。**当前未启用**：模型侧看不到这个工具，定义留下只为固定参数契约。',
   parameters: {
     kind: { type: 'string', description: 'positive 或 negative', required: true },
-    ref: { type: 'number', description: '【锚】段第几条（1-based）', required: true },
+    ref: { type: 'number', description: '上次召回第几条（1-based）', required: true },
   },
 } as const
 
