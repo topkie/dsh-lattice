@@ -1,0 +1,74 @@
+name: Release
+
+# 推 tag 就把这个版本发到 npm。tag 由维护者打（见 docs/RELEASING.md），
+# 这个 workflow 只负责「打了之后发出去」这一段，不决定版本号。
+on:
+  push:
+    tags: ['v*']
+
+# 同一个 tag 只允许一个发布进程。重推同一个 tag 时，两次 publish 里后到的那个
+# 必然撞上「该版本已存在」，先把前一个放完再报错，比两个进程互相踩要清楚。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # trusted publishing：npm 用这个权限向 GitHub 要一份 OIDC 凭据，再拿去换
+      # 短期发布凭据。仓库与 CI 里都不存能改发布状态的 npm token。
+      id-token: write
+    env:
+      # 门禁第一行会打印分支名，不传时显示「分支：未知」，按仓库约定那不叫通过。
+      # tag 触发时 ref_name 是 tag 名（v0.10.0），同样不是 main。
+      GIT_BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Node 22 自带的 npm 是 10.x，OIDC 换 token 的实现要更新的 npm。固定到与本地
+      # 验证过的同一个版本：写 @latest 会让 CI 与本地跑不同的 npm，而打包内容与发布
+      # 行为都可能随 npm 版本变。
+      - name: 升级 npm
+        run: npm install -g npm@12.2.1 || sudo npm install -g npm@12.2.1
+
+      - name: 核对 tag 与 package.json 的版本一致
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag 是 $GITHUB_REF_NAME（版本号 $tag），package.json 写的是 $pkg —— 两者必须相同"
+            exit 1
+          fi
+          echo "版本 $pkg"
+
+      - name: npm 版本
+        run: npm --version
+
+      - run: pnpm install --frozen-lockfile
+
+      # tag 可能落在任意分支上，所以不能假设 main 已经绿过。与 CI 同一条命令（11 项，
+      # 含构建与 499 条测试）—— 发布前跑这一遍是「发出去的东西至少和合入时一样」，
+      # 不是重复劳动。
+      - run: node scripts/check-all.mjs
+
+      # dist/ 不在版本控制里，上一步已构建。这一步把六项白名单实际打进去什么、体积多少
+      # 留在日志里，出问题时能对着看，不必事后考古。
+      - name: 打包内容预览
+        run: npm pack --dry-run
+
+      # 不设 registry-url：setup-node 会写一个指向 NODE_AUTH_TOKEN 的 .npmrc，而
+      # trusted publishing 用的是 OIDC 换来的短期凭据；多一份指向空变量的凭据会让 npm
+      # 拿空 token 去认证，报错还看不出原因。registry 默认就是 registry.npmjs.org。
+      - name: 发布
+        run: npm publish --access public --provenance
