@@ -55,7 +55,7 @@ profile 自己的 `cordis.patch.yml` 可以按这个 id 覆盖或禁用（后层
 | `main` | **只放发布**。每次发版把 `dev` 合进来，在 `main` 上打 tag | 只有维护者，且只在发版时 |
 | `dev` | 开发汇总。所有 PR 合进这里 | 维护者合并，贡献者对它开 PR |
 
-所以 `main` 上的每个提交都是发出去过的，`git clone` 默认拿到的就是发布版本。
+所以 `main` 只接收准备好的发布内容；`git clone` 默认拿到 main 末端，也就是最近一次合进 `main` 的版本。
 改动一律走任务分支：不要直接往 `dev` 上写，更不要碰 `main`。
 
 **签出前先回到 `dev`**：`git checkout dev && git checkout -b feat/<slug>`。

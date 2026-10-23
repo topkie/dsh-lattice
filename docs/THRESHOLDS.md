@@ -94,7 +94,7 @@ REFERENCE_QUANTILE 是 0.5.0 改机制后新加的：召回判「这次有没有
 
 | 命令 | 查什么 | 在门禁里 | 结果（当前） |
 |---|---|---|---|
-| node scripts/print-thresholds.mjs | 覆盖核对：有没有未登记的数值常量、定位不到定义处的登记项、写了分叉却没解释的项 | thresholds | 116 行 |
+| node scripts/print-thresholds.mjs | 覆盖核对：有没有未登记的数值常量、定位不到定义处的登记项、写了分叉却没解释的项 | thresholds | 119 行 |
 | 同上加 --check-review | 待评审条数：基线文件已删除，只报当前条数；文件被重建时仍做存量比对 | thresholds-review | needsReview 1 条 / unguarded 78 条（基线已删除） |
 | 同上加 --undated | 可复算、但没有记录测量时间的条目（只是信息，不拦） | thresholds-query | 8 条 |
 | 同上加 --needs-review | 声明可复算、但缺编码模型与语料规模的条目 | 手工 | 1 条 |
@@ -114,7 +114,7 @@ REFERENCE_QUANTILE 是 0.5.0 改机制后新加的：召回判「这次有没有
 ## 6. 待评审条目：已转化为「已知限制」
 
 待评审条目有两类：声明可复算但缺条件（--needs-review）、没有测试按常量名断言默认值（--unguarded）——
-当前共 5 + 78 条。它们此前记在一份临时清单 `thresholds-review-baseline.json` 里（规则是只允许变短），
+当前共 1 + 78 条。它们此前记在一份临时清单 `thresholds-review-baseline.json` 里（规则是只允许变短），
 现在这份清单已按管线分段归并进 [CHANGELOG.md](../CHANGELOG.md) 的「已知限制」：每个分类写明条数、
 影响与一条自查命令（任一查询加 `--area=<段>` 可只看那一类），清单文件本身已删除。
 

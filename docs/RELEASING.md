@@ -47,7 +47,7 @@
 5. **干净副本装一遍**。涉及依赖、构建或 `files` 白名单的改动必须做，其余可选：
 
    ```bash
-   git checkout main                     # 验的是要发出去的那份，不是 dev 上的中间态
+   git checkout dev                      # 要发出去的就是 dev 上这些提交，验这一份
    git worktree add ../clean --detach HEAD
    cd ../clean && pnpm install --frozen-lockfile && pnpm run build
    ```
@@ -150,6 +150,23 @@ npm view dsh-lattice version dist-tags
 - 有已知限制的版本，`CHANGELOG.md` 的「已知限制」一节要有对应条目，并且每条都带一条自查命令
   —— 只写「可能不准」的条目，读者无法判断自己有没有中。
 
+## 紧急修复（hotfix）
+
+已经发出去的版本有必须马上修的问题时，路和普通改动相同，只有两处不同：改动要小而准，出来的是补丁号。
+
+```bash
+git checkout dev && git checkout -b fix/hotfix-<slug>
+# 只带修这一处所需的改动，不要顺手带上 dev 上别的提交
+```
+
+改完跑门禁（与普通改动同一条命令），合进 `dev`，再按第二节把 `dev` 合进 `main`、打 `vX.Y.(Z+1)` 的 tag。
+
+一处要当心：如果 `dev` 上已经有一批没发布的改动，直接合进 `main` 会把它们一起发出去。
+这种情况下从 `main` 签一个分支、只带修复提交，单独打 tag —— `release.yml` 要求的是
+「tag 指向的提交在 `main` 上」，不要求等于 `main` 末端。
+
+补丁号是 `X.Y.(Z+1)` 而不是 `X.(Y+1).0`：前者表示行为不变、只修了一个错。
+
 ## 失败与回滚
 
 | 情况 | 能做什么 | 边界 |
@@ -173,7 +190,7 @@ npm 上有 `dsh-lattice@0.0.0` 与一个 `0.0.0-stage`，都是占位：前者�
 后者是 npm 在首次发布流程里自动写入的临时版本，已标记为弃用。正式版本发出去之后，`latest` 会指向
 正式版本，这两个占位不需要手动处理。
 
-`本地已建 `dev`（与 `main` 同起点），远端仓库尚未推送 —— 建远端时两个分支一起推，
+本地已建 ``dev``（与 ``main`` 同起点），远端仓库尚未推送 —— 建远端时两个分支一起推，
 并把默认分支留在 `main`（`git clone` 拿到的应当是发布版本）。
 
 `.github/workflows/release.yml` 已就位，但**首次使用前要先做上面那次 trusted publisher 登记**，

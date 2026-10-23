@@ -1118,20 +1118,18 @@ function namespaceIds(described: unknown): string[] {
  * 等宿主把这次改动反映到 describe() 上，最多等 APPLY_WAIT_MS。
  *
  * 实测（2026-10-24，本机 0.9.1）：`settings.update()` 返回时 describe() 里还是**旧值**，
- * 约 30–130 ms 后才变成新值（POST 往返 25 ms，值在 137 ms 内出现）。所以「更新后的那一条」
+ * 约 30–140 ms 后才变成新值（POST 往返 25 ms）。所以「更新后的那一条」
  * 不能在手边直接取 —— 取到的必然是 POST 之前的状态，界面拿它当新基线就会把输入框弹回旧值。
  *
- * 超时返回最后一次读到的（可能是旧值），由调用方标记 `pending` 让界面说清楚「还没确认」，
- * 而不是把一个没生效的值当成已经生效。
+ * 超时返回 null，由调用方标记 `pending` 让界面说清楚「还没确认」。不能回带最后一次读到的旧值
+ * —— 那正是这个函数要避免的结果：把一个没生效的值当成成功。
  */
 async function waitForOwnEntry(settings: SettingsSlice, patch: Record<string, unknown>): Promise<unknown> {
   const deadline = Date.now() + APPLY_WAIT_MS
-  let last: unknown = null
   for (;;) {
     try {
       const own = pickOwnEntry(settings.describe())
       if (own !== null) {
-        last = own.entry
         const row = own.entry as Record<string, unknown>
         const value = row.value as Record<string, unknown> | undefined
         const seen = value !== undefined && Object.keys(patch).every((key) => value[key] === patch[key])
@@ -1140,7 +1138,7 @@ async function waitForOwnEntry(settings: SettingsSlice, patch: Record<string, un
     } catch {
       // describe 抛错时继续等：宿主可能正在重建设置。
     }
-    if (Date.now() >= deadline) return last
+    if (Date.now() >= deadline) return null
     await new Promise((resolve) => setTimeout(resolve, APPLY_POLL_MS))
   }
 }

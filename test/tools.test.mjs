@@ -383,13 +383,24 @@ describe('工具注册与执行', () => {
       assert.ok(out.includes('（编码器不可用，本次为纯词面召回）'), '降级必须可见，输出: ' + out)
     })
 
-    it('budget 参数生效', async () => {
-      for (let i = 1; i <= 6; i++) {
-        await tool('lattice_write').execute({ text: '记忆第 ' + i + ' 条，包含可检索的关键词' + i + '。' })
-      }
-      const out = await tool('lattice_recall').execute({ query: '关键词', budget: 900 })
+    /**
+     * 六条短记忆加 900 字符预算测不出截断：装得下就不需要截，断言「<= 960」
+     * 在任何实现下都成立。这条改成两条装不下的长记忆，并给出大预算对照 ——
+     * 「小预算下尾部标记不出现」只有在「大预算下它出现」时才算证据。
+     */
+    it('budget 参数生效：装不下时截断，尾部不再出现', async () => {
+      const fillerA = '记录甲：部署流程先跑构建，再发到预发环境，最后切流量。'.repeat(20)
+      const fillerB = '记录乙：备份策略按周做全量、按日做增量，保留三十天。'.repeat(20)
+      await tool('lattice_write').execute({ text: '关键词预算。' + fillerA + '甲末尾标记' })
+      await tool('lattice_write').execute({ text: '关键词预算。' + fillerB + '乙末尾标记' })
+      const wide = await tool('lattice_recall').execute({ query: '关键词预算', budget: 4000 })
+      assert.ok(wide.includes('甲末尾标记'), '大预算下甲该完整出现，实际长度 ' + wide.length)
+      assert.ok(wide.includes('乙末尾标记'), '大预算下乙该完整出现，实际长度 ' + wide.length)
+      const out = await tool('lattice_recall').execute({ query: '关键词预算', budget: 300 })
       const body = out.slice(out.indexOf('【入选】'))
-      assert.ok(body.length <= 900 + 60, '正文应当受预算约束，实际 ' + body.length)
+      assert.ok(body.length <= 300 + 60, '正文应当受预算约束，实际 ' + body.length)
+      const tails = Number(body.includes('甲末尾标记')) + Number(body.includes('乙末尾标记'))
+      assert.equal(tails, 0, '预算 300 装不下任何一条完整正文，不该出现完整尾部标记: ' + body)
     })
 
     /**

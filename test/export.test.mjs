@@ -102,6 +102,15 @@ describe('整库导出', () => {
     assert.ok('superseded_at' in body.atoms[0], '缺少 superseded_at 列')
     assert.ok(!('embedding' in body.atoms[0]), 'embedding 是从正文算出来的，不该导出')
     assert.ok(!('sum_vec' in body.topics[0]), 'sum_vec 是二进制派生列，不该导出')
+    // 列清单与库逐列比对：少一列（导出悄悄丢了字段）与多一列（把派生列带出去）
+    // 都不该靠人眼发现。三个例外是有意的：embedding 与 fit 能从正文重算，
+    // polarity 当前恒为 NULL、还没有用途。
+    const columns = db
+      .prepare('PRAGMA table_info(atom)')
+      .all()
+      .map((c) => c.name)
+      .filter((n) => n !== 'embedding' && n !== 'fit' && n !== 'polarity')
+    assert.deepEqual(Object.keys(body.atoms[0]).sort(), columns.sort(), '导出列与库里的列不一致')
     // 文件大小是真的：bytes 与 UTF-8 字节数一致，供完成记录里的「文件多大」使用。
     assert.equal(out.bytes, Buffer.byteLength(out.text))
   })

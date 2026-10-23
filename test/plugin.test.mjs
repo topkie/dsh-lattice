@@ -280,6 +280,22 @@ describe('插件契约', () => {
    * （2026-10-24 本机实测）。这条用例把那个延迟做进替身里 —— 用同步替身测「回带的是新值」，
    * 测出来的只是替身的性质，测不到真实宿主的时序。
    */
+  /**
+   * volatile 白名单：只有这两项能在线改。
+   *
+   * 多标一项的形态是假生效 —— 宿主把新值就地塞进引用，而 mmapSize、busyTimeout、
+   * encoderModel 这些在建连接时就用掉了，改了不会按新值走，界面上却显示「已保存」。
+   * 少标则更直接：宿主只列出「至少有一个 volatile 字段」的命名空间，
+   * viewBudget 漏标会让整个配置页说「设置里没有本插件」。
+   */
+  it('Config 里只有 viewBudget 与 topN 标了 volatile', () => {
+    const volatile = Object.entries(Config.dict)
+      .filter(([, field]) => field.meta !== undefined && field.meta.volatile === true)
+      .map(([key]) => key)
+      .sort()
+    assert.deepEqual(volatile, ['topN', 'viewBudget'])
+  })
+
   it('宿主异步生效时，POST 等到值真的变了再回带', async () => {
     const routes = []
     const webServer = {
@@ -315,6 +331,40 @@ describe('插件契约', () => {
       6000,
       '回带的必须是更新后的值：拿 update 返回时的旧值当新基线，界面就会把输入框弹回去',
     )
+  })
+
+  /**
+   * 宿主永不生效（更新被吞，或版本号根本对不上）时，回带必须是 pending。
+   *
+   * 与上一条是同一段代码的两个分支：上一条证明「迟到的生效会被等到」，
+   * 这条证明「等不到时说等不到」。少了它，超时回退成「最后一次读到的旧值」
+   * 会静默通过 —— 界面把旧值当新基线，就是输入框弹回去。
+   */
+  it('宿主一直不生效时标 pending，且不回带旧值', async () => {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    const own = { revision: 1, value: { viewBudget: 5000, topN: 24 } }
+    const settings = {
+      describe: () => [{ ns: 'lattice', revision: own.revision, value: own.value }],
+      update: () => ({}),
+    }
+    apply(fakeCtx({ webServer, settings }), baseConfig)
+    const route = routes.find((r) => r.path === '/api/lattice-config')
+    const res = fakeRes()
+    await route.handler(
+      fakeReq({
+        body: JSON.stringify({ ns: 'lattice', patch: { viewBudget: 6000 }, revision: 1, confirm: true }),
+      }),
+      res,
+    )
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.pending, true, '值没生效就该说 pending，不能假装成功')
+    assert.equal(res.out.body.entry, null, '回带旧值等于把没生效的值当成已生效')
   })
 
   /**
