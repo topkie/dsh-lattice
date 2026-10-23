@@ -39,8 +39,10 @@ dsh plugin --profile <profile> add dsh-lattice
 `dependencies` 与 `dsh.profile.bundles` 是不是都写了 `dsh-lattice`。
 
 **不经宿主时怎么核**（本仓库的验证脚本走的就是这条）：构建产物是 ESM 模块，导出 `apply(ctx, config)`。
-`ctx` 只需实现三件事 —— `get('tools')` 返回 `{register}`、`get('webServer')` 返回 `{register}`（没有就不注册界面那组路由）、
-`effect(fn)` 接收清理函数并返回一个（返回值不是函数会报 `ctx.effect is not a function`）。注册进表的每个工具是
+`ctx` 要实现四件事 —— `get('tools')` 返回 `{register}`、`get('webServer')` 返回 `{register}`（没有就不注册界面那组路由）、
+`effect(fn)` 接收清理函数并返回一个（返回值不是函数会报 `ctx.effect is not a function`）、
+`inject(deps, callback)` 注册子 fiber（真 cordis 里 `deps` 全部就绪才执行，父插件不受影响；
+没有界面载体时写成空函数即可 —— 实测不实现它会在 `apply` 里报 `ctx.inject is not a function`）。注册进表的每个工具是
 `{name, description, parameters, execute(args)}`，`execute` 返回拼好的文本。配置项与宿主里那一套相同；两个容易漏的：
 `dataDir` 留空时按 `$DSH_HOME/lattice` → `~/.dsh/lattice` → 当前目录的 `.lattice` 依次解析（`lattice_ping` 的 `dataDir` 报的就是解析结果），
 `encoderCacheDir` 留空时用 transformers.js 的默认缓存位置 —— 离线机器上那里没有模型，召回会退回纯词面（§4.1）。
