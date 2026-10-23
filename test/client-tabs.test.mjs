@@ -454,7 +454,7 @@ describe('界面选项卡：管理与配置分开', () => {
               state: 'unavailable',
               attempts: [
                 { host: 'https://huggingface.co/', ok: false, ms: 21045, error: 'fetch failed' },
-                { host: 'https://hf-mirror.com/', ok: false, ms: 1599, error: 'fetch failed' },
+                { host: 'https://modelscope.cn/', ok: false, ms: 1599, error: 'fetch failed' },
               ],
             },
             tauJoin: 0.78,
@@ -474,7 +474,7 @@ describe('界面选项卡：管理与配置分开', () => {
       assert.ok(box, '两个源都失败，界面却没有报出原因')
       const text = textOf(box)
       assert.match(text, /https:\/\/huggingface\.co\//, '没说是哪个源')
-      assert.match(text, /https:\/\/hf-mirror\.com\//, '只报了第一个源，第二个源的失败原因丢了')
+      assert.match(text, /https:\/\/modelscope\.cn\//, '只报了第一个源，第二个源的失败原因丢了')
       assert.match(text, /fetch failed/, '只写了失败，没写原因')
       assert.match(text, /词面/, '没说清后果：召回会退回词面')
     } finally {

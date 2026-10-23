@@ -47,7 +47,7 @@ dsh plugin --profile <profile> add dsh-lattice
 `{name, description, parameters, execute(args)}`，`execute` 返回拼好的文本。配置项与宿主里那一套相同；两个容易漏的：
 `dataDir` 留空时按 `$DSH_HOME/lattice` → `~/.dsh/lattice` → 当前目录的 `.lattice` 依次解析（`lattice_ping` 的 `dataDir` 报的就是解析结果），
 `encoderCacheDir` 留空时用 transformers.js 的默认缓存位置 —— 离线机器上那里没有模型，召回会退回纯词面（§4.1）。
-下载按顺序试两条源：先 `https://huggingface.co/`，失败再 `https://hf-mirror.com/`（`encoderMirror` 换第二条，
+下载按顺序试两条源：先 `https://huggingface.co/`，失败再 `https://modelscope.cn/`（`encoderMirror` 换第二条，
 填成官方地址就只试官方）。两条都失败时 `lattice_ping` 的 `caches.encoder.attempts` 留着逐源结果，
 界面的配置页也把它们列出来。
 

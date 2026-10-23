@@ -330,12 +330,12 @@ export const Config = z.object({
     .string()
     .default(DEFAULT_ENCODER_MODEL)
     .description('向量模型名。换模型要重建全库向量，改后需重启宿主'),
-  /** 第二下载源；留空等于 hf-mirror.com，填成官方地址则只试官方 */
+  /** 第二下载源；留空等于 modelscope.cn，填成官方地址则只试官方 */
   encoderMirror: z
     .string()
     .default('')
     .description(
-      '第二下载源。加载模型时先试 huggingface.co，失败再试这里；留空等于 hf-mirror.com，填成官方地址则只试官方。改后需重启宿主',
+      '第二下载源。加载模型时先试 huggingface.co，失败再试这里；留空等于 modelscope.cn（魔搭），填成官方地址则只试官方。改后需重启宿主',
     ),
   /** 模型缓存目录；留空用运行时默认位置 */
   encoderCacheDir: z.string().default('').description('模型缓存目录；留空用运行时默认位置。改后需重启宿主'),

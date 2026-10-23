@@ -67,7 +67,7 @@
       "commands": "node",
       "credentials": [],
       "externalServices": [],
-      "notes": "Read/write under the lattice data directory only. The only outbound traffic is the one-time model download (about 23 MB) on the first recall, trying huggingface.co first and hf-mirror.com second; both can be redirected by encoderMirror. Nothing else leaves the machine."
+      "notes": "Read/write under the lattice data directory only. The only outbound traffic is the one-time model download (about 23 MB) on the first recall, trying huggingface.co first and modelscope.cn second; both can be redirected by encoderMirror. Nothing else leaves the machine."
     },
     "compatibility": {
       "dsh": ">=0.1.5-alpha.2 <0.3.0-0",

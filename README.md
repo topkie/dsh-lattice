@@ -62,12 +62,12 @@ npm 上的 `dsh-lattice` 目前只是一个占位包：`npm view dsh-lattice` �
 本仓库的 `pnpm-workspace.yaml` 已按两个版本各自认识的字段名放行这四个包，用 pnpm 装不会遇到这一步。
 
 模型权重不在 npm 包里：装依赖只装运行时（`@huggingface/transformers`），第一次加载编码器才去
-`huggingface.co` 取 `Xenova/bge-small-zh-v1.5`，拿不到再试 `hf-mirror.com` —— 两条源按这个顺序试，
-前一条成功就不再试后一条。国内网络实测官方源解析被污染（解析到 `31.13.95.17`），
-`curl` 报 `(28) Failed to connect to huggingface.co port 443 after 21045 ms`，镜像实测 9.9 秒下完并加载。
+`huggingface.co` 取 `Xenova/bge-small-zh-v1.5`，拿不到再试 `modelscope.cn`（魔搭）—— 两条源按这个顺序试，
+前一条成功就不再试后一条。国内网络实测：官方源连不上（解析到 `179.60.193.9`，10.4 秒后 `fetch failed`），
+魔搭那边 5 次独立进程都是 0.7~1.1 秒下完并加载；两次尝试合计约 11.6 秒，其中 10.8 秒花在等官方源超时。
 两条都失败时编码器停在未加载状态、召回退回纯词面 —— 表现与上面两种一模一样，只看行为分不出来。
 界面「配置」页会逐条列出试过哪个源、各花了多久、错在哪一句，所以先看那里。
-配置项 `encoderMirror` 换掉第二条源；填成官方地址就只试官方一次。
+配置项 `encoderMirror` 换掉第二条源；填成官方地址就只试官方一次，填 `https://hf-mirror.com` 就换回旧的镜像。
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git
@@ -103,7 +103,7 @@ profile 的位置因平台而异，通常在用户目录下 `.dsh/profiles/<prof
 | `dataDir` | 空（即 `<数据目录>/lattice`） | 数据目录；留空按 `DSH_HOME/lattice` 解析，未设置 `DSH_HOME` 时用 `~/.dsh/lattice` |
 | `encoderEnabled` | `true` | 关掉即为纯词面模式 |
 | `encoderModel` | `Xenova/bge-small-zh-v1.5` | 向量模型 |
-| `encoderMirror` | 空 | 第二下载源。留空等于 `https://hf-mirror.com`；官方源总是先试一次，填成官方地址就只试官方 |
+| `encoderMirror` | 空 | 第二下载源。留空等于 `https://modelscope.cn`（魔搭）；官方源总是先试一次，填成官方地址就只试官方 |
 | `encoderCacheDir` | 空 | 模型缓存目录；留空用运行时默认位置 |
 | `tauJoin` | `0.78` | 并入已有主题所需的余弦阈值（可调范围 0.6~0.95） |
 | `tauLex` | `0.05` | 并入所需的词面重叠阈值（0.02~0.5） |

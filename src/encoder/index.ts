@@ -25,8 +25,11 @@ export interface EncoderOptions {
    * 为什么要候选而不是一个源：官方源在部分网络里不可达（实测被 DNS 污染到
    * 一个无关地址段），镜像也会失效。只配一个源的后果是「网络稍差就没有向量」，
    * 而且失败原因只留最后一个，用户看不出该换哪个。
+   *
+   * 每一项带可选路径模板：不同镜像的文件路径格式不同（ModelScope 多一层 `models/`、
+   * 分支名是 `master`），只给主机名会让第二个源上的文件一律 404。
    */
-  hosts?: readonly string[]
+  sources?: readonly EncoderSource[]
   /** 量化方式，默认 q8 */
   dtype?: string
   /**
@@ -63,21 +66,64 @@ export interface FeatureExtractor {
  * 是为了让「插件用了这个包的哪几个 API」在代码里可读、可查。
  */
 interface TransformersModule {
-  env: { remoteHost?: string; cacheDir?: string }
+  env: { remoteHost?: string; remotePathTemplate?: string; cacheDir?: string }
   pipeline(task: string, model: string, options: { dtype: string }): Promise<FeatureExtractor | null>
 }
 
 /** 加载一个源上的模型。失败请抛错（不要返回 null），由调用方记进尝试记录。 */
-export type EncoderLoader = (host: string, opts: EncoderOptions) => Promise<FeatureExtractor | null>
+export type EncoderLoader = (source: EncoderSource, opts: EncoderOptions) => Promise<FeatureExtractor | null>
+
+export interface EncoderSource {
+  /** 主机根，如 `https://huggingface.co/`。 */
+  host: string
+  /**
+   * 模型文件在该主机上的路径模板，交给 `@huggingface/transformers` 的 `env.remotePathTemplate`。
+   * 留空表示用那个包的默认值（`{model}/resolve/{revision}/`）。
+   */
+  pathTemplate?: string
+}
+
+/** 那个包默认的路径模板。切源时要显式设回它，否则会沿用上一个源的路径。 */
+export const DEFAULT_PATH_TEMPLATE = '{model}/resolve/{revision}/'
 
 /**
  * 官方源。`@huggingface/transformers` 自己的默认值就是它；这里显式写出来，
  * 因为「第一个源」要出现在尝试记录里，不能靠「没设过」来表达。
  */
 export const OFFICIAL_HOST = 'https://huggingface.co/'
+export const OFFICIAL_SOURCE: EncoderSource = { host: OFFICIAL_HOST }
 
-/** 官方源不可达时用的镜像。写成常量，改它只改一处。 */
-export const DEFAULT_MIRROR_HOST = 'https://hf-mirror.com/'
+/**
+ * 官方源不可达时用的镜像：ModelScope（魔搭，阿里）。
+ *
+ * 为什么是它而不是 hf-mirror：2026-10-24 在本机直连（不走代理）实测，
+ * 取 8 MB 模型分片三次，ModelScope 0.18 / 0.23 / 0.47 秒、hf-mirror 0.46 / 0.55 / 2.33 秒；
+ * 取 config.json 连续十次，ModelScope 中位 0.07 秒、hf-mirror 中位 0.29 秒；
+ * 而 hf-mirror.com 当时解析到 160.16.86.14（境外地址），ModelScope 解析到 39.99.133.195（阿里云）。
+ * 它的路径格式与 Hugging Face 差一个前缀，所以源要带 pathTemplate，不能只有主机名。
+ */
+export const DEFAULT_MIRROR_SOURCE: EncoderSource = {
+  host: 'https://modelscope.cn/',
+  pathTemplate: 'models/{model}/resolve/master/',
+}
+
+/**
+ * hf-mirror 不再进默认候选，配置里仍可显式指定。保留这个常量是为了让
+ * 「它曾经是默认值、后来为什么被换掉」留在代码里，而不是只留在提交历史里。
+ */
+export const HF_MIRROR_SOURCE: EncoderSource = { host: 'https://hf-mirror.com/' }
+
+/** 已知源：用户填的地址命中其中一个时，连带它的路径模板一起用。 */
+const KNOWN_SOURCES: readonly EncoderSource[] = [OFFICIAL_SOURCE, DEFAULT_MIRROR_SOURCE, HF_MIRROR_SOURCE]
+
+/** 把配置里的写法归一到已知源（容忍结尾斜杠有无）。 */
+function knownSourceOf(host: string): EncoderSource | null {
+  const trim = host.replace(/\/+$/, '')
+  for (const source of KNOWN_SOURCES) {
+    if (source.host.replace(/\/+$/, '') === trim) return source
+  }
+  return null
+}
 
 /**
  * 由配置里的一个镜像地址算出候选序列。
@@ -86,10 +132,12 @@ export const DEFAULT_MIRROR_HOST = 'https://hf-mirror.com/'
  * 而镜像失效时也不该把用户卡在「必须先改配置」上。镜像填成官方地址时只留一个，
  * 免得同一个源试两次。
  */
-export function hostList(mirror?: string): readonly string[] {
+export function sourceList(mirror?: string): readonly EncoderSource[] {
   const custom = typeof mirror === 'string' ? mirror.trim() : ''
-  const second = custom === '' ? DEFAULT_MIRROR_HOST : custom
-  return second === OFFICIAL_HOST ? [OFFICIAL_HOST] : [OFFICIAL_HOST, second]
+  if (custom === '') return [OFFICIAL_SOURCE, DEFAULT_MIRROR_SOURCE]
+  const known = knownSourceOf(custom)
+  if (known !== null) return known.host === OFFICIAL_HOST ? [OFFICIAL_SOURCE] : [OFFICIAL_SOURCE, known]
+  return [OFFICIAL_SOURCE, { host: custom }]
 }
 
 /** 一次源尝试的结果。`ms` 是这一次花掉的时间，含建立连接与下载。 */
@@ -120,15 +168,30 @@ export function encoderAttempts(): EncoderAttempt[] {
 /**
  * 默认加载器：动态 import 那个包，设好源与缓存目录，再建 pipeline。
  *
- * 每次尝试都要**重设 `remoteHost`** —— 那个包把它当全局环境变量读，
- * 换源不重新赋值的话，第二个源仍会打向第一个地址。
+ * 每次尝试都要**重设 `remoteHost` 与 `remotePathTemplate`** —— 那个包把它们当全局
+ * 环境变量读，换源不重新赋值的话，第二个源仍会打向第一个地址、沿用第一个源的路径。
+ * 模板没给时要显式设回包的默认值，不能只「不设置」：不设置等于沿用上一个源的值。
  */
-async function defaultLoader(host: string, opts: EncoderOptions): Promise<FeatureExtractor | null> {
+/**
+ * 把源写进那个包读的全局环境变量。
+ *
+ * 单独抽出来并导出，是为了能测「切源时路径模板会不会残留」—— 那个模板是全局的，
+ * 只设不重置时，第二个源会沿用第一个源的路径格式（ModelScope 与 Hugging Face 的路径不同）。
+ */
+export function applySource(
+  mod: { env: { remoteHost?: string; remotePathTemplate?: string } },
+  source: EncoderSource,
+): void {
+  mod.env.remoteHost = source.host
+  mod.env.remotePathTemplate = source.pathTemplate ?? DEFAULT_PATH_TEMPLATE
+}
+
+async function defaultLoader(source: EncoderSource, opts: EncoderOptions): Promise<FeatureExtractor | null> {
   // 动态 import：包可能根本没装（optionalDependency）。
   // 这个转换是对**宿主之外**的边界：包没有随本仓库编译的声明，形状由上层用法约束，
   // 也就是上面那个 TransformersModule —— 声称的字段一旦写错，调用点会立刻编译不过。
   const mod = (await import('@huggingface/transformers')) as unknown as TransformersModule
-  mod.env.remoteHost = host
+  applySource(mod, source)
   if (opts.cacheDir) mod.env.cacheDir = opts.cacheDir
   return mod.pipeline('feature-extraction', opts.model, { dtype: opts.dtype ?? 'q8' })
 }
@@ -216,31 +279,31 @@ export async function ensureEncoder(opts: EncoderOptions): Promise<boolean> {
   if (loading !== null && loadedModel === opts.model) return loading
   if (state === 'ready' || state === 'unavailable') resetEncoder()
 
-  // 一个源都没配就只试官方源：`hosts` 为空与「只用官方」是同一种意思，
+  // 一个源都没配就只试官方源：`sources` 为空与「只用官方」是同一种意思，
   // 不能让空数组变成「什么都不试、直接降级」。
-  const hosts = opts.hosts !== undefined && opts.hosts.length > 0 ? opts.hosts : [OFFICIAL_HOST]
+  const sources = opts.sources !== undefined && opts.sources.length > 0 ? opts.sources : [OFFICIAL_SOURCE]
   const load = opts.load ?? defaultLoader
 
   loading = (async () => {
     try {
       state = 'loading'
       attempts = []
-      // 按顺序试：前一个失败才试下一个。每次都重设 remoteHost（见 defaultLoader 的注释）。
-      for (const host of hosts) {
+      // 按顺序试：前一个失败才试下一个。每次都重设 remoteHost 与路径模板（见 defaultLoader 的注释）。
+      for (const source of sources) {
         const started = Date.now()
         try {
-          extractor = await load(host, opts)
+          extractor = await load(source, opts)
           state = 'ready'
           loadedModel = opts.model
           lastError = null
           lastErrorCode = null
-          attempts.push({ host, ok: true, ms: Date.now() - started, error: null })
+          attempts.push({ host: source.host, ok: true, ms: Date.now() - started, error: null })
           return true
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err)
           lastErrorCode = codeOf(err)
           extractor = null
-          attempts.push({ host, ok: false, ms: Date.now() - started, error: lastError })
+          attempts.push({ host: source.host, ok: false, ms: Date.now() - started, error: lastError })
         }
       }
       // 所有源都失败：停在 unavailable，逐源原因留在 attempts 里。

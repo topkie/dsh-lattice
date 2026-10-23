@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  DEFAULT_MIRROR_HOST,
+  DEFAULT_MIRROR_SOURCE,
+  DEFAULT_PATH_TEMPLATE,
+  HF_MIRROR_SOURCE,
   OFFICIAL_HOST,
+  OFFICIAL_SOURCE,
+  applySource,
   centroidOf,
   encode,
   encodeBatch,
@@ -10,8 +14,8 @@ import {
   encoderError,
   encoderState,
   ensureEncoder,
-  hostList,
   resetEncoder,
+  sourceList,
 } from '../dist/encoder/index.js'
 import { VEC_DIM, l2norm } from '../dist/util/vec.js'
 
@@ -23,8 +27,8 @@ const noNetwork = async () => {
   throw new Error('用例不联网：注入的加载器直接失败')
 }
 const offline = { ...opts, load: noNetwork }
-// 「试几个源」是配置层的决定（state.ts 调 hostList），ensureEncoder 只按给到的顺序试。
-const twoSources = { ...opts, hosts: hostList('') }
+// 「试几个源」是配置层的决定（state.ts 调 sourceList），ensureEncoder 只按给到的顺序试。
+const twoSources = { ...opts, sources: sourceList('') }
 
 describe('编码器降级', () => {
   it('初始状态为 idle', () => {
@@ -70,28 +74,41 @@ describe('编码器降级', () => {
 
 describe('编码器下载源', () => {
   it('默认两个源，官方在前', () => {
-    assert.deepEqual(hostList(''), [OFFICIAL_HOST, DEFAULT_MIRROR_HOST])
-    assert.deepEqual(hostList('  '), [OFFICIAL_HOST, DEFAULT_MIRROR_HOST])
-    assert.deepEqual(hostList('https://example.com'), [OFFICIAL_HOST, 'https://example.com'])
+    assert.deepEqual(sourceList(''), [OFFICIAL_SOURCE, DEFAULT_MIRROR_SOURCE])
+    assert.deepEqual(sourceList('  '), [OFFICIAL_SOURCE, DEFAULT_MIRROR_SOURCE])
+    assert.deepEqual(sourceList('https://example.com'), [OFFICIAL_SOURCE, { host: 'https://example.com' }])
+  })
+
+  it('默认镜像带自己的路径模板，否则那边的文件一律 404', () => {
+    assert.equal(DEFAULT_MIRROR_SOURCE.host, 'https://modelscope.cn/')
+    assert.equal(DEFAULT_MIRROR_SOURCE.pathTemplate, 'models/{model}/resolve/master/')
+  })
+
+  it('镜像填成已知地址时连同它的路径模板一起用', () => {
+    // 用户照抄域名、不带结尾斜杠也要认出来，否则会退化成「按 Hugging Face 的路径去 ModelScope 取文件」。
+    assert.equal(sourceList('https://modelscope.cn')[1], DEFAULT_MIRROR_SOURCE)
+    assert.equal(sourceList('https://modelscope.cn/')[1], DEFAULT_MIRROR_SOURCE)
+    // hf-mirror 已不是默认值，但显式指定仍然能用。
+    assert.equal(sourceList('https://hf-mirror.com/')[1], HF_MIRROR_SOURCE)
   })
 
   it('镜像填成官方地址时只试一次，同一个源不试两遍', () => {
-    assert.deepEqual(hostList(OFFICIAL_HOST), [OFFICIAL_HOST])
-    assert.deepEqual(hostList('https://huggingface.co/'), [OFFICIAL_HOST])
+    assert.deepEqual(sourceList(OFFICIAL_HOST), [OFFICIAL_SOURCE])
+    assert.deepEqual(sourceList('https://huggingface.co/'), [OFFICIAL_SOURCE])
   })
 
   it('第一个源失败后试第二个，成功即停', async () => {
     resetEncoder()
     const seen = []
-    const load = async (host) => {
-      seen.push(host)
-      if (host === OFFICIAL_HOST) throw new Error('官方源连不上')
+    const load = async (source) => {
+      seen.push(source.host)
+      if (source.host === OFFICIAL_HOST) throw new Error('官方源连不上')
       return async () => ({ data: new Float32Array(0) })
     }
     const ok = await ensureEncoder({ ...twoSources, load })
     assert.equal(ok, true)
     assert.equal(encoderState(), 'ready')
-    assert.deepEqual(seen, [OFFICIAL_HOST, DEFAULT_MIRROR_HOST])
+    assert.deepEqual(seen, [OFFICIAL_HOST, DEFAULT_MIRROR_SOURCE.host])
     const tries = encoderAttempts()
     assert.equal(tries.length, 2)
     assert.equal(tries[0].ok, false)
@@ -103,8 +120,8 @@ describe('编码器下载源', () => {
 
   it('两个源都失败时逐源留原因，状态停在 unavailable', async () => {
     resetEncoder()
-    const load = async (host) => {
-      throw new Error('连不上 ' + host)
+    const load = async (source) => {
+      throw new Error('连不上 ' + source.host)
     }
     const ok = await ensureEncoder({ ...twoSources, load })
     assert.equal(ok, false)
@@ -112,7 +129,7 @@ describe('编码器下载源', () => {
     const tries = encoderAttempts()
     assert.deepEqual(
       tries.map((t) => t.host),
-      [OFFICIAL_HOST, DEFAULT_MIRROR_HOST],
+      [OFFICIAL_HOST, DEFAULT_MIRROR_SOURCE.host],
     )
     assert.deepEqual(
       tries.map((t) => t.ok),
@@ -127,12 +144,25 @@ describe('编码器下载源', () => {
   it('没给候选源时只试官方，不凭空加镜像', async () => {
     resetEncoder()
     const seen = []
-    const load = async (host) => {
-      seen.push(host)
+    const load = async (source) => {
+      seen.push(source.host)
       throw new Error('连不上')
     }
     assert.equal(await ensureEncoder({ ...opts, load }), false)
     assert.deepEqual(seen, [OFFICIAL_HOST])
+  })
+
+  it('切源时路径模板跟着换，不留上一个源的', () => {
+    const mod = { env: {} }
+    applySource(mod, OFFICIAL_SOURCE)
+    assert.equal(mod.env.remoteHost, OFFICIAL_HOST)
+    assert.equal(mod.env.remotePathTemplate, DEFAULT_PATH_TEMPLATE)
+    applySource(mod, DEFAULT_MIRROR_SOURCE)
+    assert.equal(mod.env.remoteHost, 'https://modelscope.cn/')
+    assert.equal(mod.env.remotePathTemplate, 'models/{model}/resolve/master/')
+    // 换回官方时模板必须设回包的默认值：只「不去设置」会让官方源沿用 ModelScope 的路径。
+    applySource(mod, OFFICIAL_SOURCE)
+    assert.equal(mod.env.remotePathTemplate, DEFAULT_PATH_TEMPLATE)
   })
 
   it('复位后不保留上一次的尝试记录', async () => {

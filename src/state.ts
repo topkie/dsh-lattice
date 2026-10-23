@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { ensureBuildInfo } from './db/build-info.js'
 import { openVault } from './db/open.js'
-import { encode, encoderErrorCode, ensureEncoder, hostList, type EncoderOptions } from './encoder/index.js'
+import { encode, encoderErrorCode, ensureEncoder, sourceList, type EncoderOptions } from './encoder/index.js'
 import { closeLog, configureLog, log } from './log/index.js'
 import { ENTRY_RULE_ID } from './pipeline/entries.js'
 import type { RecallMeta } from './pipeline/search.js'
@@ -66,7 +66,7 @@ export function resolveDataDir(configured: string): string {
 function encoderOptionsOf(cfg: RuntimeConfig): EncoderOptions {
   return {
     model: cfg.encoderModel,
-    hosts: hostList(cfg.encoderMirror),
+    sources: sourceList(cfg.encoderMirror),
     cacheDir: cfg.encoderCacheDir || undefined,
   }
 }
