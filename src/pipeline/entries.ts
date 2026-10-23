@@ -479,7 +479,14 @@ function accumulate(text: string, into: Map<string, MutableStat>): void {
   }
 }
 
-/** 从全部 atom 正文构建词表索引。 */
+/**
+ * 从全部 atom 正文构建词表索引。
+ *
+ * **分母只数 atom 行，不数 `entry` 行 —— 这是有意的**，不是漏了 JOIN。入口表里存的是从正文
+ * 抽出来的词，同一个词在正文里出现一次、又在 `entry` 里出现一次；把 entry 行也算进分母，
+ * 等于把同一份证据数两遍，df 会被「自己给自己的声明」抬高，「这个词很普通」的判据随之失效。
+ * 入口侧的分量在别处单独计权（`ENTRY_WEIGHT`），不在这里重复计。
+ */
 export function buildVocabIndex(db: DatabaseSync): VocabIndex {
   const rows = db.prepare('SELECT text FROM atom').all() as Array<{ text: unknown }>
   const map = new Map<string, MutableStat>()

@@ -130,7 +130,7 @@ describe('判据 1/3：unsupersede 只清标记，三种结果分开说', () => 
         text: '撤销一条不存在的改口：那条记录我在库里找不到。',
         unsupersede: 987654321,
       })
-      assert.match(receipt, /不在库里/, '要说清 id 不存在：' + receipt)
+      assert.match(receipt, /不存在/, '要说清 id 不存在：' + receipt)
       assert.deepEqual(rowOf(db, a), before, '不该动别的行')
     })
   })

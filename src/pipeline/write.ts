@@ -62,11 +62,14 @@ export type CreateReason = 'far' | 'ambiguous'
 /**
  * 写入方声明的一条关系边。
  *
- * **type 不是白名单**：它是关系标签，不是分类标签。五个推荐值（related / refines /
- * supersedes / duplicate / requires）写在工具描述里给模型看，插件只校验**形状**
+ * **type 不是白名单**：它是关系标签，不是分类标签。四个推荐值（related / refines /
+ * duplicate / requires）写在工具描述里给模型看，插件只校验**形状**
  * （长度与字符集）。理由：白名单会让「模型想表达的关系不在表里」变成一个写不进去的
  * 错误，而边只是线索，丢一条线索比丢一条记忆轻得多；形状校验则挡住真正会坏数据的东西
  * （空串、超长、大写导致的字面量比对失配、非整数 id）。
+ *
+ * 取代不走这里：用写入参数 `supersedes` / `unsupersede`，`edges` 里的 `supersedes` 会被拒
+ * （它要改的是 `atom.superseded_by`，不是一条关系行）。
  */
 export interface DeclaredEdgeInput {
   type: string
@@ -655,7 +658,7 @@ type Decision =
  * 判据表（τ 为初值，须用真实语料重新标定）：
  *   sim1 ≥ τ_join 且 lex1 ≥ τ_lex        → 并入
  *   sim1 < τ_new                          → 新建（far，落未归类域）
- *   sim1 - sim2 < 0.06 且 sim1 ≥ τ_new    → 双峰：语义上说不清属于哪边，交给写入方
+ *   sim1 - sim2 < DELTA_PEAK 且 sim1 ≥ τ_new → 双峰：语义上说不清属于哪边，交给写入方
  *   其余（τ_new ≤ sim1 < τ_join）         → 新建（保留 near 边指向最近的 topic）
  *   无向量（降级）                         → 仅凭 lex1，阈值抬高到 TAU_LEX_ONLY
  */

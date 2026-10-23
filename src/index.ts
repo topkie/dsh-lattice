@@ -5,7 +5,7 @@
 //   2. 注册五个工具：ping（健康检查）、write、recall、expand、list
 //      （`lattice_feedback` 的工具定义仍在 src/tools/index.ts 里，但未注册给模型）
 //
-// 外加十二条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
+// 外加十五条路由给浏览器半用（见 apply 里的注释与文件尾的 handler）：
 //   /api/lattice-ping-mini      库的规模（最小实跑留下的座位验证，实测通过的那条基线）
 //   /api/lattice-atoms          目录：分页 + 过滤，与 lattice_list 同一条数据路径（**不含正文**）
 //   /api/lattice-atom           详情：按 id 取一条的全文（点开才取；只读，与工具无关）
@@ -18,8 +18,11 @@
 //   /api/lattice-unarchive      取消归档：清 bit4，恢复默认可见。写端点
 //   /api/lattice-split-confirm  确认某条待拆分：清 bit0 + 记一条状态。写端点
 //   /api/lattice-split-ignore   忽略某条待拆分：清 bit0 + 写日志。写端点
+//   /api/lattice-recluster-plan    规划一次整理：只落一份计划，不动记忆。写端点
+//   /api/lattice-recluster-cancel  取消未开始的整理：清计划，不动记忆。写端点
+//   /api/lattice-learned-clear   清空学到的入口：删的是数据，不可撤销但可再生。写端点
 //
-// 六条只读路由的栅栏只留「本机回环」一道；六条写端点三道（回环 + POST +
+// 六条只读路由的栅栏只留「本机回环」一道；九条写端点三道（回环 + POST +
 // application/json）。差别与依据见 guardReadOnly / guardWrite 的注释。
 //
 // `lattice_forget` **不在模型可见的工具表**里（§11.1：物理删除归用户，模型只能提议）。
@@ -142,7 +145,7 @@ const FORGET_ROUTE_PATH = '/api/lattice-forget'
  * 为什么不是工具、也不加模型侧参数：设计说明 §11.1 把三权分开 —— 「是否仍然有效」
  * 归模型（写入时声明 supersedes），「失效后是否还要被检索到」归插件（这一位），
  * 「物理删除」归用户。归档是可见性动作，模型侧多一个动作就等于让模型替用户决定
- * 什么该消失；工具表因此仍是六个。
+ * 什么该消失；工具表因此仍是五个。
  *
  * 为什么两条路由而不是一条 `{ archived: true/false }`：动作方向写进路径，日志与
  * 界面调用都不必再解释一个布尔值的含义；两条路由共用一个 handler，不存在第二套实现。
@@ -192,7 +195,7 @@ const LEARNED_CLEAR_ROUTE_PATH = '/api/lattice-learned-clear'
  * 降级日志的导出路由：只读。
  *
  * 为什么放在界面上而不是工具里：导出是给人看的动作；模型侧多一个「读日志」的工具
- * 会扩大工具面（六工具已定案），也会把日志内容塞进上下文 —— 两者都不是设计要的。
+ * 会扩大工具面（五个工具已定案），也会把日志内容塞进上下文 —— 两者都不是设计要的。
  */
 const LOG_EXPORT_ROUTE_PATH = '/api/lattice-log-export'
 

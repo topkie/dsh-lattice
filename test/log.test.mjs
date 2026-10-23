@@ -181,7 +181,7 @@ describe('降级日志', () => {
 
     it('字符串值只收短 token：路径 / 自由文本被替换成 other', () => {
       log.warn('graph.unavailable', { reason: 'D:/secret/path/模型.bin' })
-      log.warn('calib.unlocalized', { reason: 'model_changed' })
+      log.warn('encoder.unavailable', { reason: 'model_changed' })
       flushLog()
       const rows = rowsOf(dir)
       assert.equal(JSON.parse(rows[0].detail).reason, 'other', '非 token 的 reason 被替换')
@@ -210,11 +210,6 @@ describe('降级日志', () => {
      */
     it('事件白名单覆盖草案里的事件（含三条 split.* 与 entry.cleared）', () => {
       assert.deepEqual(Object.keys(EVENT_DETAIL_KEYS).sort(), [
-        'calib.recalibrate_done',
-        'calib.recalibrate_failed',
-        'calib.snapshot_invalid',
-        'calib.snapshot_missing',
-        'calib.unlocalized',
         'encoder.unavailable',
         'entry.cleared',
         'graph.unavailable',
@@ -239,7 +234,7 @@ describe('降级日志', () => {
 
     it('按等级入口：log.info / log.warn / log.error 落库的等级各自正确，且不绕过白名单', () => {
       configureLog(dir)
-      log.info('calib.recalibrate_done', { atoms: 331, samples: 12, ms: 40, changed: true })
+      log.info('split.evicted', { evicted: 1 })
       log.warn('recall.vector_missing')
       log.error('log.write_failed', { reason: 'ENOENT' })
       // 包装层不做判断：不在白名单里的事件照样被丢，不会因为「换了新入口」就绕过校验。
@@ -252,7 +247,7 @@ describe('降级日志', () => {
       )
       assert.deepEqual(
         rows.map((r) => r.event),
-        ['calib.recalibrate_done', 'recall.vector_missing', 'log.write_failed'],
+        ['split.evicted', 'recall.vector_missing', 'log.write_failed'],
       )
 
       // 底层 logEvent 仍在：按变量传等级时要靠它，走同一套过滤。

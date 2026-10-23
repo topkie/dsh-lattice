@@ -337,8 +337,13 @@ export interface ForgetResult {
   reason?: string
 }
 
-/** 按 atom id 找已有墓碑。`forgotten.atom_id` 就是为这一步存在的。 */
-function findTombstoneOf(
+/**
+ * 按 atom id 找已有墓碑。`forgotten.atom_id` 就是为这一步存在的。
+ *
+ * 导出给写入工具的回执用：一条 atom 不在了，可能是被用户删过（墓碑还在），也可能是 id
+ * 从来就没对过。这两件事对调用方意义不同，回执要分得开，所以查墓碑这一步要能复用。
+ */
+export function findTombstoneOf(
   db: DatabaseSync,
   atomId: number,
 ): {

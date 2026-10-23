@@ -2,7 +2,7 @@
 //
 // 为什么要脚本：docs/DEVELOPMENT.md 用「处数 + 总字数」做提示词治理的度量，
 // 而这个数字此前是手算增量加起来得到的 —— 手算会漏，且漏了没有任何检查会发现。
-// 本脚本把口径固定成一句话：注册的工具（六个）+ 未注册的 `lattice_forget` 规格，
+// 本脚本把口径固定成一句话：注册的工具（五个）+ 未注册的 `lattice_forget` 规格，
 // 递归找所有 description 字段，处数 = 字段个数，字数 = 字符串长度之和（JS length，按 UTF-16 码元）。
 //
 // 用法：node scripts/count-prompt-chars.mjs
@@ -11,7 +11,7 @@
 import { apply } from '../dist/index.js'
 import { FORGET_TOOL_SPEC } from '../dist/tools/index.js'
 
-/** 注册的工具（apply 会把六个业务工具与 lattice_ping 一起注册进来）。 */
+/** 注册的工具（apply 会把四个业务工具与 lattice_ping 一起注册进来，共五个）。 */
 const specs = []
 const ctx = {
   get: (k) => (k === 'tools' ? { register: (t) => specs.push(t) } : undefined),

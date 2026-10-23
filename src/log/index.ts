@@ -155,11 +155,11 @@ export function logEvent(level: LogLevel, event: string, detail?: Record<string,
  * 验证底层过滤的那几条用例。
  */
 export const log = {
-  /** 做成了的事（如重标完成）。不是「一切正常」的流水账 —— 那不需要日志库。 */
+  /** 做成了的事（如 `entry.cleared`：用户清空了学到的入口）。不是「一切正常」的流水账 —— 那不需要日志库。 */
   info: (event: string, detail?: Record<string, unknown>): void => logEvent('info', event, detail),
   /** 降级但还能用：词面路失效、图路不可用、旁路缓存写不进。 */
   warn: (event: string, detail?: Record<string, unknown>): void => logEvent('warn', event, detail),
-  /** 日志模块自身或重标这类「本应成功、实际失败」的事。 */
+  /** 日志模块自身这类「本应成功、实际失败」的事。 */
   error: (event: string, detail?: Record<string, unknown>): void => logEvent('error', event, detail),
 } as const
 

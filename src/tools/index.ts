@@ -5,7 +5,7 @@
 //
 // 四个工具对应记忆行动的四个环节：
 //   lattice_write     记住一件事
-//   lattice_recall    按需取回（返回组装好的三段式文本，不是裸数组）
+//   lattice_recall    按需取回（返回组装好的【入选】清单与未入选说明，不是裸数组）
 //   lattice_expand    展开某条记忆的全文或它的兄弟
 //   lattice_list      列目录（「库里有什么」，只读、分页、可过滤）
 //
@@ -26,6 +26,7 @@ import {
   writeReviewed,
 } from '../pipeline/write.js'
 import { DECLARED_ORIGIN, OUT_DEGREE_CAP } from '../graph/infer.js'
+import { findTombstoneOf } from '../pipeline/forget.js'
 import { referenceFor } from '../pipeline/refdist.js'
 import {
   getRuntime,
@@ -43,6 +44,18 @@ function libraryLine(rt: Runtime): string {
   const entries = one('SELECT COUNT(*) AS n FROM entry')
   const edges = one('SELECT COUNT(*) AS n FROM edge')
   return '库：atom ' + atoms + ' / topic ' + topics + ' / entry ' + entries + ' / edge ' + edges
+}
+
+/**
+ * 一条 atom 不在库里时，说清是「被删过」还是「从来没有」。
+ *
+ * 两者的下一步完全不同：被删过的那条有墓碑，用户可能还记着它，值得提一句「这条你删过」；
+ * 从来没有的那条通常是 id 打错或库没同步，说「不存在」就够了。
+ * 墓碑可能有很多块（同一条能删多次），这里只取最近的一块。
+ */
+function absenceOf(rt: Runtime, atomId: number): string {
+  const t = findTombstoneOf(rt.db, atomId)
+  return t === null ? '不存在' : '已被删除（墓碑 #' + t.tombstoneId + '）'
 }
 
 /**
@@ -138,7 +151,7 @@ function num(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
 
-/** 构造三个工具的定义。cfg 在闭包里，apply 时解析一次。 */
+/** 构造四个业务工具的定义。cfg 在闭包里，apply 时解析一次。 */
 export function buildTools(cfg: RuntimeConfig): unknown[] {
   const writeTool = defineTool({
     name: 'lattice_write',
@@ -345,7 +358,11 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
       // 取代关系只落在这里：写入侧的事务内固定 O(1) 行数，多一条 UPDATE 就多一份
       // 写锁持有时间，而这不是热路径。
       // 切分后「本条」是多条 atom，取代关系只能落在一条上 —— 落在第一条，并把落在
-      // 哪一条写进反馈，免得调用方以为三段都建立了取代关系。
+      // 哪一条写进反馈，免得调用方以为每段都建立了取代关系。
+      //
+      // **不加「检测到切分就多落几条」的防御**：那会让一次写入的行数随切分段数增长，而写入
+      // 事务内固定行数是有意的（多一条 UPDATE 就多一份写锁持有时间）。这条约定靠测试钉住：
+      // test/tools.test.mjs 的「切分后取代只落第一条，回执写明落在哪」。
       if (sup !== undefined) {
         const target = out.results[0]!
         const u = rt.db
@@ -353,7 +370,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
           .run(target.atomId, Date.now(), sup, target.atomId)
         lines.push(
           Number(u.changes) === 0
-            ? '注意：要取代的记忆 #' + sup + ' 不存在，未建立取代关系。'
+            ? '注意：要取代的记忆 #' + sup + ' ' + absenceOf(rt, sup) + '，未建立取代关系。'
             : '已把 #' +
                 sup +
                 ' 标记为被 #' +
@@ -370,7 +387,7 @@ export function buildTools(cfg: RuntimeConfig): unknown[] {
         const row = rt.db.prepare('SELECT superseded_by FROM atom WHERE id = ?').get(unsup) as
           { superseded_by: number | bigint | null } | undefined
         if (row === undefined) {
-          lines.push('注意：记忆 #' + unsup + ' 不在库里，未改动任何东西。')
+          lines.push('注意：记忆 #' + unsup + ' ' + absenceOf(rt, unsup) + '，未改动任何东西。')
         } else if (row.superseded_by === null || row.superseded_by === undefined) {
           lines.push('记忆 #' + unsup + ' 本来就没有被取代，未改动。')
         } else {

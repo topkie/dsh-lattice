@@ -19,7 +19,7 @@
  * 日志等级，三档。
  *
  * 为什么有 `info`：不是给「一切正常」用的（那不需要日志库），而是给**做成了的事**用的 ——
- * 「重标成功」这类事件原先只能记成 warn，因为当时只有两档可用。级别该由事件本身决定，
+ * `entry.cleared`（用户清空了学到的入口）这类事件原先只能记成 warn，因为当时只有两档可用。级别该由事件本身决定，
  * 不该由「有哪些档可用」倒推。
  */
 export type LogLevel = 'info' | 'warn' | 'error'
@@ -49,12 +49,6 @@ export const EVENT_DETAIL_KEYS: Readonly<Record<string, readonly string[]>> = {
   'recall.short_term_miss': [],
   // 图路建边失败。
   'graph.unavailable': ['reason'],
-  // 启动时标定快照缺失 / 版本不符或损坏 / 重标失败 / 重标完成 / 本库未标定。
-  'calib.snapshot_missing': [],
-  'calib.snapshot_invalid': ['field'],
-  'calib.recalibrate_failed': ['stage', 'reason'],
-  'calib.recalibrate_done': ['atoms', 'samples', 'ms', 'changed'],
-  'calib.unlocalized': ['reason'],
   // 日志自身写失败（限频 1 次/分钟）。它也会走白名单，原因同样只记错误码。
   'log.write_failed': ['reason'],
 

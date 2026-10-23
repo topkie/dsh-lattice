@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { apply } from '../dist/index.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
 import { setArchived } from '../dist/pipeline/archive.js'
+import { forgetAtom } from '../dist/pipeline/forget.js'
 import {
   FEEDBACK_TOOL_NAME,
   FEEDBACK_TOOL_SPEC,
@@ -178,6 +179,47 @@ describe('工具注册与执行', () => {
       assert.ok(out.includes('（本条）取代'), '单条写入的取代回执要带括号：' + out)
       assert.equal(out.includes('#本条'), false, '编号与说明之间不能黏在一起：' + out)
     })
+
+    it('切分后取代只落第一条，回执写明落在哪', async () => {
+      const old = await tool('lattice_write').execute({
+        text: '长文切分时被取代的那条旧记忆，正文是一句完整的话。',
+      })
+      const oldId = Number(/已写入记忆 #(\d+)/.exec(old)[1])
+      // 40 句、每句 20 余字，合计超过 MAX_ATOM_CHARS=600，写入时按句子边界切成多段。
+      const long = Array.from(
+        { length: 40 },
+        (_, i) => '这是用于触发切分的第' + (i + 1) + '句正文，长度足够跨过单条上限。',
+      ).join('')
+      const out = await tool('lattice_write').execute({ text: long, supersedes: oldId })
+      assert.ok(out.includes('（切分后的第一条）取代'), '输出: ' + out)
+      // superseded_by 写在旧条上，值是接替它的新条 id。切分后只能由第一条接替，
+      // 否则一次写入的行数会随切分段数增长（写入事务内固定行数是有意的）。
+      const firstNew = Number(/第 1\/\d+ 条：已写入记忆 #(\d+)/.exec(out)[1])
+      const row = getRuntime(cfg()).db.prepare('SELECT superseded_by FROM atom WHERE id = ?').get(oldId)
+      assert.equal(row.superseded_by, firstNew, '取代只能落在切分后的第一条：' + out)
+    })
+
+    it('取代目标被删过时说「已被删除」，与「不存在」分开', async () => {
+      const first = await tool('lattice_write').execute({
+        text: '这条稍后会被删除，用来测取代回执的措辞。',
+      })
+      const goneId = Number(/已写入记忆 #(\d+)/.exec(first)[1])
+      forgetAtom(getRuntime(cfg()).db, { atomId: goneId })
+      const out = await tool('lattice_write').execute({
+        text: '另一条不相干的记忆，正文是完整的一句话。',
+        supersedes: goneId,
+      })
+      assert.ok(out.includes('已被删除（墓碑 #'), '输出: ' + out)
+      assert.equal(out.includes('不存在'), false, '被删过的不该说「不存在」：' + out)
+    })
+
+    it('取消一个从来没有的取代关系时说「不存在」', async () => {
+      const out = await tool('lattice_write').execute({
+        text: '再一条不相干的记忆，用来测取消取代的回执。',
+        unsupersede: 987654,
+      })
+      assert.ok(out.includes('不存在，未改动任何东西。'), '输出: ' + out)
+    })
     it('空 text 给出可读的失败信息，不抛错', async () => {
       const out = await tool('lattice_write').execute({ text: '   ' })
       assert.ok(out.includes('不能为空'), '输出: ' + out)
@@ -272,7 +314,7 @@ describe('工具注册与执行', () => {
       assert.ok(/库：atom \d+ \/ topic \d+/.test(out), '输出: ' + out)
     })
 
-    it('返回的是组装好的三段式文本，不是裸数组', async () => {
+    it('返回的是组装好的【入选】清单，不是裸数组', async () => {
       await tool('lattice_write').execute({ text: '系统代理必须走本地端口。' })
       const out = await tool('lattice_recall').execute({ query: '代理' })
       assert.ok(out.includes('【入选】'), '输出: ' + out)
