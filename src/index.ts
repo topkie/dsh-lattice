@@ -1015,18 +1015,37 @@ function settingEntries(described: unknown): unknown[] {
   return []
 }
 
+/** 一条描述里的命名空间名。宿主用 `ns`，别的版本可能叫 `namespace`，两种都认。 */
+function nsOf(row: Record<string, unknown>): string {
+  if (typeof row.ns === 'string') return row.ns
+  if (typeof row.namespace === 'string') return row.namespace
+  return ''
+}
+
 /**
- * 认自己那一条的办法是看 schema 里有没有本插件特有的字段名，而不是比对包名 ——
- * ns 是 profile entry 的 id（用户可以在 profile 里改名），包名不在描述里。
+ * 认自己那一条：先按插件名，再按 schema 里本插件特有的字段名。
+ *
+ * 为什么不是只看字段名：宿主把 schema 序列化成什么形状是实现细节（`properties` 与
+ * `dict` 都见过），只认其中一种会在宿主改版时静默变成「设置里没有本插件」。插件名是
+ * 我们自己定的（`export const name`），cordis 用它定位 profile 条目，缺省 id 就是它。
  */
 function pickOwnEntry(described: unknown): { ns: string; entry: unknown } | null {
-  for (const item of settingEntries(described)) {
+  const entries = settingEntries(described)
+  for (const item of entries) {
     const row = item as Record<string, unknown> | null
     if (row === null || typeof row !== 'object') continue
-    const ns = typeof row.ns === 'string' ? row.ns : typeof row.namespace === 'string' ? row.namespace : ''
+    if (nsOf(row) === name) return { ns: name, entry: row }
+  }
+  // 兜底：用户在 profile 里给条目改过 id 时，按 Config 里唯一标了 volatile 的两个字段名认。
+  for (const item of entries) {
+    const row = item as Record<string, unknown> | null
+    if (row === null || typeof row !== 'object') continue
+    const ns = nsOf(row)
     if (ns === '') continue
     const schema = row.schema as Record<string, unknown> | undefined
-    const props = (schema?.properties ?? schema?.dict) as Record<string, unknown> | undefined
+    const form = (row.form ?? schema) as Record<string, unknown> | undefined
+    const props = (form?.properties ?? form?.dict ?? schema?.properties ?? schema?.dict) as
+      Record<string, unknown> | undefined
     if (props !== undefined && 'viewBudget' in props && 'topN' in props) return { ns, entry: row }
   }
   return null
@@ -1038,7 +1057,7 @@ function namespaceIds(described: unknown): string[] {
   for (const item of settingEntries(described)) {
     const row = item as Record<string, unknown> | null
     if (row === null || typeof row !== 'object') continue
-    const ns = typeof row.ns === 'string' ? row.ns : typeof row.namespace === 'string' ? row.namespace : ''
+    const ns = nsOf(row)
     if (ns !== '') out.push(ns)
   }
   return out
@@ -1070,6 +1089,8 @@ async function configRoute(
           // 这条是真的会发生的：宿主只列出「至少有一个字段标了 volatile」的命名空间。
           message: '宿主设置里没有本插件；Config 里至少要有一个字段标了 volatile',
           namespaces: namespaceIds(described),
+          // 认不出自己时把原始条目回给界面：只报一句「没找到」在排障时等于什么都没说。
+          raw: settingEntries(described),
         })
         return
       }
