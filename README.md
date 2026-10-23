@@ -92,8 +92,6 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 表现与上面两种一模一样，只看行为分不出来。界面「配置」页会逐条列出试过哪个源、各花了多久、
 错在哪一句，所以先看那里。配置项 `encoderMirror` 决定第二条源；填成官方地址就只试官方一次。
 
-不需要向量检索时，装依赖加 `--omit=optional`，其余功能不受影响。
-
 ### 确认装好了
 
 让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；也可以直接调 `lattice_ping`：
