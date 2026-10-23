@@ -134,7 +134,7 @@ describe('write', () => {
       assert.equal(r.created, 'ambiguous')
       assert.ok(Math.abs(r.evidence.sim1 - r.evidence.sim2) < 0.06)
       // 钉的是「落位」那条边：atom → topic，写入时由落位逻辑写、不带 origin。
-      // 0.9 起写入路径还会给新 atom 补 inferred 的 atom → atom near 边（第 97 条），
+      // 写入路径还会给新 atom 补 inferred 的 atom → atom near 边，
       // 不限定 dst_type 会把两类边数在一起。
       const edges = db
         .prepare("SELECT COUNT(*) AS n FROM edge WHERE kind = 'near' AND src_id = ? AND dst_type = 'topic'")
@@ -167,7 +167,7 @@ describe('write', () => {
       const r = await writeAtom(ctx, { text: '棱镜色散实验的读数记录在实验本第三页。' })
       assert.equal(r.action, 'created')
       assert.equal(r.created, 'far')
-      // 不限定 dst_type：写入路径自 0.9 起会给新 atom 补 inferred 边（第 97 条），
+      // 不限定 dst_type：写入路径会给新 atom 补 inferred 边，
       // 只数落位边就漏掉「far 状态下仍然建了图边」这种情形。far 应当一条边都没有。
       const edges = db
         .prepare('SELECT src_id, dst_id, kind FROM edge WHERE src_id = ? OR dst_id = ?')
