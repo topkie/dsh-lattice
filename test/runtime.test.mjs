@@ -1,4 +1,4 @@
-// 运行时可变状态的纪律（docs/PRINCIPLES.md 第四节末、docs/ARCHITECTURE.md 第十节）。
+// 运行时可变状态的纪律（docs/PRINCIPLES.md 第四节末、docs/ARCHITECTURE.md 第十一节）。
 //
 // 被测事实：closeRuntime 之后旧连接会失败，且错误不是静默空结果。
 //

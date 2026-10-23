@@ -131,7 +131,7 @@ describe('插件契约', () => {
     assert.doesNotThrow(() => apply({ get: () => undefined }, baseConfig))
   })
 
-  it('宿主提供 webServer 时把十五条路由挂上去（六条只读 + 九条写）', () => {
+  it('宿主提供 webServer 时把十六条路由挂上去（七条只读 + 九条写）', () => {
     const routes = []
     const webServer = {
       register: (route) => {
@@ -158,12 +158,13 @@ describe('插件契约', () => {
     // 清空「学到的入口」是一条写路由。
     // 断言路径**集合**而不是顺序：注册顺序是实现细节，不该被测试绑住。
     // 没有 settings 服务时配置路由不挂（它在第二段注入里），所以这里仍是 15。
-    assert.equal(routes.length, 15, '六条只读路由 + 九条写路由都应挂上')
+    assert.equal(routes.length, 16, '七条只读路由 + 九条写路由都应挂上')
     assert.deepEqual(routes.map((r) => r.path).sort(), [
       '/api/lattice-archive',
       '/api/lattice-atom',
       '/api/lattice-atoms',
       '/api/lattice-audit',
+      '/api/lattice-export',
       '/api/lattice-forget',
       '/api/lattice-learned-clear',
       '/api/lattice-log-clear',
@@ -196,7 +197,7 @@ describe('插件契约', () => {
     assert.deepEqual(ctx.injected, [['webServer'], ['webServer', 'settings']])
     const paths = routes.map((r) => r.path)
     assert.ok(paths.includes('/api/lattice-config'), '有条配置路由：' + paths.join(','))
-    assert.equal(routes.length, 16, '十五条原有路由 + 一条配置路由')
+    assert.equal(routes.length, 17, '十六条原有路由 + 一条配置路由')
   })
 
   it('配置路由认自己那一条，别家的命名空间不接', async () => {
@@ -349,8 +350,15 @@ describe('插件契约', () => {
       res.out.headers[String(name).toLowerCase()] = String(value)
       return res
     }
-    res.writeHead = (status) => {
+    // writeHead 的第二个参数也要接：日志导出与记忆导出都靠它发 content-disposition。
+    // 只记状态码时，断言会拿到 undefined 而不是「头没发」—— 那是替身的缺陷，不是被测代码的。
+    res.writeHead = (status, headers) => {
       res.out.status = status
+      if (headers !== undefined && headers !== null) {
+        for (const [key, value] of Object.entries(headers)) {
+          res.out.headers[String(key).toLowerCase()] = String(value)
+        }
+      }
       return res
     }
     res.end = (text) => {
@@ -617,6 +625,73 @@ describe('插件契约', () => {
     }
   })
 
+  /**
+   * 导出路由：格式只认 json / md，两种都是附件、都只读。
+   *
+   * 为什么不给默认格式：两个文件面向不同读者（快照给工具、清单给人），猜错时用户
+   * 拿到的是另一种文件，只会以为导出坏了。所以缺 format 与取值非法都必须是 400，
+   * 并且把可选值列在响应里。
+   */
+  it('导出路由：缺 format 与非法取值都 400，json 是快照、md 是清单', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lattice-export-route-'))
+    try {
+      const routes = []
+      const webServer = {
+        register: (route) => {
+          routes.push(route)
+          return () => {}
+        },
+      }
+      apply(fakeCtx({ webServer }), { ...baseConfig, dataDir: dir })
+      const handler = routes.find((r) => r.path === '/api/lattice-export').handler
+      assert.equal(typeof handler, 'function')
+
+      const denied = fakeRes()
+      handler(fakeReq({ remote: '10.0.0.7', method: 'GET' }), denied)
+      assert.equal(denied.out.status, 403)
+      assert.equal(denied.out.body.error, 'forbidden')
+
+      const wrongMethod = fakeRes()
+      handler(fakeReq({ method: 'POST' }), wrongMethod)
+      assert.equal(wrongMethod.out.status, 405)
+
+      // 缺 format：400，并把可选值说出来 —— 只说「参数错」等于让人去读源码。
+      const missing = fakeRes()
+      handler(fakeReq({ method: 'GET' }), missing)
+      assert.equal(missing.out.status, 400)
+      assert.equal(missing.out.body.error, 'bad-format')
+      assert.deepEqual(missing.out.body.formats, ['json', 'md'])
+
+      const badReq = fakeReq({ method: 'GET' })
+      badReq.url = '/api/lattice-export?format=xml'
+      const badRes = fakeRes()
+      handler(badReq, badRes)
+      assert.equal(badRes.out.status, 400)
+
+      // 不比具体条数：运行时是进程级单例，前面的用例可能已经建过别的库。
+      const jsonReq = fakeReq({ method: 'GET' })
+      jsonReq.url = '/api/lattice-export?format=json'
+      const jsonRes = fakeRes()
+      handler(jsonReq, jsonRes)
+      assert.equal(jsonRes.out.status, 200)
+      assert.ok(Array.isArray(jsonRes.out.body.atoms), 'atoms 是数组')
+      assert.equal(typeof jsonRes.out.body.exportedAt, 'string')
+      assert.ok(jsonRes.out.headers['content-disposition'].includes('attachment'))
+      assert.ok(jsonRes.out.headers['content-disposition'].includes('.json'))
+
+      const mdReq = fakeReq({ method: 'GET' })
+      mdReq.url = '/api/lattice-export?format=md'
+      const mdRes = fakeRes()
+      handler(mdReq, mdRes)
+      assert.equal(mdRes.out.status, 200)
+      assert.match(mdRes.out.body, /^# lattice 记忆库导出/)
+      assert.ok(mdRes.out.headers['content-disposition'].includes('.md'))
+    } finally {
+      // 这条路径会真的建库并留住连接：不先关掉，Windows 上目录删不掉。
+      closeRuntime()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
   /**
    * 规模读数端点：界面「配置」页靠它拿「现在按什么在跑」。
    *

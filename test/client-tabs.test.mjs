@@ -281,11 +281,11 @@ describe('界面选项卡：管理与配置分开', () => {
       const panels = view
         .getRoot()
         .children.filter((n) => n !== null && typeof n === 'object' && typeof n.type === 'function')
-      assert.equal(panels.length, 3, '配置页里应当有配置表单、健康面板、维护面板三个组件')
+      assert.equal(panels.length, 4, '配置页里应当有配置表单、健康面板、维护面板、导出四个组件')
       assert.deepEqual(
         panels.map((n) => n.props.key),
-        ['config', 'health', 'maintenance'],
-        '配置页里三个组件的顺序或身份变了',
+        ['config', 'health', 'maintenance', 'export'],
+        '配置页里四个组件的顺序或身份变了',
       )
       // 读数卡片：配置页要回答「现在按什么在跑」，值来自 /api/lattice-ping-mini。
       const cards = descendantsOf(view.getRoot()).filter((n) =>

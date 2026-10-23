@@ -40,6 +40,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
 import { cacheUsage } from './cache-usage.js'
 import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
+import { exportJson, exportMarkdown } from './export/snapshot.js'
 import {
   getRuntime,
   noteRecallDegradations,
@@ -198,6 +199,19 @@ const LEARNED_CLEAR_ROUTE_PATH = '/api/lattice-learned-clear'
  * 会扩大工具面（五个工具已定案），也会把日志内容塞进上下文 —— 两者都不是设计要的。
  */
 const LOG_EXPORT_ROUTE_PATH = '/api/lattice-log-export'
+
+/**
+ * 整库导出（记忆、主题、关系）：只读。
+ *
+ * 与日志导出同一条理由：导出是给人看的动作，不该变成第六个工具。区别是它导的是
+ * **记忆本体** —— 用户要能把自己写进去的东西带走，这是「不自动替你记」的另一半：
+ * 也不把你锁在里面。
+ *
+ * 支持两种格式（`format=json|md`）：json 是完整快照，字段名与库一致，供别的工具读；
+ * md 按主题分组，给人看。缺 format 就报 400 并列出可选值 —— 两种都没有「默认格式」
+ * 说得过去，猜一个只会让人拿到不想要的那个文件。
+ */
+const EXPORT_ROUTE_PATH = '/api/lattice-export'
 
 /** 清空日志：写端点。破坏性动作只能由用户从界面发起（与删除同一条纪律）。 */
 const LOG_CLEAR_ROUTE_PATH = '/api/lattice-log-clear'
@@ -554,6 +568,13 @@ export function apply(ctx: Context, config: unknown): void {
           kind: 'exact',
           path: LOG_EXPORT_ROUTE_PATH,
           handler: (req, res) => logExportRoute(runtimeCfg, req, res),
+        }),
+        // 两条导出路由分开而不是合成一条带开关的：日志与记忆是两类东西（一个排障、
+        // 一个带走自己的数据），合成一条后「导出的是哪一份」就要靠参数猜。
+        webServer.register({
+          kind: 'exact',
+          path: EXPORT_ROUTE_PATH,
+          handler: (req, res) => exportRoute(runtimeCfg, req, res),
         }),
         webServer.register({
           kind: 'exact',
@@ -1575,6 +1596,48 @@ function logExportRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerRes
     res.end(out.csv)
   } catch (e) {
     jsonOut(res, 500, { ok: false, error: 'log-export-failed', message: reasonOf(e) })
+  }
+}
+/**
+ * 导出记忆：JSON 快照或 markdown 清单，都是附件、都只读。
+ *
+ * 只读的落点：读三条 SELECT，不建库、不写行、不动 `data_version`。导出前后库文件
+ * 完全一样 —— 这也是「导出能不能当备份」的一半答案：能当内容备份，不能当整库备份
+ * （入口词、向量、日志都不在里面）。
+ *
+ * `format` 只认 json / md，不猜默认值：两个文件面向的读者不同，猜错的那个会让人
+ * 以为导出坏了。
+ */
+function exportRoute(cfg: RuntimeConfig, req: IncomingMessage, res: ServerResponse): void {
+  if (!guardReadOnly(req, res)) return
+  let format = ''
+  try {
+    format = (new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('format') ?? '').trim()
+  } catch {
+    format = ''
+  }
+  if (format !== 'json' && format !== 'md') {
+    jsonOut(res, 400, {
+      ok: false,
+      error: 'bad-format',
+      message: 'format 只接受 json 或 md',
+      formats: ['json', 'md'],
+    })
+    return
+  }
+  try {
+    const rt = getRuntime(cfg)
+    const opts = { version: VERSION }
+    const out = format === 'json' ? exportJson(rt.db, opts) : exportMarkdown(rt.db, opts)
+    const name = 'lattice-memory-' + dayStamp() + (format === 'json' ? '.json' : '.md')
+    res.writeHead(200, {
+      'content-type': format === 'json' ? 'application/json; charset=utf-8' : 'text/markdown; charset=utf-8',
+      'content-length': Buffer.byteLength(out.text),
+      'content-disposition': 'attachment; filename="' + name + '"',
+    })
+    res.end(out.text)
+  } catch (e) {
+    jsonOut(res, 500, { ok: false, error: 'export-failed', message: reasonOf(e) })
   }
 }
 

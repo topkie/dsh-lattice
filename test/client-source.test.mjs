@@ -52,6 +52,8 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
       ['SPLIT_IGNORE_URL', 'SPLIT_IGNORE_ROUTE_PATH'],
       // 配置：路径写错的形态是「配置页永远说读不到可改字段」，同样没有编译期信号。
       ['CONFIG_URL', 'CONFIG_ROUTE_PATH'],
+      // 导出：路径写错的形态是「点了按钮下载一份 404 页面」，浏览器里同样没有信号。
+      ['EXPORT_URL', 'EXPORT_ROUTE_PATH'],
     ]
     for (const [clientName, hostName] of pairs) {
       assert.equal(
@@ -99,5 +101,22 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
       /if \(typeof props\.onSaved === 'function'\) props\.onSaved\(\)/,
       '保存后没通知父级：上面的「注入预算」读数会一直是保存前的数',
     )
+  })
+
+  /**
+   * 导出按钮：两个格式各一条，都走同一只读路由，格式只放在查询串里。
+   *
+   * 写错的形态是「点了没反应」或「两个按钮下到同一份文件」—— 浏览器里都没有信号，
+   * 只有点下去的人会发现。所以这里钉住两件事：请求确实走 EXPORT_URL、format 有两个取值。
+   */
+  it('导出按钮：两种格式各走一次路由，格式只在查询串里', () => {
+    assert.match(
+      client,
+      /window\.open\(EXPORT_URL \+ '\?format=' \+ format, '_blank'\)/,
+      '导出按钮没走 EXPORT_URL：换成别的路径只会下到一份 404 页面',
+    )
+    for (const format of ['json', 'md']) {
+      assert.match(client, new RegExp("open\\('" + format + "'\\)"), '导出少了一个格式按钮：' + format)
+    }
   })
 })
