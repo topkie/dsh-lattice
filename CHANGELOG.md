@@ -5,9 +5,7 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
-
-> 发布时把上一行改成实际版本号与日期（`## [x.y.z] - YYYY-MM-DD`），并在文件末尾补一条对应的链接定义。
+## [0.9.0] - 2026-10-23
 
 ### Breaking
 
@@ -402,6 +400,6 @@ Recall@12 0.95（19/20）。仓库里只有这一份结果文件，也没有 Lon
   只读接口与数据格式，外部用户无法使用。导入能力改为「由模型判决、脚本按来源临时编写」，
   设计约束见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 的「导入既有记忆」
 
-[Unreleased]: https://github.com/topkie/dsh-lattice/commits/main
+[0.9.0]: https://github.com/topkie/dsh-lattice/releases/tag/0.9.0
 [0.5.0]: https://github.com/topkie/dsh-lattice/releases/tag/0.5.0
 [0.2.0]: https://github.com/topkie/dsh-lattice/releases/tag/0.2.0
