@@ -14,6 +14,7 @@ import {
   encoderError,
   encoderState,
   ensureEncoder,
+  releaseEncoder,
   resetEncoder,
   sourceList,
 } from '../dist/encoder/index.js'
@@ -188,5 +189,49 @@ describe('中心向量', () => {
     v[0] = 3
     const c = centroidOf([v])
     assert.ok(Math.abs(c[0] - 1) < 1e-6)
+  })
+  // 会话释放：只把引用置 null 的话，onnxruntime 的原生内存要等 GC，实测能驻留到进程退出
+  // （5 轮加载/复位的驻留比显式释放高约 40 MB）。这一组用替身数 dispose 调用次数。
+  it('换模型时先释放旧会话，而不是只把引用置空', async () => {
+    let disposed = 0
+    const load = async () => {
+      const fn = async () => ({ data: new Float32Array(VEC_DIM).fill(0.1), dims: [1, VEC_DIM] })
+      fn.dispose = async () => {
+        disposed += 1
+      }
+      return fn
+    }
+    resetEncoder()
+    assert.equal(await ensureEncoder({ model: 'test/model-a', load }), true)
+    assert.equal(await ensureEncoder({ model: 'test/model-b', load }), true)
+    assert.equal(disposed, 1, '换模型时没有释放旧会话')
+  })
+
+  it('releaseEncoder 释放会话并复位状态；没有 dispose 的替身也不报错', async () => {
+    let disposed = 0
+    const withDispose = async () => {
+      const fn = async () => ({ data: new Float32Array(VEC_DIM).fill(0.1), dims: [1, VEC_DIM] })
+      fn.dispose = async () => {
+        disposed += 1
+      }
+      return fn
+    }
+    resetEncoder()
+    assert.equal(await ensureEncoder({ model: 'test/model-c', load: withDispose }), true)
+    await releaseEncoder()
+    assert.equal(disposed, 1)
+    assert.equal(encoderState(), 'idle')
+
+    // 包内部形状没有 dispose 时只能置空引用：这条保证升级/降级都不会让复位抛错
+    resetEncoder()
+    assert.equal(
+      await ensureEncoder({
+        model: 'test/model-d',
+        load: async () => async () => ({ data: new Float32Array(VEC_DIM), dims: [1, VEC_DIM] }),
+      }),
+      true,
+    )
+    await assert.doesNotReject(() => releaseEncoder())
+    assert.equal(encoderState(), 'idle')
   })
 })

@@ -39,12 +39,14 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
 import { cacheUsage } from './cache-usage.js'
-import { encoderAttempts, encoderState } from './encoder/index.js'
-import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
+import { encoderAttempts, encoderState, releaseEncoder } from './encoder/index.js'
+import { clearLog, configureLog, exportLogCsv } from './log/index.js'
 import { exportJson, exportMarkdown } from './export/snapshot.js'
 import {
+  closeRuntimeIfOwner,
   getRuntime,
   noteRecallDegradations,
+  ownRuntime,
   resolveDataDir,
   runtimeEncode,
   type RuntimeConfig,
@@ -474,6 +476,11 @@ export function apply(ctx: Context, config: unknown): void {
   const tools = hostService(ctx, 'tools')
   if (tools === undefined) return
 
+  // 本次插件实例的凭据。卸载时只关自己开的那份运行时（见 closeRuntimeIfOwner）：
+  // 热重载时新旧实例共用模块级单例，后卸的那个不该把新连接关掉。
+  const lifecycle: object = {}
+  ownRuntime(lifecycle)
+
   // 三个业务工具。注册只是挂上定义，真正的库连接与模型加载都等到第一次调用
   // （见 state.ts 的 getRuntime / runtimeEncode）—— 注册路径上不做重活。
   const runtimeCfg: RuntimeConfig = {
@@ -506,9 +513,20 @@ export function apply(ctx: Context, config: unknown): void {
   }
   for (const t of buildTools(runtimeCfg)) tools.register(t)
 
-  // 日志库随插件卸载一起收走：先 flush 队列再关连接（见 src/log/index.ts 的 closeLog）。
-  // 放在这里而不是 webServer 的子 fiber 里：没有界面的 profile 也要正常关闭日志库。
-  ctx.effect(() => () => closeLog(), 'dsh-lattice: log flush')
+  // 库连接与编码器随插件卸载一起收走。放在这里而不是 webServer 的子 fiber 里：
+  // 没有界面的 profile 也要正常关闭。
+  //
+  // 为什么必须关：不关的话库文件句柄一直开着，卸载后连数据目录都删不掉（Windows 报 EPERM，
+  // 残留 lattice.db / -shm / -wal）；编码器那边是 onnxruntime 的原生会话，不释放要等到
+  // 进程退出（见 src/encoder/index.ts 的 releaseEncoder）。closeRuntimeIfOwner 内部已经
+  // flush 并关闭日志库（src/state.ts 的 closeRuntime），所以不再单独注册日志的清理。
+  ctx.effect(
+    () => () => {
+      void releaseEncoder()
+      closeRuntimeIfOwner(lifecycle)
+    },
+    'dsh-lattice: runtime close',
+  )
 
   // ── 浏览器半的座位（最小验证） ─────────────────────────────────────────
   //
