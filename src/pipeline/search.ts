@@ -602,7 +602,7 @@ export const DUP_COS = 0.92 satisfies ThresholdValue<
     area: '重排去重'
     why: '0.92 沿用原设计 atom_pair 表的既有取值，改成词面判定后没有重测；没有一次「不同说法的同一件事」实测（DUP_LEX 才有）。几何票的门槛是旧接口留下的数'
     failsWhen: ['换编码模型（余弦尺度会变）', '同义改写的相似度分布']
-    guardedBy: ['test/archive.test.mjs']
+    guardedBy: ['test/search.test.mjs']
     affects: '重复压制：余弦低于此值即不判重复（两票中的几何票）；仅在同主属 topic 桶内两两比较'
   }
 >
@@ -626,7 +626,7 @@ export const DUP_LEX = 0.72 satisfies ThresholdValue<
     encoderModel: '不适用（纯词面 bigram-Jaccard，不用向量）'
     scale: '构造的对照句对：1 组近义改写 + 1 组逐字相同'
     failsWhen: ['语料语言与书写粒度', '摘要长度（词面 Jaccard 对短文本更敏感）']
-    guardedBy: ['test/archive.test.mjs']
+    guardedBy: ['test/search.test.mjs']
     affects: '重复压制：词面重叠低于此值即不判重复（两票中的词面票）'
   }
 >

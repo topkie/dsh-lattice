@@ -17,6 +17,8 @@ import {
   fuse,
   CHANNEL_WEIGHT,
   AFFILIATION,
+  DUP_COS,
+  DUP_LEX,
   DUP_TEXT,
 } from '../dist/pipeline/search.js'
 
@@ -181,6 +183,13 @@ describe('search', () => {
 
     it('真重复判据 DUP_TEXT 默认 0.7：逐字相同 1.000 过线，同篇不同小节 0.24–0.57 不过线', () => {
       assert.equal(DUP_TEXT, 0.7)
+    })
+
+    it('重复压制两条线按常量名钉住：词面 DUP_LEX 0.72、几何 DUP_COS 0.92', () => {
+      // 0.72 来自「近义改写 0.64 不该被折叠」的实测（见 src/pipeline/search.ts 的 DUP_LEX 注释）；
+      // 0.92 是沿用原设计 atom_pair 的取值。改这两个数等于改召回结果，先让这条用例红。
+      assert.equal(DUP_LEX, 0.72)
+      assert.equal(DUP_COS, 0.92)
     })
 
     it('同一来源内逐字重复只留 final 高的一条', async () => {

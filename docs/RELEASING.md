@@ -13,7 +13,7 @@
 | 版本号 | 语义化版本。破坏性改动进 major，新增进 minor，修复进 patch |
 | 0.x 期间的例外 | 破坏性改动可以进 minor，但 CHANGELOG 该段要写 `### Breaking` |
 | 分支 | `main` 只放发布：接收 `dev` 的合并、打 tag。开发与 PR 都在 `dev` 上 |
-| tag 名 | 带 `v` 前缀：`v0.10.0`。`0.10.0` 之前的 8 个 tag 没有 `v`（`0.2.0` 到 `0.9.1`），不追溯改 |
+| tag 名 | 带 `v` 前缀：`v0.11.0`。`v0.11.0` 之前的 8 个 tag 没有 `v`（`0.2.0` 到 `0.9.1`），不追溯改 |
 
 版本号只有一个来源：`package.json` 的 `version`。插件的 `VERSION` 常量运行时从它读
 （`src/index.ts` 里那三行），`lattice_ping` 报的就是它。所以改版本号只改一处，不要在两处各写一遍。
@@ -59,17 +59,37 @@
 
 前提：「一、准备」里的改动已经在 `dev` 上、门禁绿过。
 
+`main` 每发一版只多一个**合并提交**：把 `dev` 合进来，tag 打在那个合并提交上。
+
 ```bash
 git checkout dev
 git pull --ff-only origin dev
 git checkout main
 git pull --ff-only origin main
-git merge --ff-only dev
+git merge --no-ff dev -m "merge: 发布 vX.Y.Z"
 ```
 
-`--ff-only` 是刻意的：它红了说明 `main` 上有 `dev` 没有的提交（多半是有人在 `main` 上直接改过）。
-停下查清那一笔是什么，不要用 `--no-ff` 盖过去 —— 一旦两条分支分叉，之后每次发版都得手工合一次，
-而分叉本身就说明有人绕过了流程。
+为什么是合并提交而不是快进：`main` 的每个末端对应一版发布，`git log main` 上一行一版；快进会让
+`main` 与 `dev` 永远指向同一个提交，事后从图上分不出哪一段改动属于哪一版。
+
+合并提交很容易造歪，两条必查：
+
+- **树必须等于 `dev` 的树**：`git diff --stat dev main` 输出为空。造错树的合并提交会把没准备发的
+  东西带进发布线，而它和正常合并在 `git log` 上长得一模一样；
+- **父必须是两个**：`git log -1 --format=%P` 给出两段哈希，前一段是上一次发布的 `main` 末端，
+  后一段是这次的 `dev` 末端。
+
+受限环境里 `git merge --no-ff` 可能失败（`error: cannot create standard output pipe for stash:
+Permission denied` / `fatal: could not run stash.`）—— 那是那台机器 git 的限制，与流程无关。
+等价做法是手工造合并提交，造完照样跑上面两条核对：
+
+```bash
+tree=$(git rev-parse dev^{tree})
+merge=$(git commit-tree "$tree" -p "$(git rev-parse main)" -p "$(git rev-parse dev)" -m "merge: 发布 vX.Y.Z")
+git update-ref refs/heads/main "$merge"
+```
+
+不要用 `--squash` 代替：它在 `dev` 上压成一条普通提交，`main` 上就没有合并边界了。
 
 ```bash
 git tag -a vX.Y.Z -m "X.Y.Z：<一句话>"
@@ -77,11 +97,14 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
+先推 `main` 再推 tag：`release.yml` 会 `git fetch origin main` 再校验「tag 指向的提交在 `main` 上」，
+远端还没收到 `main` 时这一步会失败。
+
 tag 名带 `v` 前缀，`package.json` 的 `version` 不带 —— 两处保持这个差别，别写成两种风格。
 
-`v` 不只是习惯，它是触发条件：`.github/workflows/release.yml` 的 `tags` 是 `v*`。打成 `0.10.0`
+`v` 不只是习惯，它是触发条件：`.github/workflows/release.yml` 的 `tags` 是 `v*`。打成 `0.11.0`
 会 tag 建成功、`git push` 也不报错，但 workflow 不触发 —— npm 上不会有这个版本，也没有任何
-地方会说它错了。`0.10.0` 之前的 8 个 tag 没有 `v`，不追溯重打：重打会改历史，而旧 tag 可能
+地方会说它错了。`v0.11.0` 之前的 8 个 tag 没有 `v`，不追溯重打：重打会改历史，而旧 tag 可能
 已经有人拉过。
 
 推 tag 会立刻触发 `.github/workflows/release.yml`：它核对版本、跑一遍门禁、把包发到 npm。
@@ -102,7 +125,7 @@ CHANGELOG 里该段（从 `## [x.y.z]` 到下一个 `## [` 之前）→ Publish�
 
 推 tag 之后由 `.github/workflows/release.yml` 发，不需要在本机操作。它按顺序做四件事：
 
-1. 核对 tag 与 `package.json` 的版本一致（`v0.10.0` 对 `0.10.0`），不一致直接失败；
+1. 核对 tag 与 `package.json` 的版本一致（`v0.11.0` 对 `0.11.0`），不一致直接失败；
 2. 核对 tag 指向的提交在 `main` 上（不在就直接失败），然后跑一遍门禁；
 3. `npm pack --dry-run`，把六项白名单实际打进包里什么、体积多少留在日志里；
 4. `npm publish --access public --provenance`。
@@ -183,15 +206,3 @@ git checkout dev && git checkout -b fix/hotfix-<slug>
 一条实测过的限制：用**绕过双因子**的 granular token 不能 unpublish，会返回
 `403 ... may not perform this action`。要保留「24 小时内可收回」这个能力，就得用能过双因子的方式登录；
 否则任何发布事故都只能靠 deprecate 与下一个版本号处理。
-
-## 当前状态
-
-npm 上有 `dsh-lattice@0.0.0` 与一个 `0.0.0-stage`，都是占位：前者是首次发布时随版本建立的占位包，
-后者是 npm 在首次发布流程里自动写入的临时版本，已标记为弃用。正式版本发出去之后，`latest` 会指向
-正式版本，这两个占位不需要手动处理。
-
-本地已建 ``dev``（与 ``main`` 同起点），远端仓库尚未推送 —— 建远端时两个分支一起推，
-并把默认分支留在 `main`（`git clone` 拿到的应当是发布版本）。
-
-`.github/workflows/release.yml` 已就位，但**首次使用前要先做上面那次 trusted publisher 登记**，
-否则推 tag 会在 publish 这一步失败。这种失败是可恢复的：npm 上还没有新版本，补登记后删 tag 重推即可。

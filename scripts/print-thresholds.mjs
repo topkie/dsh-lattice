@@ -89,6 +89,15 @@ function areaOf() {
 function renderQuery(mode) {
   const area = areaOf()
   const all = QUERIES[mode]()
+  // 段名没有白名单，但**打错了不能静默返回 0 条**：自查命令抄错一个字，输出会和「这一类真的
+  // 条条都有测试」长得一样，而后者正是这份限制说明最想让人确认的事。所以段名对不上就直接红，
+  // 并列出可用段名（取自全表，不只是当前查询命中的那几条）。
+  if (area !== undefined && !ENTRIES.some((e) => e.area === area)) {
+    const areas = [...new Set(ENTRIES.map((e) => e.area))].sort((a, b) => a.localeCompare(b, 'zh'))
+    console.error('没有「' + area + '」这个段名。可用的段名：')
+    for (const a of areas) console.error('  - ' + a)
+    process.exit(1)
+  }
   const rows = area === undefined ? all : all.filter((r) => r.area === area)
   const label = area === undefined ? '' : ' --area=' + area
   console.log(

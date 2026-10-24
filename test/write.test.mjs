@@ -441,7 +441,7 @@ describe('write', () => {
       assert.equal(byTerm.get('索引').weight, 1)
     })
 
-    it('泛词（df/N > 0.5）被动态丢弃 —— 但语料够规模才生效', async () => {
+    it('泛词（df/N > 0.5）被动态丢弃 —— 但语料够规模才生效', () => {
       const text = '坐标变换的补充说明。'
       // 过滤阈值是 MIN_VOCAB_FOR_DF(12)：小库上「出现一次」就等于半数，判据不成立。
       // 这里直接构造词表来验判据本身，不走写库（写 16 条才有规模）。
@@ -453,22 +453,25 @@ describe('write', () => {
 
       const dense = { df: (t) => (t === '坐标' ? 40 : 0), total: () => 40 }
       assert.ok(!extractedEntries(text, dense).some((r) => r.term === '坐标'), '语料够大时泛词必须被丢弃')
+    })
 
-      it('非字母非汉字的词元不作入口（实测：数字与符号片段会挤占展示窗口）', () => {
-        // 实测依据：入口段里混进过 u4e00 / 0x1c / 9_ / v1 / 0335。它们在大库里「绝无仅有」，
-        // IDF 反而给最高分，会挤掉每个主题只展示 8 条的窗口。
-        const recs = extractedEntries('采用 u4e00 与 0x1c 编码，版本 v1 的 9_ 字段，数据量 0335 条。')
-        const terms = recs.map((r) => r.term)
-        for (const bad of ['u4e00', '0x1c', 'v1', '9_', '0335']) {
-          assert.ok(!terms.includes(bad), bad + ' 不该成为入口')
-        }
-      })
+    // 下面两条原先是写在上面那条用例里的嵌套 it。单进程跑在 Windows 上侥幸通过，
+    // 到 Linux runner 上表现为 `test did not finish before its parent and was cancelled`
+    // —— 嵌套注册会让父用例先结束，子用例被取消。测试一律平铺，不嵌套 it。
+    it('非字母非汉字的词元不作入口（实测：数字与符号片段会挤占展示窗口）', () => {
+      // 实测依据：入口段里混进过 u4e00 / 0x1c / 9_ / v1 / 0335。它们在大库里「绝无仅有」，
+      // IDF 反而给最高分，会挤掉每个主题只展示 8 条的窗口。
+      const recs = extractedEntries('采用 u4e00 与 0x1c 编码，版本 v1 的 9_ 字段，数据量 0335 条。')
+      const terms = recs.map((r) => r.term)
+      for (const bad of ['u4e00', '0x1c', 'v1', '9_', '0335']) {
+        assert.ok(!terms.includes(bad), bad + ' 不该成为入口')
+      }
+    })
 
-      it('纯字母的专有词与缩写必须保留（过滤不得误伤）', () => {
-        const recs = extractedEntries('pnpm 装完依赖是空的，git 提交没生效，peer 依赖要绕过。')
-        const terms = recs.map((r) => r.term)
-        for (const good of ['pnpm', 'git', 'peer']) assert.ok(terms.includes(good), good + ' 必须保留')
-      })
+    it('纯字母的专有词与缩写必须保留（过滤不得误伤）', () => {
+      const recs = extractedEntries('pnpm 装完依赖是空的，git 提交没生效，peer 依赖要绕过。')
+      const terms = recs.map((r) => r.term)
+      for (const good of ['pnpm', 'git', 'peer']) assert.ok(terms.includes(good), good + ' 必须保留')
     })
 
     it('泛词线的规模边界：N=12 时过半数才丢，N=11 时一律不丢', () => {

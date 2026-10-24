@@ -79,7 +79,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # 上一步已确认这个提交在 main 上，但「在 main 上」不等于「这份代码刚跑过门禁」——
-      # tag 可能补打在几天前的提交上。与 CI 同一条命令（11 项，含构建与 499 条测试），
+      # tag 可能补打在几天前的提交上。与 CI 同一条命令（11 项，含构建与测试），
       # 发布前跑这一遍是「发出去的东西至少和它写的时候一样」，不是重复劳动。
       - run: node scripts/check-all.mjs
 

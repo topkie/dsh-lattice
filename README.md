@@ -8,11 +8,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org)
+[![powered by dsh](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 
-> **状态：首个对外发布版，尚未发布。** 存储、编码、写入、召回、注入组装、1 跳图扩展与五个工具都已实现；
-> 设置页能列出库里的记忆、搜到指定一条、不借助模型把它删掉，也能改两项运行参数、把整库导出成
-> JSON 或 Markdown。整理（重聚类）要手动触发，没有定时自动执行。
-> 其余已知限制见 [CHANGELOG](CHANGELOG.md) 的「已知限制」一节。
+全部代码由 DeepSeek 生成。
 
 ## 它解决什么
 
@@ -48,15 +46,15 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
   设置页可导出 CSV 或清空；日志与记忆数据互不影响
 - **看得见也在手里**：设置页里能直接看库里有什么、搜到某一条、**不借模型把它删掉**；
   每条会显示来源、被取回次数与是否已被取代
+- **整理由你触发**：重聚类（把相似的记忆并到一起）手动执行，没有定时自动跑
 - **写入有把关**：过短或过长的内容会被拦下并说明怎么办，与已有内容重复的会被提示（只提示、不阻止）
 
 ## 安装
 
 四种装法，从最省事到最灵活。四种装完都要重启宿主；记忆存在本机数据目录里，换装法不会丢数据。
 
-当前 npm 上的 `dsh-lattice` 还只是一个占位包（`npm view dsh-lattice` 能查到 `0.0.0`，
-包的 description 写明请勿安装），GitHub 上的发布也还没开始。所以插件管理器与 npm 两条要等正式版；
-让助手装与源码装现在就能用，这两种走的都是源码。
+一、二、三装的是发布版本，跟着发版走（`npm view dsh-lattice version` 查当前版本号）；
+四装的是源码，想改代码、或要用还没发到 npm 的提交时走它。
 
 ### 一、让助手装（最省事）
 
@@ -104,7 +102,7 @@ pnpm add dsh-lattice
 ```
 
 再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
-要固定版本就写 `pnpm add dsh-lattice@0.10.0`；之后升级用 `pnpm update dsh-lattice` 再重启。
+要固定版本就写 `pnpm add dsh-lattice@0.11.0`；之后升级用 `pnpm update dsh-lattice` 再重启。
 
 ### 四、GitHub 源码
 

@@ -63,42 +63,9 @@ README、CHANGELOG、**以及 git 提交信息**。
 - 加一条之前先问：被违反时是「做错了」还是「做法不同」？**只收前者** ——
   后者请放 `AGENTS.local.md`（第四节）。
 
-## 六、三个会静默出错的命令
+## 六、一个会静默出错的命令
 
-**① 合并分支用 `cherry-pick -n`，别用 `git merge --squash`。**
-
-本机沙箱下后者会失败：
-
-```
-error: cannot create standard output pipe for stash: Permission denied
-fatal: could not run stash.
-```
-
-它内部要跑 `git stash`，而 stash 需要创建管道（受限环境不允许）。`cherry-pick -n` **不需要 stash**，
-效果等价：把那条分支的改动放进暂存区，再由你提交成一条 squash 提交。**分支上有多个提交时，逐个 `-n`。**
-
-**② `rm -rf` 会跟随 junction，删掉链接指向的目标。**
-
-worktree 与探针目录里会建 `node_modules` 的 junction（指回主仓库，因为 worktree 不带依赖）。
-**`rm -rf` 那个 junction 会把主仓库的 `node_modules` 整个删掉** —— 已发生过一次（215 个包）。
-
-删之前先看清它是不是链接：
-
-```
-(Get-Item $p -Force).Attributes    # 含 ReparsePoint 就是链接
-(Get-Item $p).Delete()             # 只删链接本身
-```
-
-**②之补：`git worktree remove` 不删 `node_modules` 的 junction。**
-
-所以每清理一个 worktree，都会在 `.worktrees/<名字>/` 下**留下一个 junction 空壳**；
-**而最后来 `rm -rf .worktrees` 收尾的人会跟随链接删掉主仓库的 `node_modules`** ——
-与 ② 是同一个事故形态，只是发生在「收尾那一步」而不是「删探针那一步」。
-
-**做法**：`git worktree remove` 之后，对该目录下的 `node_modules` 用 `(Get-Item $p).Delete()` 删链接，
-再删那个空目录。**别用 `rm -rf` 收尾 `.worktrees/`。**
-
-**③ `git worktree prune` 会清理「管理记录已丢失」的 worktree，而那些目录里可能还有未提交的文件。**
+**① `git worktree prune` 会清理「管理记录已丢失」的 worktree，而那些目录里可能还有未提交的文件。**
 
 它已经删掉过一个子agent的 **2474 行未提交代码**（那些文件从未 `git add` 过，所以 git 里连对象都没有，
 **找不回来**）。删 worktree 之前先 `git -C <那个目录> status --short` 看清有没有东西。
@@ -130,4 +97,4 @@ SQLite 的事务跟**连接**走，不跟代码块走。事务开着的时候一
   算完，事务里只剩 INSERT —— 实测 1374 条的库全程 1280 毫秒，**事务只占 26 毫秒**；
 - 库是 WAL：写事务不阻塞读。所以这条只为「不让别人的写被吞」，不为「不卡住读」。
 
-> 别名：AGENTS 仓库约定 开发约定 dsh-lattice 开发流程 分支 脱敏 worktree junction cherry-pick 个人补充 本地补充 责任边界 不兜底 事务 事件循环 连接 BUSY
+> 别名：AGENTS 仓库约定 开发约定 dsh-lattice 开发流程 分支 脱敏 worktree prune 个人补充 本地补充 责任边界 不兜底 事务 事件循环 连接 BUSY
