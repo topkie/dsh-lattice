@@ -48,9 +48,17 @@ profile 自己的 `cordis.patch.yml` 可以按这个 id 覆盖或禁用（后层
 
 ## 分支与合并
 
-main 永远可发布。**不要在 main 上直接提交**，所有改动走任务分支。
+仓库有两个长期分支：
 
-**签出前先回到 `main`**：`git checkout main && git checkout -b feat/<slug>`。
+| 分支 | 是什么 | 谁动它 |
+|---|---|---|
+| `main` | **只放发布**。每次发版把 `dev` 合进来，在 `main` 上打 tag | 只有维护者，且只在发版时 |
+| `dev` | 开发汇总。所有 PR 合进这里 | 维护者合并，贡献者对它开 PR |
+
+所以 `main` 只接收准备好的发布内容；`git clone` 默认拿到 main 末端，也就是最近一次合进 `main` 的版本。
+改动一律走任务分支：不要直接往 `dev` 上写，更不要碰 `main`。
+
+**签出前先回到 `dev`**：`git checkout dev && git checkout -b feat/<slug>`。
 `checkout -b` 是从**当前**位置建分支 —— 停在别的任务分支上时，新分支会带着它的提交，
 合并时把不相干的改动一起带进来。
 
@@ -65,10 +73,13 @@ main 永远可发布。**不要在 main 上直接提交**，所有改动走任�
 在分支上可以自由提交（允许中间态与试错提交）。合并前把分支压成一条干净提交：
 
 ```bash
-git checkout main
+git checkout dev
 git merge --squash feat/<slug>
 git commit -m "feat: <摘要>"
 ```
+
+`dev` 合进 `main` 不在这一节：那是发版动作，只在发版时由维护者做一次，顺序见
+[docs/RELEASING.md](docs/RELEASING.md)。
 
 ### 合并门禁（顺序不能反）
 
@@ -76,7 +87,7 @@ git commit -m "feat: <摘要>"
 2. 涉及编码或召回的改动，再手动跑一次 `scripts/verify-*.mjs`（真实模型，需联网，因此不进 CI）；
 3. 两项都过了才合并。
 
-门禁会把当前分支名打在第一行，在 `main` 上跑时会多一句提醒 —— 它本应在任务分支上跑。
+门禁会把当前分支名打在第一行，在 `main` 或 `dev` 上跑时会多一句提醒 —— 那两个分支不是干活的地方。
 分支名通过环境变量传入，这样脚本自己不需要调 git（受限环境下子进程可能起不来）：
 
 ```bash
@@ -91,7 +102,7 @@ $env:GIT_BRANCH = (git branch --show-current); node scripts/check-all.mjs
 
 **不传这个变量时，它显示「分支：未知」—— 那不叫通过，是提醒根本没生效。**
 
-**只提示不阻断**：合并后回 main 复验是合法操作，强行失败只会让人绕过这个脚本。
+**只提示不阻断**：合并后回 `dev` 复验是合法操作，强行失败只会让人绕过这个脚本。
 
 CI 对**所有分支**的 push 都会跑整条门禁 —— 与本地同一条命令 `node scripts/check-all.mjs`，
 不是另抄一份步骤清单（抄一次就会漏一项，2026-10-21 的审核正是这样发现 CI 少跑 5 项）。
@@ -124,15 +135,16 @@ CI 对**所有分支**的 push 都会跑整条门禁 —— 与本地同一条�
 ## 提 PR
 
 1. **fork 本仓库**，在自己名下克隆。
-2. **从 `main` 开分支**（见上一节），改完推到自己 fork 的这个分支上。
-3. **对 `topkie/dsh-lattice` 的 `main` 开 PR**。标题用约定式提交的格式（`fix: …` / `feat: …`），
+2. **从 `dev` 开分支**（见上一节），改完推到自己 fork 的这个分支上。fork 里的 `dev` 落后时先
+   `git fetch upstream` 再 `git checkout dev` 加 `git merge --ff-only upstream/dev`。
+3. **对 `topkie/dsh-lattice` 的 `dev` 开 PR**。标题用约定式提交的格式（`fix: …` / `feat: …`），
    合并时它会被当作用户看到的提交信息；描述按仓库自带的 PR 模板填，其中「怎么验证的」一栏要贴
    命令与输出。
 4. **等 CI**。所有分支的 push、所有 PR 都会跑同一条门禁（`node scripts/check-all.mjs`），与你在
    本地跑的是同一条命令，不是另抄的一份清单。红了就地修，不要另开一个 PR，也不要在评论里说明
    「这项不影响」—— 门禁里的每一项都对应一种真实故障，上一节的表里写了让它变红的最小改法。
 5. **不要自己合并**。合并由维护者做，用 squash（GitHub 的 Squash and merge），PR 里有多少条
-   试错提交都会被压成一条。
+   试错提交都会被压成一条。合进的是 `dev`；`dev` 进 `main` 只在发版时做，贡献者不用管。
 
 三件容易踩的事：
 

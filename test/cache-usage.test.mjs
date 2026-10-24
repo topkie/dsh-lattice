@@ -232,11 +232,11 @@ describe('缓存占用', () => {
       const j0 = await pingJson()
       assert.equal(j0.caches.encoder.loaded, false)
       assert.equal(j0.caches.encoder.state, 'idle')
-      // 召回会尝试加载编码器；替身必定失败，状态从 idle 走到 unavailable。
-      // 这一条验的是「现读」：如果 ping 报的是启动时快照，state 会停在 idle。
+      // 召回会尝试加载编码器。加载成功还是失败取决于这台机器有没有模型缓存、能不能出网，
+      // 所以这里不押注某一种结果，只验「现读」：如果 ping 报的是启动时快照，state 会停在 idle。
       await tool('lattice_recall').execute({ query: '代理', budget: 900 })
       const j1 = await pingJson()
-      assert.equal(j1.caches.encoder.state, 'unavailable')
+      assert.notEqual(j1.caches.encoder.state, 'idle', '召回尝试过加载，state 不该还停在 idle')
       assert.equal(j1.caches.encoder.loaded, encoderState() === 'ready', 'loaded 必须与编码器真实状态一致')
     })
   })

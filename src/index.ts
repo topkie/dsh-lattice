@@ -39,12 +39,14 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { deriveResourceParams } from './util/memory.js'
 import { cacheUsage } from './cache-usage.js'
-import { encoderAttempts, encoderState } from './encoder/index.js'
-import { clearLog, closeLog, configureLog, exportLogCsv } from './log/index.js'
+import { encoderAttempts, encoderState, releaseEncoder } from './encoder/index.js'
+import { clearLog, configureLog, exportLogCsv } from './log/index.js'
 import { exportJson, exportMarkdown } from './export/snapshot.js'
 import {
+  closeRuntimeIfOwner,
   getRuntime,
   noteRecallDegradations,
+  ownRuntime,
   resolveDataDir,
   runtimeEncode,
   type RuntimeConfig,
@@ -474,6 +476,11 @@ export function apply(ctx: Context, config: unknown): void {
   const tools = hostService(ctx, 'tools')
   if (tools === undefined) return
 
+  // 本次插件实例的凭据。卸载时只关自己开的那份运行时（见 closeRuntimeIfOwner）：
+  // 热重载时新旧实例共用模块级单例，后卸的那个不该把新连接关掉。
+  const lifecycle: object = {}
+  ownRuntime(lifecycle)
+
   // 三个业务工具。注册只是挂上定义，真正的库连接与模型加载都等到第一次调用
   // （见 state.ts 的 getRuntime / runtimeEncode）—— 注册路径上不做重活。
   const runtimeCfg: RuntimeConfig = {
@@ -506,9 +513,20 @@ export function apply(ctx: Context, config: unknown): void {
   }
   for (const t of buildTools(runtimeCfg)) tools.register(t)
 
-  // 日志库随插件卸载一起收走：先 flush 队列再关连接（见 src/log/index.ts 的 closeLog）。
-  // 放在这里而不是 webServer 的子 fiber 里：没有界面的 profile 也要正常关闭日志库。
-  ctx.effect(() => () => closeLog(), 'dsh-lattice: log flush')
+  // 库连接与编码器随插件卸载一起收走。放在这里而不是 webServer 的子 fiber 里：
+  // 没有界面的 profile 也要正常关闭。
+  //
+  // 为什么必须关：不关的话库文件句柄一直开着，卸载后连数据目录都删不掉（Windows 报 EPERM，
+  // 残留 lattice.db / -shm / -wal）；编码器那边是 onnxruntime 的原生会话，不释放要等到
+  // 进程退出（见 src/encoder/index.ts 的 releaseEncoder）。closeRuntimeIfOwner 内部已经
+  // flush 并关闭日志库（src/state.ts 的 closeRuntime），所以不再单独注册日志的清理。
+  ctx.effect(
+    () => () => {
+      void releaseEncoder()
+      closeRuntimeIfOwner(lifecycle)
+    },
+    'dsh-lattice: runtime close',
+  )
 
   // ── 浏览器半的座位（最小验证） ─────────────────────────────────────────
   //
@@ -683,12 +701,16 @@ export function apply(ctx: Context, config: unknown): void {
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
           tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list'],
-          encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
+          // 报 runtimeCfg 而不是原始 config：宿主会按 Config 把没传的项填成默认值，
+          // **不经宿主直接 apply 时不会** —— 读原始 config 会让没显式传的项整个消失
+          // （JSON.stringify 丢掉值为 undefined 的键），而 ping 的用途正是「核对实际用了多少」。
+          // runtimeCfg 在 apply 开头已经把缺项补成默认值，这里读它才与引擎的行为一致。
+          encoder: runtimeCfg.encoderEnabled === false ? 'off' : runtimeCfg.encoderModel,
           thresholds: {
-            tauJoin: cfg.tauJoin,
-            tauLex: cfg.tauLex,
-            tauLexOnly: cfg.tauLexOnly,
-            tauNew: cfg.tauNew,
+            tauJoin: runtimeCfg.thresholds.tauJoin,
+            tauLex: runtimeCfg.thresholds.tauLex,
+            tauLexOnly: runtimeCfg.thresholds.tauLexOnly,
+            tauNew: runtimeCfg.thresholds.tauNew,
           },
           // 机器相关的资源参数：报出来才能核对「实际用了多少」，否则只能靠读代码猜。
           resources: {
@@ -1118,20 +1140,18 @@ function namespaceIds(described: unknown): string[] {
  * 等宿主把这次改动反映到 describe() 上，最多等 APPLY_WAIT_MS。
  *
  * 实测（2026-10-24，本机 0.9.1）：`settings.update()` 返回时 describe() 里还是**旧值**，
- * 约 30–130 ms 后才变成新值（POST 往返 25 ms，值在 137 ms 内出现）。所以「更新后的那一条」
+ * 约 30–140 ms 后才变成新值（POST 往返 25 ms）。所以「更新后的那一条」
  * 不能在手边直接取 —— 取到的必然是 POST 之前的状态，界面拿它当新基线就会把输入框弹回旧值。
  *
- * 超时返回最后一次读到的（可能是旧值），由调用方标记 `pending` 让界面说清楚「还没确认」，
- * 而不是把一个没生效的值当成已经生效。
+ * 超时返回 null，由调用方标记 `pending` 让界面说清楚「还没确认」。不能回带最后一次读到的旧值
+ * —— 那正是这个函数要避免的结果：把一个没生效的值当成成功。
  */
 async function waitForOwnEntry(settings: SettingsSlice, patch: Record<string, unknown>): Promise<unknown> {
   const deadline = Date.now() + APPLY_WAIT_MS
-  let last: unknown = null
   for (;;) {
     try {
       const own = pickOwnEntry(settings.describe())
       if (own !== null) {
-        last = own.entry
         const row = own.entry as Record<string, unknown>
         const value = row.value as Record<string, unknown> | undefined
         const seen = value !== undefined && Object.keys(patch).every((key) => value[key] === patch[key])
@@ -1140,7 +1160,7 @@ async function waitForOwnEntry(settings: SettingsSlice, patch: Record<string, un
     } catch {
       // describe 抛错时继续等：宿主可能正在重建设置。
     }
-    if (Date.now() >= deadline) return last
+    if (Date.now() >= deadline) return null
     await new Promise((resolve) => setTimeout(resolve, APPLY_POLL_MS))
   }
 }

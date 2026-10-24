@@ -33,7 +33,8 @@ node test/run.mjs               # 只跑测试
 # 各步骤也可以单独跑（在项目根目录）
 node node_modules/typescript/bin/tsc --noEmit
 node node_modules/eslint/bin/eslint.js .
-node node_modules/prettier/bin/prettier.cjs --write "src/**/*.ts" "test/**/*.mjs" "scripts/*.mjs" ".github/**/*.yml"
+node node_modules/prettier/bin/prettier.cjs --write "src/**/*.ts" "test/**/*.mjs" "scripts/**/*.mjs" "lib/**/*.js" ".github/**/*.yml"
+# 这一组 glob 的权威定义是 scripts/check-all.mjs 的 FORMAT_GLOBS，两处要一致
 node scripts/verify-encoder.mjs # 真实模型验证（需联网，不进 CI）
 ```
 

@@ -42,17 +42,32 @@ describe('浏览器半与宿主半的常量对照（源码级）', () => {
   })
 
   it('路由：新路径两侧同值', () => {
+    // 十七条路由全部列出，不抽样：任何一条写错的形态都是「界面点了没反应」或
+    // 「永远 404」，浏览器里没有编译期信号，只能在这里钉住。少列一条就等于
+    // 那条路由没被检查。
     const pairs = [
+      // 读数与列表
+      ['PING_URL', 'MINI_ROUTE_PATH'],
+      ['ATOMS_URL', 'ATOMS_ROUTE_PATH'],
+      ['AUDIT_URL', 'AUDIT_ROUTE_PATH'],
       // 详情：界面点开时取全文的那条路由。路径写错的形态是「点开永远 404」，
       // 而这在浏览器里只表现为一段「读取失败」，不会有任何编译期信号。
       ['ATOM_DETAIL_URL', 'ATOM_ROUTE_PATH'],
+      ['SEARCH_URL', 'SEARCH_ROUTE_PATH'],
+      // 写动作
+      ['FORGET_URL', 'FORGET_ROUTE_PATH'],
       ['ARCHIVE_URL', 'ARCHIVE_ROUTE_PATH'],
       ['UNARCHIVE_URL', 'UNARCHIVE_ROUTE_PATH'],
       ['SPLIT_CONFIRM_URL', 'SPLIT_CONFIRM_ROUTE_PATH'],
       ['SPLIT_IGNORE_URL', 'SPLIT_IGNORE_ROUTE_PATH'],
+      ['RECLUSTER_PLAN_URL', 'RECLUSTER_PLAN_ROUTE_PATH'],
+      ['RECLUSTER_CANCEL_URL', 'RECLUSTER_CANCEL_ROUTE_PATH'],
+      ['LEARNED_CLEAR_URL', 'LEARNED_CLEAR_ROUTE_PATH'],
+      ['LOG_CLEAR_URL', 'LOG_CLEAR_ROUTE_PATH'],
       // 配置：路径写错的形态是「配置页永远说读不到可改字段」，同样没有编译期信号。
       ['CONFIG_URL', 'CONFIG_ROUTE_PATH'],
-      // 导出：路径写错的形态是「点了按钮下载一份 404 页面」，浏览器里同样没有信号。
+      // 两条导出：路径写错的形态是「点了按钮下载一份 404 页面」，浏览器里同样没有信号。
+      ['LOG_EXPORT_URL', 'LOG_EXPORT_ROUTE_PATH'],
       ['EXPORT_URL', 'EXPORT_ROUTE_PATH'],
     ]
     for (const [clientName, hostName] of pairs) {

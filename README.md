@@ -37,7 +37,7 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ## 特性
 
 - **本地优先**：单文件 SQLite，数据全在本地，无云端依赖
-- **零第三方依赖**：运行时不 import 任何外部包（标定工具链 `lattice-calib` 已于 0.5.0 退役）；
+- **零第三方依赖**：不引入第三方运行时依赖，只依赖宿主提供的 `@deepseek-ai/*` peer 包（标定工具链 `lattice-calib` 已于 0.5.0 退役）；
   向量模型是**可选**依赖，没装就退回词面检索。源码装时它会连带几十个包一起装上，
   不需要向量就在安装时加 `--omit=optional`，插件其余部分不受影响
 - **中文友好**：针对中文查询的两层检索索引，短词也能命中
@@ -75,9 +75,9 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
    然后回到 profile 目录跑 pnpm add "file:<dsh-lattice 源码目录的绝对路径>"。
 3. 在 profile 目录的 package.json 里，把 "dsh-lattice" 加进 dsh.profile.bundles 数组
    （没有这个数组就按同目录其它条目的写法新建）。
-4. 叫我重启宿主。重启后调用一次 lattice_ping，把返回里的 version、atoms、
-   caches.encoder.state 三项报给我。
-5. caches.encoder.state 不是 loaded，说明模型没下成：把 attempts 数组原文贴给我，
+4. 叫我重启宿主。重启后调用一次 lattice_ping，把返回里的 version、dataDir、
+   caches.encoder.loaded 三项报给我。
+5. caches.encoder.loaded 不是 true，说明模型没下成：把 attempts 数组原文贴给我，
    不要自己改编码器配置重试。
 
 前置条件：Node 22.13 以上、git、pnpm 9 以上，且 node 在 PATH 里。
@@ -85,6 +85,9 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ```
 
 装成了的样子：设置的侧边栏出现「lattice 记忆库」这一页，`lattice_ping` 报的 `version` 与你要装的版本一致。
+
+`git clone` 默认取 `main`，那是发布分支，装到的是最近一次发布的代码。想要开发中的最新改动走第四节，
+那边会切到 `dev`。
 
 ### 二、插件管理器（图形化）
 
@@ -106,12 +109,16 @@ pnpm add dsh-lattice
 ### 四、GitHub 源码
 
 想改代码、或者要用还没发到 npm 的提交时走这条。需要 Node 22.13 以上、git 与 pnpm ≥ 9。
+
+仓库有两个长期分支：`main` 只放发布，`dev` 是开发汇总。默认 clone 拿到 `main`，「还没发到 npm 的
+提交」在 `dev` 上，所以要显式切过去。
 `node` 要在 `PATH` 里 —— 有几个依赖的安装脚本会直接调用 `node` 命令，找不到就会装出
 缺原生二进制的半成品。
 
 ```bash
 git clone https://github.com/topkie/dsh-lattice.git
 cd dsh-lattice
+git checkout dev
 pnpm install --no-frozen-lockfile
 pnpm run build
 ```
@@ -123,8 +130,9 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 ```
 
 再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
-更新到新提交：源码目录 `git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
-再到 profile 目录重跑一次那条 `pnpm add`，重启。
+更新到新提交：源码目录（在 `dev` 上）`git pull`、`pnpm install --no-frozen-lockfile`、`pnpm run build`，
+再到 profile 目录重跑一次那条 `pnpm add`，重启。想在发布版本与开发版本之间切换，就在源码目录
+`git checkout main` 或 `git checkout dev` 再走一遍这三步。
 
 ### 第一次加载要下模型
 
@@ -138,7 +146,8 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 包管理器默认不跑依赖的构建脚本：npm 12 实测拦下 `onnxruntime-node`、`sharp`、`protobufjs`
 三个包的安装脚本，效果是写得进、召回退回纯词面。判据是 `lattice_ping` 的
-`caches.encoder.state`，不是 `loaded` 就说明编码器没起来。走第一种与第四种时，在源码目录里 `pnpm install`
+`caches.encoder.loaded`：它不是 `true` 就说明编码器没起来（`caches.encoder.state` 只有
+`idle` 与 `ready` 两个取值，`loaded` 才是那个布尔量）。走第一种与第四种时，在源码目录里 `pnpm install`
 不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；插件管理器与 npm 装的是发布出来的包，
 碰不碰得到取决于宿主或 npm 的设置。
 
@@ -146,7 +155,7 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；也可以直接调 `lattice_ping`：
 它返回插件版本、数据目录、编码器配置，以及五处缓存的实时占用。编码器是否真的加载成功，
-看 `caches.encoder.state`。
+看 `caches.encoder.loaded` 是否为 `true`。
 
 日常在设置的「lattice 记忆库」页：能看库里有什么、搜到某一条、把它删掉，也能改两项运行参数、
 把整库导出成 JSON 或 Markdown。写什么时候发生由模型决定，页面上不写。
@@ -163,7 +172,7 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | 总开关 |
-| `dataDir` | 空（即 `<数据目录>/lattice`） | 数据目录；留空按 `DSH_HOME/lattice` 解析，未设置 `DSH_HOME` 时用 `~/.dsh/lattice` |
+| `dataDir` | 空（即 `<数据目录>/lattice`） | 数据目录；留空按 `DSH_HOME/lattice` 解析，未设置 `DSH_HOME` 时用 `~/.dsh/lattice`，连用户目录都取不到时退到当前目录的 `.lattice`（与 [接入契约](docs/INTEGRATION.md) 的解析顺序一致） |
 | `encoderEnabled` | `true` | 关掉即为纯词面模式 |
 | `encoderModel` | `Xenova/bge-small-zh-v1.5` | 向量模型 |
 | `encoderMirror` | 空 | 第二下载源。留空等于 `https://modelscope.cn`（魔搭）；官方源总是先试一次，填成官方地址就只试官方 |

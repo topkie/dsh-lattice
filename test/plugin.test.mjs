@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { EventEmitter } from 'node:events'
 import { Config, apply, inject, name } from '../dist/index.js'
 import { openVault } from '../dist/db/open.js'
-import { closeRuntime } from '../dist/state.js'
+import { closeRuntime, getRuntime } from '../dist/state.js'
+import { DEFAULT_THRESHOLDS } from '../dist/pipeline/write.js'
 
 /**
  * 最小假 ctx：只实现插件用到的那两个服务，外加 `inject`。
@@ -22,17 +23,25 @@ function fakeCtx({ webServer, settings } = {}) {
   const registered = []
   const routes = []
   const injected = []
+  const disposers = []
   const ctx = {
     registered,
     routes,
     injected,
+    disposers,
     get: (k) => {
       if (k === 'tools') return { register: (t) => registered.push(t) }
       if (k === 'webServer') return webServer
       if (k === 'settings') return settings
       return undefined
     },
-    effect: (fn) => fn(),
+    // 真宿主在插件停用时调用每个 effect 返回的函数。替身把它收起来，让卸载路径可测 ——
+    // 以前写成 `effect: (fn) => fn()`，返回值被直接丢掉，卸载从来没有用例覆盖。
+    effect: (fn) => {
+      const dispose = fn()
+      if (typeof dispose === 'function') disposers.push(dispose)
+      return () => {}
+    },
     inject: (deps, callback) => {
       injected.push(deps)
       // 契约：deps 里每一项都拿得到才执行回调（cordis 的 inject 就是这个语义）。
@@ -119,6 +128,28 @@ describe('插件契约', () => {
     assert.equal(out.ok, true)
     assert.equal(out.plugin, 'lattice')
     assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
+  })
+
+  /**
+   * ping 的用途是「核对实际用了多少」，所以它报的必须是**生效值**，不是原始入参。
+   *
+   * 2026-10-24 冷读验证发现的形态：不经宿主直接 `apply(ctx, { dataDir, encoderCacheDir })`
+   * 时 `thresholds` 报 `{}`、顶层 `encoder` 整个不出现。宿主会按 Config 把没传的项填成默认值，
+   * 直接调用不会；引擎内部一直按默认值在跑，所以库的行为是对的，只有读数骗人 —— 而读数正是
+   * 接入文档让读者去核对的那一项。这条用例钉住「读数 = 生效值」：只传两个字段，报出补过默认值的那份。
+   */
+  it('健康检查报生效值：没显式传的项也按默认值报出来', async () => {
+    const ctx = fakeCtx()
+    apply(ctx, { dataDir: baseConfig.dataDir, encoderCacheDir: '' })
+    const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
+    const out = JSON.parse(await ping.execute({}, {}))
+    assert.deepEqual(out.thresholds, {
+      tauJoin: DEFAULT_THRESHOLDS.tauJoin,
+      tauLex: DEFAULT_THRESHOLDS.tauLex,
+      tauLexOnly: DEFAULT_THRESHOLDS.tauLexOnly,
+      tauNew: DEFAULT_THRESHOLDS.tauNew,
+    })
+    assert.equal(out.encoder, 'Xenova/bge-small-zh-v1.5')
   })
 
   it('enabled=false 时不注册任何工具', () => {
@@ -280,6 +311,22 @@ describe('插件契约', () => {
    * （2026-10-24 本机实测）。这条用例把那个延迟做进替身里 —— 用同步替身测「回带的是新值」，
    * 测出来的只是替身的性质，测不到真实宿主的时序。
    */
+  /**
+   * volatile 白名单：只有这两项能在线改。
+   *
+   * 多标一项的形态是假生效 —— 宿主把新值就地塞进引用，而 mmapSize、busyTimeout、
+   * encoderModel 这些在建连接时就用掉了，改了不会按新值走，界面上却显示「已保存」。
+   * 少标则更直接：宿主只列出「至少有一个 volatile 字段」的命名空间，
+   * viewBudget 漏标会让整个配置页说「设置里没有本插件」。
+   */
+  it('Config 里只有 viewBudget 与 topN 标了 volatile', () => {
+    const volatile = Object.entries(Config.dict)
+      .filter(([, field]) => field.meta !== undefined && field.meta.volatile === true)
+      .map(([key]) => key)
+      .sort()
+    assert.deepEqual(volatile, ['topN', 'viewBudget'])
+  })
+
   it('宿主异步生效时，POST 等到值真的变了再回带', async () => {
     const routes = []
     const webServer = {
@@ -315,6 +362,40 @@ describe('插件契约', () => {
       6000,
       '回带的必须是更新后的值：拿 update 返回时的旧值当新基线，界面就会把输入框弹回去',
     )
+  })
+
+  /**
+   * 宿主永不生效（更新被吞，或版本号根本对不上）时，回带必须是 pending。
+   *
+   * 与上一条是同一段代码的两个分支：上一条证明「迟到的生效会被等到」，
+   * 这条证明「等不到时说等不到」。少了它，超时回退成「最后一次读到的旧值」
+   * 会静默通过 —— 界面把旧值当新基线，就是输入框弹回去。
+   */
+  it('宿主一直不生效时标 pending，且不回带旧值', async () => {
+    const routes = []
+    const webServer = {
+      register: (route) => {
+        routes.push(route)
+        return () => {}
+      },
+    }
+    const own = { revision: 1, value: { viewBudget: 5000, topN: 24 } }
+    const settings = {
+      describe: () => [{ ns: 'lattice', revision: own.revision, value: own.value }],
+      update: () => ({}),
+    }
+    apply(fakeCtx({ webServer, settings }), baseConfig)
+    const route = routes.find((r) => r.path === '/api/lattice-config')
+    const res = fakeRes()
+    await route.handler(
+      fakeReq({
+        body: JSON.stringify({ ns: 'lattice', patch: { viewBudget: 6000 }, revision: 1, confirm: true }),
+      }),
+      res,
+    )
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.pending, true, '值没生效就该说 pending，不能假装成功')
+    assert.equal(res.out.body.entry, null, '回带旧值等于把没生效的值当成已生效')
   })
 
   /**
@@ -798,5 +879,102 @@ describe('插件契约', () => {
       'lattice_recall',
       'lattice_write',
     ])
+  })
+})
+
+// ── 运行时的生命周期 ──────────────────────────────────────────────────────
+//
+// 这一组测「卸载」与「换配置」两条路径。它们长期零覆盖：假 ctx 把 effect 返回的清理函数
+// 丢掉了，于是「卸载后连接不关」一直没被发现，症状是数据目录删不掉（Windows 报 EPERM，
+// 残留 lattice.db / -shm / -wal）。
+describe('运行时生命周期', () => {
+  const dirs = []
+
+  afterEach(() => {
+    closeRuntime()
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  function newDir(tag) {
+    const dir = mkdtempSync(join(tmpdir(), 'lattice-life-' + tag + '-'))
+    dirs.push(dir)
+    return dir
+  }
+
+  /** 传给 apply 的插件配置。 */
+  function pluginCfgFor(dataDir) {
+    return {
+      enabled: true,
+      dataDir,
+      encoderEnabled: true,
+      encoderModel: 'Xenova/bge-small-zh-v1.5',
+      encoderMirror: '',
+      encoderCacheDir: '',
+      tauJoin: 0.75,
+      tauLex: 0.05,
+      tauLexOnly: 0.1,
+      tauNew: 0.38,
+      viewBudget: 5000,
+      topN: 24,
+      mmapSize: 0,
+      cacheSize: 0,
+      busyTimeout: 0,
+    }
+  }
+
+  /** state.getRuntime 的入参形状；必须与 pluginCfgFor 派生出同一份指纹，否则会误判成「配置变了」。 */
+  function runtimeCfgFor(dataDir) {
+    return {
+      dataDir,
+      encoderEnabled: true,
+      encoderModel: 'Xenova/bge-small-zh-v1.5',
+      encoderMirror: '',
+      encoderCacheDir: '',
+      thresholds: { tauJoin: 0.75, tauLex: 0.05, tauLexOnly: 0.1, tauNew: 0.38 },
+      viewBudget: 5000,
+      topN: 24,
+      resources: { mmapSize: undefined, cacheSize: undefined, busyTimeout: undefined },
+    }
+  }
+
+  /** 真宿主在插件停用时调用每个 effect 返回的函数（后注册的先执行）。 */
+  function unload(ctx) {
+    for (const dispose of [...ctx.disposers].reverse()) dispose()
+  }
+
+  it('卸载之后库连接被关掉：数据目录能立刻删掉', async () => {
+    const dir = newDir('unload')
+    const ctx = fakeCtx()
+    apply(ctx, pluginCfgFor(dir))
+    const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
+    await ping.execute({}, {})
+    assert.ok(existsSync(join(dir, 'lattice.db')), '前提不成立：库没打开，这条用例会空过')
+
+    unload(ctx)
+
+    // 修前：连接还开着，Windows 上抛 EPERM，目录里残留 -wal / -shm。
+    assert.doesNotThrow(() => rmSync(dir, { recursive: true, force: true }), '卸载后连接没关，数据目录删不掉')
+  })
+
+  it('换 dataDir 之后写入落到新目录，旧实例卸载不会关掉新连接', async () => {
+    const dirA = newDir('a')
+    const dirB = newDir('b')
+
+    const ctxA = fakeCtx()
+    apply(ctxA, pluginCfgFor(dirA))
+    await ctxA.registered.find((t) => t.name === 'lattice_ping').execute({}, {})
+    assert.ok(existsSync(join(dirA, 'lattice.db')))
+
+    // 同一进程里换一份配置：真宿主是热重载，这里直接再 apply 一次。
+    const ctxB = fakeCtx()
+    apply(ctxB, pluginCfgFor(dirB))
+    const out = JSON.parse(await ctxB.registered.find((t) => t.name === 'lattice_ping').execute({}, {}))
+    assert.equal(out.dataDir, dirB, '插件报的目录必须是新目录')
+    assert.ok(existsSync(join(dirB, 'lattice.db')), '换目录后写入仍落在旧库：新目录里没有 lattice.db')
+
+    const before = getRuntime(runtimeCfgFor(dirB))
+    unload(ctxA)
+    const after = getRuntime(runtimeCfgFor(dirB))
+    assert.equal(after, before, '旧实例的卸载把新连接关掉了')
   })
 })
