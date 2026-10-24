@@ -33,20 +33,40 @@ dsh plugin --profile <profile> add dsh-lattice
 这两条要在装了宿主的机器上跑：`dsh` 是宿主提供的命令，不在本仓库里，所以本仓库的脚本与门禁都不会跑到它
 （本文无法在仓库内实跑核对）。`<profile>` 是 profile 目录名（本仓库声明可用的两个是 `web` 与 `desktop`，见 `package.json`）。
 
-装完**重启宿主**：插件在宿主里是复制过去的实体，不重启读到的是旧版本（`package.json` 里 `requiresRestart` 为 `true`）。
+装完**重启宿主**：插件在宿主里是复制过去的实体，不重启读到的是旧版本（`package.json` 的 `dsh.marketplace.requiresRestart` 为 `true`）。
 重启后调一次 `lattice_ping`，核对三件事：`version` 与你要用的版本一致；`tools` 里有五个名字（`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand` / `lattice_list`）；
-`encoder` 不是 `off`（除非你就是要用纯词面模式）。
+`encoder` 报的是模型名（例如 `Xenova/bge-small-zh-v1.5`）；它是 `off` 只有一种情况：纯词面模式（`encoderEnabled: false`）。
+不用纯词面时看到 `off`，就去该 profile 的 `cordis.patch.yml` 里看 `dsh-lattice` 那一段是不是把 `encoderEnabled` 关掉了。
 如果 `lattice_ping` 报「没有这个工具」，说明插件没加载：到该 profile 的 `package.json` 里看
 `dependencies` 与 `dsh.profile.bundles` 是不是都写了 `dsh-lattice`。
 
-**不经宿主时怎么核**（本仓库的验证脚本走的就是这条）：构建产物是 ESM 模块，导出 `apply(ctx, config)`。
-`ctx` 要实现五件事 —— `get('tools')` 返回 `{register}`、`get('webServer')` 返回 `{register}`（没有就不注册界面那组路由）、
+**不经宿主时怎么核**（本仓库的验证脚本走的就是这条）：构建产物是 ESM 模块，入口是包根下的 `dist/index.js`
+（与 `package.json` 的 `exports` 里 `"."` 指向同一个文件），导出 `apply(ctx, config)`。
+
+Windows 上要用 `file:///` 的绝对 URL 去 import —— 裸路径 `import('D:/…')` 会报 `ERR_UNSUPPORTED_ESM_URL_SCHEME`：
+
+```js
+import { pathToFileURL } from 'node:url'
+const mod = await import(pathToFileURL('<包根>/dist/index.js').href)
+mod.apply(ctx, { dataDir, encoderCacheDir })
+```
+
+要在**包根原地** import，或者先把 `peerDependencies` 里的宿主包装好：`dist/` 顶层就 import
+`@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-tools`，只有 `dist/` 被复制到祖先目录里没有
+`node_modules` 的位置（例如本仓库之外）时，会立刻报 `Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-tools'`。
+
+`ctx` 要实现五件事 —— `get('tools')` 返回 `{ register(tool) }`（`tool` 就是下面那个工具对象，返回值可以忽略）、
+`get('webServer')` 返回 `{register}`（没有就不注册界面那组路由）、
 `get('settings')` 返回 `{describe(), update(ns, patch, revision)}`（没有就不注册配置读写路由，配置页只显示读数与体检）、
-`effect(fn)` 接收清理函数并返回一个（返回值不是函数会报 `ctx.effect is not a function`）、
+`effect(fn)`：`fn` 返回一个清理函数，`effect` 也返回一个（宿主在插件停用时调用它）—— **这一项必须实现**，
+缺了会在 `apply` 里报 `TypeError: ctx.effect is not a function`（`fn` 的返回值不是函数则不报错，只是没有东西可清理）、
 `inject(deps, callback)` 注册子 fiber（真 cordis 里 `deps` 全部就绪才执行，父插件不受影响；
 没有界面载体时写成空函数即可 —— 实测不实现它会在 `apply` 里报 `ctx.inject is not a function`）。注册进表的每个工具是
-`{name, description, parameters, execute(args)}`，`execute` 返回拼好的文本。配置项与宿主里那一套相同；两个容易漏的：
+`{name, description, parameters, execute(args)}`，`execute(args)` 返回 **Promise**：要
+`await tool.execute(args)` 才拿到拼好的文本，不 `await` 拿到的是 `[object Promise]`。
+配置项与宿主里那一套相同，没显式传的项按 `Config` 的默认值生效（`lattice_ping` 报的就是生效值）；两个容易漏的：
 `dataDir` 留空时按 `$DSH_HOME/lattice` → `~/.dsh/lattice` → 当前目录的 `.lattice` 依次解析（`lattice_ping` 的 `dataDir` 报的就是解析结果），
+目录不存在时写入会自己建出来（多级父目录一并建）；
 `encoderCacheDir` 留空时用 transformers.js 的默认缓存位置 —— 离线机器上那里没有模型，召回会退回纯词面（§4.1）。
 改 `dataDir` 等于换一个库：插件不会把旧库的数据搬过去 —— 新目录里没有库就新建一个空库，旧目录原样留着。
 想让旧记忆跟过来，先停掉宿主，把整个目录搬过去，再改 `dataDir` 指到新位置。
@@ -118,8 +138,8 @@ lattice_recall
 | **最后一句** | 固定的工具提示（关系可显式声明）。候选耗尽、只找到一条时它仍在，另加一句对应说法（见 §0.5）；判空时它整句不出现。它上方可能还有一行 `本次会话第 5 次召回，还没有写入过记忆；…`：**每五次召回转一次，本进程写过记忆之后不再出现** | 关系那句不需要读；「还没有写入过记忆」那句是一次提醒，它不代表这次召回有问题，可以不理 |
 
 单次注入的字符预算默认 5000 字符（配置项 `viewBudget`，可配范围 1000–20000；单次调用可用 `budget` 覆盖，`budget` 本身不做范围校验，见 §6）。
-它只是**上限**：内容少时装不满，判空时是 0 字符。装填按相关度降序逐条进行，装到装不下为止，
-**不分段分配配额**：旧形态按 55/20/25 分三段，实测只用到 76% 预算（约 1400 字符既没给锚也没被别的段用上）。
+它只是**上限**：内容少时装不满，判空时是 0 字符。装填按相关度降序逐条进行，装到装不下为止 ——
+只有一个段，所以不存在「分给各段的配额」。
 单条超过 1200 字符时截断，所以「这条看起来变短了」是单条上限，不是召回变差。
 
 ### 0.5 六种情形各有一句固定说法

@@ -37,7 +37,7 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 ## 特性
 
 - **本地优先**：单文件 SQLite，数据全在本地，无云端依赖
-- **零第三方依赖**：运行时不 import 任何外部包（标定工具链 `lattice-calib` 已于 0.5.0 退役）；
+- **零第三方依赖**：不引入第三方运行时依赖，只依赖宿主提供的 `@deepseek-ai/*` peer 包（标定工具链 `lattice-calib` 已于 0.5.0 退役）；
   向量模型是**可选**依赖，没装就退回词面检索。源码装时它会连带几十个包一起装上，
   不需要向量就在安装时加 `--omit=optional`，插件其余部分不受影响
 - **中文友好**：针对中文查询的两层检索索引，短词也能命中
@@ -75,9 +75,9 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
    然后回到 profile 目录跑 pnpm add "file:<dsh-lattice 源码目录的绝对路径>"。
 3. 在 profile 目录的 package.json 里，把 "dsh-lattice" 加进 dsh.profile.bundles 数组
    （没有这个数组就按同目录其它条目的写法新建）。
-4. 叫我重启宿主。重启后调用一次 lattice_ping，把返回里的 version、atoms、
-   caches.encoder.state 三项报给我。
-5. caches.encoder.state 不是 loaded，说明模型没下成：把 attempts 数组原文贴给我，
+4. 叫我重启宿主。重启后调用一次 lattice_ping，把返回里的 version、dataDir、
+   caches.encoder.loaded 三项报给我。
+5. caches.encoder.loaded 不是 true，说明模型没下成：把 attempts 数组原文贴给我，
    不要自己改编码器配置重试。
 
 前置条件：Node 22.13 以上、git、pnpm 9 以上，且 node 在 PATH 里。
@@ -146,7 +146,8 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 包管理器默认不跑依赖的构建脚本：npm 12 实测拦下 `onnxruntime-node`、`sharp`、`protobufjs`
 三个包的安装脚本，效果是写得进、召回退回纯词面。判据是 `lattice_ping` 的
-`caches.encoder.state`，不是 `loaded` 就说明编码器没起来。走第一种与第四种时，在源码目录里 `pnpm install`
+`caches.encoder.loaded`：它不是 `true` 就说明编码器没起来（`caches.encoder.state` 只有
+`idle` 与 `ready` 两个取值，`loaded` 才是那个布尔量）。走第一种与第四种时，在源码目录里 `pnpm install`
 不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；插件管理器与 npm 装的是发布出来的包，
 碰不碰得到取决于宿主或 npm 的设置。
 
@@ -154,7 +155,7 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 让模型调 `lattice_write` 存一条，再调 `lattice_recall` 查它；也可以直接调 `lattice_ping`：
 它返回插件版本、数据目录、编码器配置，以及五处缓存的实时占用。编码器是否真的加载成功，
-看 `caches.encoder.state`。
+看 `caches.encoder.loaded` 是否为 `true`。
 
 日常在设置的「lattice 记忆库」页：能看库里有什么、搜到某一条、把它删掉，也能改两项运行参数、
 把整库导出成 JSON 或 Markdown。写什么时候发生由模型决定，页面上不写。
@@ -171,7 +172,7 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | 总开关 |
-| `dataDir` | 空（即 `<数据目录>/lattice`） | 数据目录；留空按 `DSH_HOME/lattice` 解析，未设置 `DSH_HOME` 时用 `~/.dsh/lattice` |
+| `dataDir` | 空（即 `<数据目录>/lattice`） | 数据目录；留空按 `DSH_HOME/lattice` 解析，未设置 `DSH_HOME` 时用 `~/.dsh/lattice`，连用户目录都取不到时退到当前目录的 `.lattice`（与 [接入契约](docs/INTEGRATION.md) 的解析顺序一致） |
 | `encoderEnabled` | `true` | 关掉即为纯词面模式 |
 | `encoderModel` | `Xenova/bge-small-zh-v1.5` | 向量模型 |
 | `encoderMirror` | 空 | 第二下载源。留空等于 `https://modelscope.cn`（魔搭）；官方源总是先试一次，填成官方地址就只试官方 |
