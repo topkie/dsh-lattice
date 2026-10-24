@@ -3,7 +3,7 @@
   "version": "0.11.0",
   "packageManager": "pnpm@9.15.9",
   "type": "module",
-  "description": "面向 DeepSeek Harness 的本地记忆插件：结构化、可检索、可重建的知识存储。",
+  "description": "DeepSeek Harness 的本地记忆插件：把值得长期复用的知识写成带主题与关联的条目，之后按语义召回；数据存在本地 SQLite 库里，向量模型首次使用时下载，之后离线可用。",
   "engines": {
     "node": ">=22.13"
   },
