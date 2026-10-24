@@ -55,7 +55,6 @@ mod.apply(ctx, { dataDir, encoderCacheDir })
 要在**包根原地** import，或者先把 `peerDependencies` 里的宿主包装好：`dist/` 顶层就 import
 `@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-tools`，只有 `dist/` 被复制到祖先目录里没有
 `node_modules` 的位置（例如本仓库之外）时，会立刻报 `Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-tools'`。
-没有包管理器、机器上也没有别处能借出这两个包时，就只剩「在包根原地 import」这一条 —— 把 `dist/` 复制到仓库外的空目录补不上 peer 依赖。
 
 `ctx` 要实现五件事 —— `get('tools')` 返回 `{ register(tool) }`（`tool` 就是下面那个工具对象，返回值可以忽略）、
 `get('webServer')` 返回 `{register}`（没有就不注册界面那组路由）、
@@ -66,24 +65,6 @@ mod.apply(ctx, { dataDir, encoderCacheDir })
 没有界面载体时写成空函数即可 —— 实测不实现它会在 `apply` 里报 `ctx.inject is not a function`）。注册进表的每个工具是
 `{name, description, parameters, execute(args)}`，`execute(args)` 返回 **Promise**：要
 `await tool.execute(args)` 才拿到拼好的文本，不 `await` 拿到的是 `[object Promise]`。
-
-够跑通第一次写入与召回的最小 `ctx`（没有界面，所以不提供 `webServer` 与 `settings`）：
-
-```js
-const tools = []
-const ctx = {
-  get: (key) => (key === 'tools' ? { register: (tool) => { tools.push(tool) } } : undefined),
-  effect: (fn) => { const dispose = fn(); return () => dispose?.() },
-  inject: () => {},
-}
-mod.apply(ctx, { dataDir: '<数据目录>' })
-
-const write = tools.find((t) => t.name === 'lattice_write')
-console.log(await write.execute({ text: '每周三下午做一次发布前的全量回归。' }))
-
-const recall = tools.find((t) => t.name === 'lattice_recall')
-console.log(await recall.execute({ query: '发布前回归' }))
-```
 配置项与宿主里那一套相同，没显式传的项按 `Config` 的默认值生效（`lattice_ping` 报的就是生效值）；两个容易漏的：
 `dataDir` 留空时按 `$DSH_HOME/lattice` → `~/.dsh/lattice` → 当前目录的 `.lattice` 依次解析（`lattice_ping` 的 `dataDir` 报的就是解析结果），
 目录不存在时写入会自己建出来（多级父目录一并建）；
