@@ -206,15 +206,3 @@ git checkout dev && git checkout -b fix/hotfix-<slug>
 一条实测过的限制：用**绕过双因子**的 granular token 不能 unpublish，会返回
 `403 ... may not perform this action`。要保留「24 小时内可收回」这个能力，就得用能过双因子的方式登录；
 否则任何发布事故都只能靠 deprecate 与下一个版本号处理。
-
-## 当前状态
-
-npm 上有 `dsh-lattice@0.0.0` 与一个 `0.0.0-stage`，都是占位：前者是首次发布时随版本建立的占位包，
-后者是 npm 在首次发布流程里自动写入的临时版本，已标记为弃用。正式版本发出去之后，`latest` 会指向
-正式版本，这两个占位不需要手动处理。
-
-本地已建 ``dev``（与 ``main`` 同起点），远端仓库尚未推送 —— 建远端时两个分支一起推，
-并把默认分支留在 `main`（`git clone` 拿到的应当是发布版本）。
-
-`.github/workflows/release.yml` 已就位，但**首次使用前要先做上面那次 trusted publisher 登记**，
-否则推 tag 会在 publish 这一步失败。这种失败是可恢复的：npm 上还没有新版本，补登记后删 tag 重推即可。
