@@ -13,7 +13,7 @@
 | 版本号 | 语义化版本。破坏性改动进 major，新增进 minor，修复进 patch |
 | 0.x 期间的例外 | 破坏性改动可以进 minor，但 CHANGELOG 该段要写 `### Breaking` |
 | 分支 | `main` 只放发布：接收 `dev` 的合并、打 tag。开发与 PR 都在 `dev` 上 |
-| tag 名 | 带 `v` 前缀：`v0.10.0`。`0.10.0` 之前的 8 个 tag 没有 `v`（`0.2.0` 到 `0.9.1`），不追溯改 |
+| tag 名 | 带 `v` 前缀：`v0.11.0`。`v0.11.0` 之前的 8 个 tag 没有 `v`（`0.2.0` 到 `0.9.1`），不追溯改 |
 
 版本号只有一个来源：`package.json` 的 `version`。插件的 `VERSION` 常量运行时从它读
 （`src/index.ts` 里那三行），`lattice_ping` 报的就是它。所以改版本号只改一处，不要在两处各写一遍。
@@ -102,9 +102,9 @@ git push origin vX.Y.Z
 
 tag 名带 `v` 前缀，`package.json` 的 `version` 不带 —— 两处保持这个差别，别写成两种风格。
 
-`v` 不只是习惯，它是触发条件：`.github/workflows/release.yml` 的 `tags` 是 `v*`。打成 `0.10.0`
+`v` 不只是习惯，它是触发条件：`.github/workflows/release.yml` 的 `tags` 是 `v*`。打成 `0.11.0`
 会 tag 建成功、`git push` 也不报错，但 workflow 不触发 —— npm 上不会有这个版本，也没有任何
-地方会说它错了。`0.10.0` 之前的 8 个 tag 没有 `v`，不追溯重打：重打会改历史，而旧 tag 可能
+地方会说它错了。`v0.11.0` 之前的 8 个 tag 没有 `v`，不追溯重打：重打会改历史，而旧 tag 可能
 已经有人拉过。
 
 推 tag 会立刻触发 `.github/workflows/release.yml`：它核对版本、跑一遍门禁、把包发到 npm。
@@ -125,7 +125,7 @@ CHANGELOG 里该段（从 `## [x.y.z]` 到下一个 `## [` 之前）→ Publish�
 
 推 tag 之后由 `.github/workflows/release.yml` 发，不需要在本机操作。它按顺序做四件事：
 
-1. 核对 tag 与 `package.json` 的版本一致（`v0.10.0` 对 `0.10.0`），不一致直接失败；
+1. 核对 tag 与 `package.json` 的版本一致（`v0.11.0` 对 `0.11.0`），不一致直接失败；
 2. 核对 tag 指向的提交在 `main` 上（不在就直接失败），然后跑一遍门禁；
 3. `npm pack --dry-run`，把六项白名单实际打进包里什么、体积多少留在日志里；
 4. `npm publish --access public --provenance`。
