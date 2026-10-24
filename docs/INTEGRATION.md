@@ -36,6 +36,7 @@ dsh plugin --profile <profile> add dsh-lattice
 装完**重启宿主**：插件在宿主里是复制过去的实体，不重启读到的是旧版本（`package.json` 的 `dsh.marketplace.requiresRestart` 为 `true`）。
 重启后调一次 `lattice_ping`，核对三件事：`version` 与你要用的版本一致；`tools` 里有五个名字（`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand` / `lattice_list`）；
 `encoder` 报的是模型名（例如 `Xenova/bge-small-zh-v1.5`）；它是 `off` 只有一种情况：纯词面模式（`encoderEnabled: false`）。
+`lattice_ping` 可以无参调用（`execute({})`）；返回里的 `ok`（布尔）与 `plugin`（`"lattice"`）是附加字段，不必核对。
 不用纯词面时看到 `off`，就去该 profile 的 `cordis.patch.yml` 里看 `dsh-lattice` 那一段是不是把 `encoderEnabled` 关掉了。
 如果 `lattice_ping` 报「没有这个工具」，说明插件没加载：到该 profile 的 `package.json` 里看
 `dependencies` 与 `dsh.profile.bundles` 是不是都写了 `dsh-lattice`。
@@ -54,6 +55,7 @@ mod.apply(ctx, { dataDir, encoderCacheDir })
 要在**包根原地** import，或者先把 `peerDependencies` 里的宿主包装好：`dist/` 顶层就 import
 `@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-tools`，只有 `dist/` 被复制到祖先目录里没有
 `node_modules` 的位置（例如本仓库之外）时，会立刻报 `Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-tools'`。
+没有包管理器、机器上也没有别处能借出这两个包时，就只剩「在包根原地 import」这一条 —— 把 `dist/` 复制到仓库外的空目录补不上 peer 依赖。
 
 `ctx` 要实现五件事 —— `get('tools')` 返回 `{ register(tool) }`（`tool` 就是下面那个工具对象，返回值可以忽略）、
 `get('webServer')` 返回 `{register}`（没有就不注册界面那组路由）、
@@ -64,6 +66,24 @@ mod.apply(ctx, { dataDir, encoderCacheDir })
 没有界面载体时写成空函数即可 —— 实测不实现它会在 `apply` 里报 `ctx.inject is not a function`）。注册进表的每个工具是
 `{name, description, parameters, execute(args)}`，`execute(args)` 返回 **Promise**：要
 `await tool.execute(args)` 才拿到拼好的文本，不 `await` 拿到的是 `[object Promise]`。
+
+够跑通第一次写入与召回的最小 `ctx`（没有界面，所以不提供 `webServer` 与 `settings`）：
+
+```js
+const tools = []
+const ctx = {
+  get: (key) => (key === 'tools' ? { register: (tool) => { tools.push(tool) } } : undefined),
+  effect: (fn) => { const dispose = fn(); return () => dispose?.() },
+  inject: () => {},
+}
+mod.apply(ctx, { dataDir: '<数据目录>' })
+
+const write = tools.find((t) => t.name === 'lattice_write')
+console.log(await write.execute({ text: '每周三下午做一次发布前的全量回归。' }))
+
+const recall = tools.find((t) => t.name === 'lattice_recall')
+console.log(await recall.execute({ query: '发布前回归' }))
+```
 配置项与宿主里那一套相同，没显式传的项按 `Config` 的默认值生效（`lattice_ping` 报的就是生效值）；两个容易漏的：
 `dataDir` 留空时按 `$DSH_HOME/lattice` → `~/.dsh/lattice` → 当前目录的 `.lattice` 依次解析（`lattice_ping` 的 `dataDir` 报的就是解析结果），
 目录不存在时写入会自己建出来（多级父目录一并建）；
@@ -361,7 +381,7 @@ lattice_write
 
 | 工具 | 做什么 | 不做什么 | 看什么信号 |
 |---|---|---|---|
-| `lattice_ping` | 健康检查：插件版本、数据目录、编码器状态、配置里显式给过的阈值（未配置时 `thresholds` 是 `{}`）、资源参数、五处缓存的占用（`caches`） | 不写记忆、不改配置、不报告库的结构比例（那是体检，见 §3.2） | `version` 对不对；`encoder` 是 `off` 还是模型名 |
+| `lattice_ping` | 健康检查：插件版本、数据目录、编码器状态、生效的四个阈值（显式配置覆盖默认值，四项总会报出来）、资源参数、五处缓存的占用（`caches`） | 不写记忆、不改配置、不报告库的结构比例（那是体检，见 §3.2） | `version` 对不对；`encoder` 是 `off` 还是模型名 |
 | `lattice_write` | 写一条记忆；过长则按句切分成多条；回执给出落位、入口条数、标记、重复提示与关系结果 | 不删除、不改已有记忆的正文（要改就写新条 + `supersedes`，撤销这次改口用 `unsupersede`）、不自动沉淀、不替你判断「什么值得记」 | 回执里的「已写入 / 未写入」与各类提示；`（尚未确认归属）` |
 | `lattice_recall` | 按查询取回记忆，返回装配好的注入段 | 不是搜索界面：不返回结构化命中原样、不分页；除判空与候选上限之外不再按相似度额外过滤（判空时一条都不给，§4.3），候选最多取 topN 条，默认 24，可配 5–50；不保证每条都相关 | 首行库规模、六句固定说法里出现了哪一句、注入段的实际内容 |
 | `lattice_expand` | 展开某条记忆全文；`mode` 取 `related` 时看同主题下的其它记忆；顺带列出这条的声明关系 | 不能跨主题检索（那是召回）、不改任何内容 | 正文、状态标记（`已被 #N 取代`、`已归档`）、「关系（声明）」 |
@@ -529,5 +549,6 @@ lattice_write
    改描述时必须回来改 §1，反之亦然 —— 目前靠人工核对。
 3. **`budget` 没有范围校验。** 配置项 `viewBudget` 的范围是 1000–20000，但 `lattice_recall` 的 `budget` 直接取数、不夹取；
    本文按配置项的口径写默认值与范围。
-4. **`lattice_ping` 的 `thresholds` 未在本文解释。** 它只回显配置里**显式给过**的阈值项，未配置时是 `{}`（不是缺字段）；
+4. **`lattice_ping` 的 `thresholds` 报的是生效值。** 显式配置覆盖默认值，没配置的项按 `Config` 的默认值出现 ——
+   所以四项总会报出来（早期版本只回显显式给过的项，未配置时是 `{}`，已改）。
    这几项不参与接入判断，只作诊断用。
