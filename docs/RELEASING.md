@@ -59,23 +59,46 @@
 
 前提：「一、准备」里的改动已经在 `dev` 上、门禁绿过。
 
+`main` 每发一版只多一个**合并提交**：把 `dev` 合进来，tag 打在那个合并提交上。
+
 ```bash
 git checkout dev
 git pull --ff-only origin dev
 git checkout main
 git pull --ff-only origin main
-git merge --ff-only dev
+git merge --no-ff dev -m "merge: 发布 vX.Y.Z"
 ```
 
-`--ff-only` 是刻意的：它红了说明 `main` 上有 `dev` 没有的提交（多半是有人在 `main` 上直接改过）。
-停下查清那一笔是什么，不要用 `--no-ff` 盖过去 —— 一旦两条分支分叉，之后每次发版都得手工合一次，
-而分叉本身就说明有人绕过了流程。
+为什么是合并提交而不是快进：`main` 的每个末端对应一版发布，`git log main` 上一行一版；快进会让
+`main` 与 `dev` 永远指向同一个提交，事后从图上分不出哪一段改动属于哪一版。
+
+合并提交很容易造歪，两条必查：
+
+- **树必须等于 `dev` 的树**：`git diff --stat dev main` 输出为空。造错树的合并提交会把没准备发的
+  东西带进发布线，而它和正常合并在 `git log` 上长得一模一样；
+- **父必须是两个**：`git log -1 --format=%P` 给出两段哈希，前一段是上一次发布的 `main` 末端，
+  后一段是这次的 `dev` 末端。
+
+受限环境里 `git merge --no-ff` 可能失败（`error: cannot create standard output pipe for stash:
+Permission denied` / `fatal: could not run stash.`）—— 那是那台机器 git 的限制，与流程无关。
+等价做法是手工造合并提交，造完照样跑上面两条核对：
+
+```bash
+tree=$(git rev-parse dev^{tree})
+merge=$(git commit-tree "$tree" -p "$(git rev-parse main)" -p "$(git rev-parse dev)" -m "merge: 发布 vX.Y.Z")
+git update-ref refs/heads/main "$merge"
+```
+
+不要用 `--squash` 代替：它在 `dev` 上压成一条普通提交，`main` 上就没有合并边界了。
 
 ```bash
 git tag -a vX.Y.Z -m "X.Y.Z：<一句话>"
 git push origin main
 git push origin vX.Y.Z
 ```
+
+先推 `main` 再推 tag：`release.yml` 会 `git fetch origin main` 再校验「tag 指向的提交在 `main` 上」，
+远端还没收到 `main` 时这一步会失败。
 
 tag 名带 `v` 前缀，`package.json` 的 `version` 不带 —— 两处保持这个差别，别写成两种风格。
 
