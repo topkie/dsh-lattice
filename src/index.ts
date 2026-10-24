@@ -701,12 +701,16 @@ export function apply(ctx: Context, config: unknown): void {
           // 报到插件注册时的**解析结果**，而不是配置里的空串 —— 否则看不出库在哪。
           dataDir: resolveDataDir(String(cfg.dataDir ?? '')),
           tools: ['lattice_ping', 'lattice_write', 'lattice_recall', 'lattice_expand', 'lattice_list'],
-          encoder: cfg.encoderEnabled === false ? 'off' : cfg.encoderModel,
+          // 报 runtimeCfg 而不是原始 config：宿主会按 Config 把没传的项填成默认值，
+          // **不经宿主直接 apply 时不会** —— 读原始 config 会让没显式传的项整个消失
+          // （JSON.stringify 丢掉值为 undefined 的键），而 ping 的用途正是「核对实际用了多少」。
+          // runtimeCfg 在 apply 开头已经把缺项补成默认值，这里读它才与引擎的行为一致。
+          encoder: runtimeCfg.encoderEnabled === false ? 'off' : runtimeCfg.encoderModel,
           thresholds: {
-            tauJoin: cfg.tauJoin,
-            tauLex: cfg.tauLex,
-            tauLexOnly: cfg.tauLexOnly,
-            tauNew: cfg.tauNew,
+            tauJoin: runtimeCfg.thresholds.tauJoin,
+            tauLex: runtimeCfg.thresholds.tauLex,
+            tauLexOnly: runtimeCfg.thresholds.tauLexOnly,
+            tauNew: runtimeCfg.thresholds.tauNew,
           },
           // 机器相关的资源参数：报出来才能核对「实际用了多少」，否则只能靠读代码猜。
           resources: {

@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 import { Config, apply, inject, name } from '../dist/index.js'
 import { openVault } from '../dist/db/open.js'
 import { closeRuntime, getRuntime } from '../dist/state.js'
+import { DEFAULT_THRESHOLDS } from '../dist/pipeline/write.js'
 
 /**
  * 最小假 ctx：只实现插件用到的那两个服务，外加 `inject`。
@@ -127,6 +128,28 @@ describe('插件契约', () => {
     assert.equal(out.ok, true)
     assert.equal(out.plugin, 'lattice')
     assert.equal(out.thresholds.tauJoin, baseConfig.tauJoin)
+  })
+
+  /**
+   * ping 的用途是「核对实际用了多少」，所以它报的必须是**生效值**，不是原始入参。
+   *
+   * 2026-10-24 冷读验证发现的形态：不经宿主直接 `apply(ctx, { dataDir, encoderCacheDir })`
+   * 时 `thresholds` 报 `{}`、顶层 `encoder` 整个不出现。宿主会按 Config 把没传的项填成默认值，
+   * 直接调用不会；引擎内部一直按默认值在跑，所以库的行为是对的，只有读数骗人 —— 而读数正是
+   * 接入文档让读者去核对的那一项。这条用例钉住「读数 = 生效值」：只传两个字段，报出补过默认值的那份。
+   */
+  it('健康检查报生效值：没显式传的项也按默认值报出来', async () => {
+    const ctx = fakeCtx()
+    apply(ctx, { dataDir: baseConfig.dataDir, encoderCacheDir: '' })
+    const ping = ctx.registered.find((t) => t.name === 'lattice_ping')
+    const out = JSON.parse(await ping.execute({}, {}))
+    assert.deepEqual(out.thresholds, {
+      tauJoin: DEFAULT_THRESHOLDS.tauJoin,
+      tauLex: DEFAULT_THRESHOLDS.tauLex,
+      tauLexOnly: DEFAULT_THRESHOLDS.tauLexOnly,
+      tauNew: DEFAULT_THRESHOLDS.tauNew,
+    })
+    assert.equal(out.encoder, 'Xenova/bge-small-zh-v1.5')
   })
 
   it('enabled=false 时不注册任何工具', () => {
