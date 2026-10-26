@@ -21,17 +21,21 @@
 
 ### 0.1 装
 
-这个包还没发布到 npm，所以 `dsh plugin add dsh-lattice` 现在跑不通。先按
-[README 的安装一节](../README.md) 从源码构建，把构建产物复制进 profile 的 `node_modules`。
-发布到 npm 之后，最短路径才是：
+包已发布到 npm，最短路径是：
 
 ```bash
-cd <DSH_HOME>/profiles/<profile>
 dsh plugin --profile <profile> add dsh-lattice
 ```
 
-这两条要在装了宿主的机器上跑：`dsh` 是宿主提供的命令，不在本仓库里，所以本仓库的脚本与门禁都不会跑到它
-（本文无法在仓库内实跑核对）。`<profile>` 是 profile 目录名（本仓库声明可用的两个是 `web` 与 `desktop`，见 `package.json`）。
+`<profile>` 是 profile 目录名（本仓库声明可用的两个是 `web` 与 `desktop`，见 `package.json`）。
+这条要在装了宿主的机器上跑：`dsh` 是宿主提供的命令，不在本仓库里，所以本仓库的脚本与门禁碰不到它；
+`dsh` 不在 `PATH` 里时，用它随宿主安装的绝对路径（`<DSH 安装目录>/resources/runtime/cli/bin/dsh.cmd`）。
+
+刚发布的版本可能装不上：包管理器默认跳过发布时间太近的版本，于是静默装到旧的 `latest`。
+判据是输出里的版本号与 `npm view dsh-lattice version` 不一致；这时显式带版本号再装一次：
+`dsh plugin --profile <profile> add dsh-lattice@<版本号>`。
+
+想看代码、或者要装还没发到 npm 的提交，走 [README 的安装一节](../README.md) 里的源码装。
 
 装完**重启宿主**：插件在宿主里是复制过去的实体，不重启读到的是旧版本（`package.json` 的 `dsh.marketplace.requiresRestart` 为 `true`）。
 重启后调一次 `lattice_ping`，核对三件事：`version` 与你要用的版本一致；`tools` 里有五个名字（`lattice_ping` / `lattice_write` / `lattice_recall` / `lattice_expand` / `lattice_list`）；
@@ -523,9 +527,11 @@ lattice_write
 
 ## 6. 本文的未确定项
 
-1. **真宿主上的安装没有在本文核验。** 文中的回执行与召回文本，是在临时数据目录上用仓库的构建产物跑出来的，
-   编码器可用与不可用两条路都跑过（判空、降级、归档、删除各走了一遍）；`dsh plugin add`、复制产物进 profile、
-   重启宿主这几步仍需要一台装了宿主的机器才能核对 —— 本仓库的脚本与门禁都碰不到它们。
+1. **真宿主上的安装只在一个 profile 上核验过。** 文中的回执行与召回文本，是在临时数据目录上用仓库的
+   构建产物跑出来的，编码器可用与不可用两条路都跑过（判空、降级、归档、删除各走了一遍）。
+   `dsh plugin add dsh-lattice` 这条路在 2026-10-24 走过一次：装的是 `0.11.1`，重启后 `lattice_ping`
+   报 `version` 为 `0.11.1`、五个工具齐全、`caches.encoder.loaded` 为 `true`。其它平台与其它 profile
+   没有核验 —— 本仓库的脚本与门禁碰不到这一步。
 2. **第 1 节与工具描述的一致性没有自动检查。** `lattice_recall` 的描述只有一句判据，§1 是它在四类情形上的展开；
    改描述时必须回来改 §1，反之亦然 —— 目前靠人工核对。
 3. **`budget` 没有范围校验。** 配置项 `viewBudget` 的范围是 1000–20000，但 `lattice_recall` 的 `budget` 直接取数、不夹取；

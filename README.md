@@ -34,7 +34,7 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 ## 特性
 
-- **本地优先**：单文件 SQLite，数据全在本地，无云端依赖
+- **本地优先**：数据全在本地一个 SQLite 库里（WAL 模式下还带 `-wal` 与 `-shm` 两个伴随文件，备份时一起带走），无云端依赖
 - **零第三方依赖**：不引入第三方运行时依赖，只依赖宿主提供的 `@deepseek-ai/*` peer 包（标定工具链 `lattice-calib` 已于 0.5.0 退役）；
   向量模型是**可选**依赖，没装就退回词面检索。源码装时它会连带几十个包一起装上，
   不需要向量就在安装时加 `--omit=optional`，插件其余部分不受影响
@@ -67,25 +67,21 @@ dsh-lattice 的做法不是在这两者之间折中，而是**把它们分开**�
 
 1. 找到 DSH 的 profile 目录：在 ~/.dsh/profiles/ 下找含 package.json 的那一层，名字通常是 desktop。
    找不到就停下来问我要路径，不要自己编一个。
-2. 把插件装进去：没有源码目录就先
-   git clone https://github.com/topkie/dsh-lattice.git
-   进目录跑 pnpm install --no-frozen-lockfile 与 pnpm run build；
-   然后回到 profile 目录跑 pnpm add "file:<dsh-lattice 源码目录的绝对路径>"。
-3. 在 profile 目录的 package.json 里，把 "dsh-lattice" 加进 dsh.profile.bundles 数组
-   （没有这个数组就按同目录其它条目的写法新建）。
+2. 装：dsh plugin --profile <那个目录名> add dsh-lattice。
+   dsh 不在 PATH 里时，用它随宿主安装的绝对路径（<DSH 安装目录>/resources/runtime/cli/bin/dsh.cmd）。
+   报 "pnpm was not found" 就先装 pnpm；输出里的版本号与 npm view dsh-lattice version 不一致，
+   说明装到了旧版本，改用带版本号的写法重装：dsh plugin --profile <目录名> add dsh-lattice@<版本号>。
+3. 打开那个 profile 的 package.json，确认 dependencies 与 dsh.profile.bundles 里都有 dsh-lattice。
 4. 叫我重启宿主。重启后调用一次 lattice_ping，把返回里的 version、dataDir、
    caches.encoder.loaded 三项报给我。
 5. caches.encoder.loaded 不是 true，说明模型没下成：把 attempts 数组原文贴给我，
    不要自己改编码器配置重试。
 
-前置条件：Node 22.13 以上、git、pnpm 9 以上，且 node 在 PATH 里。
+前置条件：宿主已装好，profile 初始化过一次。
 不要用管理员权限，不要动 profile 里其它插件的条目。
 ```
 
 装成了的样子：设置的侧边栏出现「lattice 记忆库」这一页，`lattice_ping` 报的 `version` 与你要装的版本一致。
-
-`git clone` 默认取 `main`，那是发布分支，装到的是最近一次发布的代码。想要开发中的最新改动走第四节，
-那边会切到 `dev`。
 
 ### 二、插件管理器（图形化）
 
@@ -102,7 +98,8 @@ pnpm add dsh-lattice
 ```
 
 再把 `dsh-lattice` 加进同一目录 `package.json` 里 `dsh.profile.bundles` 那个数组，重启宿主。
-要固定版本就写 `pnpm add dsh-lattice@0.11.0`；之后升级用 `pnpm update dsh-lattice` 再重启。
+要固定版本就写 `pnpm add dsh-lattice@<版本号>`（版本号用上面那条 `npm view` 查）；
+之后升级用 `pnpm update dsh-lattice` 再重启。
 
 ### 四、GitHub 源码
 
@@ -145,9 +142,9 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 包管理器默认不跑依赖的构建脚本：npm 12 实测拦下 `onnxruntime-node`、`sharp`、`protobufjs`
 三个包的安装脚本，效果是写得进、召回退回纯词面。判据是 `lattice_ping` 的
 `caches.encoder.loaded`：它不是 `true` 就说明编码器没起来（`caches.encoder.state` 只有
-`idle` 与 `ready` 两个取值，`loaded` 才是那个布尔量）。走第一种与第四种时，在源码目录里 `pnpm install`
-不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；插件管理器与 npm 装的是发布出来的包，
-碰不碰得到取决于宿主或 npm 的设置。
+`idle` 与 `ready` 两个取值，`loaded` 才是那个布尔量）。只有第四种（源码装）在源码目录里
+`pnpm install`，那里不会遇到这一步 —— `pnpm-workspace.yaml` 已放行这四个包；助手装、插件管理器、
+npm 装的都是发布出来的包，碰不碰得到取决于宿主或 npm 的设置。
 
 ### 确认装好了
 
@@ -160,9 +157,10 @@ pnpm add "file:<dsh-lattice 目录的绝对路径>"
 
 ### 卸载
 
-按装法对应着来：插件管理器里卸载；其余三种都在 profile 目录 `pnpm remove dsh-lattice` 并把名字
-从 `dsh.profile.bundles` 里删掉，其中从源码装的两种（第一种与第四种）还可以顺手删掉 clone 下来的目录。
-都要重启宿主。
+按装法对应着来：第一种用 `dsh plugin --profile <profile> remove dsh-lattice`（它会一并从
+`dsh.profile.bundles` 里摘掉）；插件管理器里卸载；npm 装的在 profile 目录 `pnpm remove dsh-lattice`
+再把名字从 `dsh.profile.bundles` 里删掉；源码装的除了上面那条 `pnpm remove`，还可以顺手删掉
+clone 下来的目录。都要重启宿主。
 记忆数据在独立的数据目录里，这几步都不会删它。
 
 ## 配置
