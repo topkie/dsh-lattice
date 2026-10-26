@@ -65,10 +65,10 @@
   权重下载，其余不联网
 - **文档不再写项目状态**：README 顶部删掉「尚未发布」那段状态，换成三个徽章与一行代码来源说明
   （全部代码由 DeepSeek 生成）；`docs/RELEASING.md` 删掉「当前状态」一节。仓库里的文档只有发布
-  之后才会被读到，状态写在里面，发布那一刻就已经是错的。项目状态一律记在本文件：npm 上
-  `dsh-lattice` 仍是占位包 `0.0.0`（`0.0.0-stage` 已弃用，首个正式版本发布后 `latest` 会指向它）；
-  远端仓库已建、公开、仍为空；发布用的 trusted publisher 已登记（GitHub Actions +
-  `topkie/dsh-lattice` + `release.yml`）
+  之后才会被读到，状态写在里面，发布那一刻就已经是错的。项目状态一律记在本文件，写「截至这一版
+  是什么样」：本版发布之前，npm 上 `dsh-lattice` 只有一个占位包 `0.0.0`（`0.0.0-stage` 已弃用）、
+  远端仓库已建但为空、trusted publisher 已登记（GitHub Actions + `topkie/dsh-lattice` +
+  `release.yml`）；**本版是第一个真正发到 npm 的版本，`latest` 从本版起指向真实版本**
 
 ### Added
 

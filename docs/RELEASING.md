@@ -44,6 +44,11 @@
 
    推 tag 之后 CI 会在发布前再跑一遍同一套。本地这遍是为了在推之前发现红，不是为了省 CI 的时间。
 
+   本地全绿不等于 CI 绿：本仓库第一次在 Linux 上跑门禁时红过 —— 两条用例被写在另一条用例的
+   `async` 函数体里，Windows 上按调度侥幸通过，Linux 上必然报
+   `test did not finish before its parent and was cancelled`。改动碰了 `test/` 时，先在推 tag 之前
+   推一次 `dev`，让 CI 跑一遍。
+
 5. **干净副本装一遍**。涉及依赖、构建或 `files` 白名单的改动必须做，其余可选：
 
    ```bash
@@ -165,8 +170,12 @@ npm view dsh-lattice version dist-tags
 
 ## 五、发完之后
 
-- 在宿主里装一次发布产物（不是源码目录）：在 profile 目录 `pnpm add dsh-lattice@X.Y.Z`，
-  重启，`lattice_ping` 的 `version` 应对上。
+- 在宿主里装一次发布产物（不是源码目录）：`dsh plugin --profile <profile> add dsh-lattice@X.Y.Z`，
+  重启，`lattice_ping` 的 `version` 应对上。一处要当心：包已经在 `dependencies` 里、只改了版本号时，
+  `dsh plugin add` 不会把它补登记进 `dsh.profile.bundles`（它只处理「这一轮新出现的依赖」），
+  结果装上了却不加载。看到 `lattice_ping` 报「没有这个工具」，就先 `remove` 再 `add`。
+- 别在 profile 之外跑 `pnpm add`：在用户主目录这类地方跑会留下一个 `package.json`、
+  `pnpm-lock.yaml` 与一个 `node_modules`，那不属于任何插件，事后要手动收拾。
 - 在 npm 包页面点开刚发的版本，确认 Provenance 一栏指向推 tag 的那个提交。这是「包是 CI 从这份
   代码构建的」唯一能被外部核对的记录，也是走 trusted publishing 而不是存 token 的主要收益。
 - 读一遍 npm 页面与 Release 页面，确认 README 的渲染与链接没有断。
